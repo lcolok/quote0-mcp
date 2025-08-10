@@ -1,0 +1,37 @@
+{
+  "name": "mindreset-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for MindReset devices providing text and image API tools",
+  "main": "dist/index.js",
+  "bin": {
+    "mindreset-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "mindreset",
+    "model-context-protocol",
+    "ai",
+    "server"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.2",
+    "undici": "^6.19.8",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
