@@ -1,31 +1,43 @@
-# MindReset 图片发送模块
+# MindReset 1-bit 黑白水墨屏图片发送模块
 
-这是一个用于向 MindReset 设备发送图片的 TypeScript 模块。
+专为 MindReset 1-bit 黑白点阵式水墨屏设备优化的 TypeScript 图片处理和发送模块。
 
-## 功能特性
+## 核心特性
 
-- 🖼️ 自动调整图片尺寸为 296x152 像素
-- 📁 自动加载 `.env` 文件中的设备配置
-- 🔄 支持Base64编码转换
-- 🧹 自动清理临时文件
-- 📝 完整的TypeScript类型支持
+- 🎯 **1-bit屏幕专用优化**: 针对黑白点阵屏的专门算法
+- ✅ **实测验证**: 增强对比度显著提升清晰度和锐利度
+- 🖼️ **智能图片处理**: 自动调整尺寸(296x152)，保持比例不拉伸
+- 🎨 **Floyd-Steinberg抖动**: 最佳抖动算法，模拟灰度效果
+- 📹 **GIF支持**: 自动提取GIF第一帧并优化
+- 📁 **自动配置**: 从 `.env` 文件加载设备信息
+- 🚀 **一键发送**: 快速发送脚本，自动应用最佳设置
 
 ## 快速开始
 
-### 1. CLI 工具使用
+### 🚀 推荐使用：一键发送脚本
 
 ```bash
 # 构建项目
 npm run build
 
-# 发送图片（使用默认白边框）
-node dist/image-sender/cli.js /path/to/image.png
+# 最简单的发送方式（自动最佳设置）
+./quick-send.sh /path/to/image.png
 
-# 发送图片（黑边框）
-node dist/image-sender/cli.js /path/to/image.png 1
+# 支持GIF（自动提取第一帧）
+./quick-send.sh /path/to/animation.gif
 
-# 发送图片（带跳转链接）
-node dist/image-sender/cli.js /path/to/image.png 0 https://example.com
+# 支持边框和链接参数
+./quick-send.sh /path/to/image.jpg 1 https://example.com
+```
+
+### 🔧 高级用法：单色屏专用优化
+
+```bash
+# 单色屏优化模式（增强对比度+Floyd-Steinberg）
+node dist/image-sender/cli.js mono /path/to/image.png
+
+# GIF处理（提取第一帧+优化）
+node dist/image-sender/gif-processor.js /path/to/animation.gif
 ```
 
 ### 2. 模块使用
@@ -65,69 +77,66 @@ MINDRESET_DEVICE_SECRET=你的设备密钥
 
 ```
 src/image-sender/
-├── types.ts          # TypeScript 类型定义
-├── env-loader.ts     # 环境变量加载器
-├── image-processor.ts # 图片处理工具
-├── device-client.ts  # 设备API客户端
-├── image-sender.ts   # 主要发送器类
-├── cli.ts           # 命令行工具
-├── index.ts         # 模块导出
-└── README.md        # 说明文档
+├── types.ts              # TypeScript 类型定义
+├── env-loader.ts         # 环境变量加载器  
+├── device-client.ts      # MindReset设备API客户端
+├── image-processor.ts    # 通用图片处理工具
+├── monochrome-optimizer.ts # 1-bit黑白屏专用优化器 ⭐
+├── gif-processor.ts      # GIF处理工具
+├── device-profiles.ts    # 设备配置文件
+├── image-sender.ts       # 主发送器类
+├── cli.ts               # 命令行工具
+├── index.ts             # 模块导出
+└── README.md            # 说明文档
+
+根目录:
+├── quick-send.sh        # 一键发送脚本 ⭐
+└── .env                 # 设备配置文件
 ```
 
-## API 参考
+## 🎯 实测优化结果
 
-### ImageSender
+基于实际设备测试验证的最佳设置：
 
-主要的图片发送类。
+### ✅ **最佳配置组合**
+- **设备类型**: 1-bit 黑白点阵式水墨屏
+- **对比度增强**: 启用（显著提升清晰度和锐利度）
+- **抖动算法**: Floyd-Steinberg（效果最佳）
+- **图片适配**: 保持比例，居中放置，不拉伸
+
+### 🔍 **设备特征分析**
+- **显示原理**: 通过抖动算法的点密度模拟灰度
+- **色彩支持**: 纯黑白（1-bit），无真实灰度
+- **最佳图片**: 图标、文字、简单插画
+- **避免内容**: 复杂照片、细节过多的图像
+
+## API 快速参考
+
+### 🚀 MonochromeOptimizer (核心优化器)
 
 ```typescript
-class ImageSender {
-  // 发送图片文件
-  async sendImageFile(imagePath: string, options?: ImageSendOptions): Promise<ApiResponse>
-  
-  // 发送文本消息
-  async sendText(message: string, options?: { title?: string; signature?: string }): Promise<ApiResponse>
-}
+// 专为1-bit黑白屏优化
+const optimizer = new MonochromeOptimizer();
+const result = await optimizer.optimizeForMonochromeScreen(
+  imagePath, 
+  { width: 296, height: 152 }, 
+  'floydSteinberg',  // 抖动算法
+  true              // 增强对比度 ⭐
+);
 ```
 
-### ImageProcessor
-
-图片处理工具类。
+### 📹 GifProcessor (GIF处理)
 
 ```typescript
-class ImageProcessor {
-  // 获取图片信息
-  async getImageInfo(imagePath: string): Promise<{ dimensions: ImageDimensions; exists: boolean }>
-  
-  // 调整图片尺寸
-  async resizeImage(inputPath: string, outputPath: string, targetSize?: ImageDimensions): Promise<boolean>
-  
-  // 转换为Base64
-  async imageToBase64(imagePath: string): Promise<string>
-}
-```
-
-### MindResetDeviceClient
-
-设备API客户端。
-
-```typescript
-class MindResetDeviceClient {
-  // 从环境变量创建客户端
-  static fromEnvironment(): MindResetDeviceClient
-  
-  // 发送图片
-  async sendImage(base64Image: string, options?: { border?: "0" | "1"; link?: string }): Promise<ApiResponse>
-  
-  // 发送文本
-  async sendText(message: string, options?: { title?: string; signature?: string }): Promise<ApiResponse>
-}
+// GIF第一帧提取+优化
+const processor = new GifProcessor();
+const result = await processor.processGifForDevice(gifPath, outputDir, true);
 ```
 
 ## 注意事项
 
-- 图片会自动调整为设备屏幕尺寸 (296x152 像素)
-- 支持的图片格式: PNG (推荐)
-- 需要 macOS 系统的 `sips` 工具来调整图片尺寸
-- 设备 API 要求图片为 Base64 编码的 PNG 格式
+- ✅ **自动最佳设置**: 使用 `quick-send.sh` 获得最佳效果
+- 📐 **尺寸适配**: 自动调整为296x152像素，保持比例不拉伸
+- 🖼️ **格式支持**: PNG、JPG、GIF（自动提取第一帧）
+- 🍎 **系统要求**: macOS 系统（使用sips工具处理图片）
+- 🔐 **设备配置**: 需要在.env文件中设置设备ID和密钥

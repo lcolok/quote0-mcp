@@ -92,3 +92,21 @@ jspm_packages/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Image processing outputs (temporary files and processed images)
+temp-images/
+processed-images/
+previews/
+mono-optimized/
+mono-test/
+quick-processed/
+*.processed.png
+*.resized.png
+*.optimized.png
+
+# Keep docs directory structure but ignore temporary processing files
+!docs/
+docs/temp/
+
+# Keep script archives for reference
+!scripts/archive/

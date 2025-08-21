@@ -11,7 +11,13 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "image:send": "node dist/image-sender/interfaces/cli/cli-main.js send",
+    "image:preview": "node dist/image-sender/interfaces/cli/cli-main.js preview",
+    "image:mono": "node dist/image-sender/interfaces/cli/cli-main.js mono",
+    "image:quick": "tsx scripts/quick-send.ts",
+    "image:ordered": "tsx scripts/ordered-dither.ts",
+    "image:enhanced-ordered": "tsx scripts/enhanced-ordered.ts"
   },
   "keywords": [
     "mcp",
@@ -24,6 +30,8 @@
   "license": "ISC",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.2",
+    "canvas": "^3.2.0",
+    "epdoptimize": "^0.1.3",
     "undici": "^6.19.8",
     "zod": "^3.25.76"
   },
