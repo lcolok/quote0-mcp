@@ -12,13 +12,12 @@ import { MiniWeatherWidget } from '../src/react-widgets/components/MiniWeatherWi
 import { EnhancedMiniWeatherWidget } from '../src/react-widgets/components/EnhancedMiniWeatherWidget.js';
 import { MaximizedWeatherWidget } from '../src/react-widgets/components/MaximizedWeatherWidget.js';
 import SmartMaximizedWeatherWidget from '../src/react-widgets/components/SmartMaximizedWeatherWidget.js';
-import { guangzhouWeatherMock, weatherMockData } from '../src/react-widgets/mock-data.js';
+import { weatherMockData } from '../src/react-widgets/mock-data.js';
 import { widgetRenderer } from '../src/react-widgets/renderer.js';
-import { ImageSender, EnvLoader } from '../src/image-sender/index.js';
+import { EnvLoader } from '../src/image-sender/index.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
-import path from 'path';
 
 const execAsync = promisify(exec);
 
@@ -33,15 +32,14 @@ function showUsage(): void {
     console.log('  npm run widget:weather shenzhen original     # 原版深圳天气');
     console.log('');
     console.log('可用城市: guangzhou, beijing, shenzhen');
-    console.log('可用版本: smart (超级推荐), maximized, enhanced, mini, compact, original');
+    console.log('可用版本: maximized (推荐), enhanced, mini, compact, original');
     console.log('');
     console.log('✨ 版本特点:');
-    console.log('  • smart:     智能字体版本 - 完美像素对齐 (超级推荐) 🔥');
-    console.log('  • maximized: 最大化空间利用版本 (强烈推荐)');
-    console.log('  • enhanced:  矢量图标版迷你组件');
-    console.log('  • mini:      超大温度显示，极简布局');
-    console.log('  • compact:   平衡信息量和可读性');
-    console.log('  • original:  信息丰富的完整版本');
+    console.log('  • maximized:  最大化空间利用版本 (你满意的版本) ✅');
+    console.log('  • enhanced:   矢量图标版迷你组件');
+    console.log('  • mini:       超大温度显示，极简布局');
+    console.log('  • compact:    平衡信息量和可读性');
+    console.log('  • original:   信息丰富的完整版本');
     process.exit(0);
 }
 
@@ -79,7 +77,7 @@ async function main(): Promise<void> {
         
         // 根据版本选择组件
         console.log(`🔨 渲染 React 天气组件 (${version}版)...`);
-        let weatherWidget;
+        let weatherWidget: React.ReactElement;
         
         switch (version) {
             case 'smart':
