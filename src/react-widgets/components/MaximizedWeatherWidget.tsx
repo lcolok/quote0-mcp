@@ -25,13 +25,13 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
       
       // 如果城市名包含区县信息（如"海珠区"），使用特殊格式
       if (data.city.match(/(区|县)$/)) {
-        // 对于区县，显示为 "广州•海珠"（省略"区"字）
+        // 对于区县，显示为 "广州海珠"（直接连接，最紧凑）
         const mainCity = getMainCityName(provinceName, data.city);
         const districtName = data.city.replace(/(区|县)$/, ''); // 移除区县后缀
-        return `${mainCity}•${districtName}`;
+        return `${mainCity}${districtName}`;
       } else {
-        // 对于地级市，显示为 "广东•广州"  
-        return `${provinceName}•${cityName}`;
+        // 对于地级市，显示为 "广东广州"  
+        return `${provinceName}${cityName}`;
       }
     }
     
