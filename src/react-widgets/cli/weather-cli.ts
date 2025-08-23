@@ -6,14 +6,14 @@
  */
 
 import React from 'react';
-import { MaximizedWeatherWidget } from '../src/react-widgets/components/MaximizedWeatherWidget.js';
-import { weatherMockData } from '../src/react-widgets/mock-data.js';
-import { weatherService, SupportedCity } from '../src/react-widgets/services/weather-service.js';
-import { getWeatherForCityEfficient } from '../src/react-widgets/services/efficient-weather-service.js';
-import { getWeatherForCityRobust } from '../src/react-widgets/services/robust-weather-service.js';
-import { WeatherData } from '../src/react-widgets/types.js';
-import { widgetRenderer } from '../src/react-widgets/renderer.js';
-import { EnvLoader } from '../src/image-sender/index.js';
+import { MaximizedWeatherWidget } from '../components/MaximizedWeatherWidget.js';
+import { weatherMockData } from '../mock-data.js';
+import { weatherService } from '../services/weather-service.js';
+import { getWeatherForCityEfficient } from '../services/efficient-weather-service.js';
+import { getWeatherForCityRobust } from '../services/robust-weather-service.js';
+import { WeatherData } from '../types.js';
+import { widgetRenderer } from '../renderer.js';
+import { EnvLoader } from '../../image-sender/index.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
         let weatherData: WeatherData;
         if (dataSource === 'real') {
             console.log('🌐 正在获取真实天气数据...');
-            weatherData = await weatherService.getWeatherData(city as SupportedCity);
+            weatherData = await weatherService.getWeatherData(city);
             console.log(`✅ 真实天气数据获取成功: ${weatherData.city} ${weatherData.temperature}°C ${weatherData.weather}`);
         } else if (dataSource === 'smart') {
             console.log('🧠 正在智能获取天气数据...');

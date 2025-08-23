@@ -1,4 +1,4 @@
-import { DynamicCityService } from '../src/react-widgets/services/dynamic-city-service.js';
+import { DynamicCityService } from '../services/dynamic-city-service.js';
 
 async function testDynamicCityService() {
   const service = new DynamicCityService();

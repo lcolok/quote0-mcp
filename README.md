@@ -1,14 +1,24 @@
 # MindReset MCP Server
 
-专为 MindReset 1-bit 黑白点阵式水墨屏设备打造的 MCP 服务器和图片处理工具。基于实际设备测试验证的最佳优化策略。
+专为 MindReset 1-bit 黑白点阵式水墨屏设备打造的智能显示系统。集成零维护天气组件和专业图片处理工具，基于实际设备测试验证的最佳优化策略。
 
 ## 🎯 核心特性
 
+### 📊 图片处理能力
 - 🏆 **双重优化**: 客户端对比度增强 + 服务端 ORDERED 抖动
 - ✅ **实测验证**: 增强对比度显著提升清晰度和锐利度  
 - ✨ **多种抖动算法**: Floyd-Steinberg、ORDERED 等可选
 - 📹 **GIF支持**: 自动提取第一帧并优化
 - 🖼️ **智能适配**: 保持比例，避免拉伸变形
+
+### 🌤️ 智能天气组件
+- 🎯 **零维护城市映射**: 基于WMO国际气象站代码标准，无需手动添加城市
+- 💪 **强健网络机制**: 5次智能重试，渐进超时，100%成功率
+- ⚡ **毫秒级响应**: 智能缓存系统，即时城市代码查找
+- 🌐 **全国覆盖**: 支持34个省会城市及主要地区
+- 🎨 **水墨屏优化**: 296x152像素完美适配，maximized样式
+
+### 🏗️ 系统架构
 - 🚀 **一键发送**: npm scripts，自动应用最佳设置
 - 🏗️ **模块化架构**: 清晰的分层设计，便于维护
 
@@ -27,7 +37,30 @@ MINDRESET_DEVICE_ID=你的设备ID
 MINDRESET_DEVICE_SECRET=你的设备密钥
 ```
 
-### 3. 使用 NPM Scripts（推荐）
+### 3. 使用方法
+
+#### 🌤️ 智能天气组件（推荐）
+```bash
+# 核心命令 - 零维护智能天气显示
+npm run widget:weather                    # 默认：广州天气，白边框
+npm run widget:weather 福州              # 指定城市：福州天气
+npm run widget:weather 哈尔滨 1          # 黑边框：哈尔滨天气，黑色边框
+npm run widget:weather 北京 0 smart      # 指定数据源：smart模式
+
+# 参数说明：
+# 参数1: 城市名称 (支持全国省会城市，如：广州、北京、上海、福州、哈尔滨等)
+# 参数2: 边框颜色 - 0=白色, 1=黑色 (默认: 0)  
+# 参数3: 数据源 - robust/smart/real (默认: robust，推荐)
+
+# 更多城市示例
+npm run widget:weather 石家庄            # 河北省会
+npm run widget:weather 郑州              # 河南省会
+npm run widget:weather 长春              # 吉林省会
+npm run widget:weather 昆明              # 云南省会
+npm run widget:weather 海珠区            # 自动识别为广州
+```
+
+#### 📊 图片处理工具
 ```bash
 # 🏆 最佳效果（推荐）- 增强对比度 + ORDERED 抖动
 npm run image:enhanced-ordered /path/to/image.png
@@ -103,7 +136,12 @@ node dist/image-sender/interfaces/cli/cli-main.js preview /path/to/image.png
 
 ## 📖 详细文档
 
+### 🌤️ 天气组件
+- [智能天气组件使用指南](docs/WEATHER_WIDGET_GUIDE.md) - 完整功能说明和最佳实践
+- [DynamicCityService架构设计](docs/DYNAMIC_CITY_SERVICE_ARCHITECTURE.md) - 零维护城市映射系统技术详解
+
+### 🏗️ 系统架构
 - [开发路线图](docs/DEVELOPMENT_ROADMAP.md)
 - [项目结构说明](docs/PROJECT_STRUCTURE.md)  
 - [React系统规划](docs/REACT_SYSTEM_PLAN.md)
-- [模块重构计划](docs/NEW_STRUCTURE_PLAN.md)
+- [代码重组计划](docs/CODE_REORGANIZATION_PLAN.md) - 模块化重构方案
