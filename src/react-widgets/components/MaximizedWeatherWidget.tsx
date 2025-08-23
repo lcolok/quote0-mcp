@@ -13,9 +13,10 @@ import { BsDropletFill } from 'react-icons/bs';
 
 interface MaximizedWeatherWidgetProps {
   data: WeatherData;
+  invertedBanner?: boolean; // 可选参数：是否反色显示底部banner
 }
 
-const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data }) => {
+const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, invertedBanner = true }) => {
   // 构建城市显示文本：优先显示"城市•区县"格式
   const getCityDisplayText = () => {
     if (data.province && data.city) {
@@ -54,6 +55,46 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
     
     // 默认情况：使用省份名去掉"省"
     return province.replace(/省$/, '');
+  };
+
+  // 计算体感温度 (Heat Index / Apparent Temperature)
+  const calculateFeelsLike = (temp: number, humidity: number, windSpeed?: string): number => {
+    // 简化版体感温度计算公式
+    // 基于温度和湿度的热指数计算
+    
+    // 如果温度低于27°C，体感温度主要受风速影响
+    if (temp < 27) {
+      // 风速影响：风速越大，体感越低
+      const windFactor = windSpeed && windSpeed.includes('≤3') ? -1 : 
+                        windSpeed && windSpeed.includes('4-5') ? -2 : 
+                        windSpeed && windSpeed.includes('≥6') ? -3 : -0.5;
+      return Math.round(temp + windFactor);
+    }
+    
+    // 高温情况下，主要受湿度影响 (Heat Index公式简化版)
+    const T = temp;
+    const RH = humidity;
+    
+    // 简化的热指数计算
+    let heatIndex = T;
+    
+    if (RH > 40) {
+      // 湿度较高时，体感温度上升
+      const humidityEffect = (RH - 40) * 0.1;
+      heatIndex += humidityEffect;
+    }
+    
+    // 风速降温效果
+    const windFactor = windSpeed && windSpeed.includes('≤3') ? -0.5 : 
+                      windSpeed && windSpeed.includes('4-5') ? -1.5 : 
+                      windSpeed && windSpeed.includes('≥6') ? -2.5 : -0.5;
+    
+    return Math.round(heatIndex + windFactor);
+  };
+
+  // 获取体感温度
+  const getFeelsLikeTemp = (): number => {
+    return calculateFeelsLike(data.temperature, data.humidity, data.windSpeed);
   };
 
   // 超大实心天气图标
@@ -100,12 +141,12 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
     imageRendering: 'pixelated'
   };
 
-  // 顶部信息条 - 紧凑布局
+  // 顶部信息条 - 紧凑布局，为底部banner压缩高度
   const topBarStyle: React.CSSProperties = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    height: '40px', // 恢复合适的顶部栏高度
+    height: '32px', // 从40px压缩到32px，为底部banner腾出8px
     paddingLeft: '6px',
     paddingRight: '6px',
     backgroundColor: 'black',
@@ -125,9 +166,9 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
     fontSize: '24px' // 恢复合适的湿度数值
   };
 
-  // 主内容区域 - 占用剩余全部空间
+  // 主内容区域 - 在固定高度内分配空间
   const mainContentStyle: React.CSSProperties = {
-    flex: 1,
+    height: '104px', // 152px总高度 - 32px顶部 - 16px底部 = 104px主内容
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -135,7 +176,7 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
     paddingRight: '8px'
   };
 
-  // 左侧温度 - 超大显示，数字和符号水平排列
+  // 左侧温度区域 - 只显示主温度
   const tempSectionStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'baseline', // 基线对齐
@@ -144,7 +185,7 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
   };
 
   const tempStyle: React.CSSProperties = {
-    fontSize: '108px', // 极大温度显示
+    fontSize: '96px', // 从108px调整到96px以适应压缩后的高度
     fontWeight: 'normal',
     lineHeight: '0.8',
     letterSpacing: '-4px',
@@ -176,6 +217,31 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
     letterSpacing: '6px' // 保持字间距
   };
 
+  // 底部横条banner样式 - 支持反色切换
+  const bottomBannerStyle: React.CSSProperties = {
+    position: 'absolute',
+    bottom: '0',
+    left: '0',
+    right: '0',
+    height: '18px',
+    backgroundColor: invertedBanner ? 'black' : 'rgba(0,0,0,0.05)', // 根据参数切换背景色
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-around', // 改为均匀分布
+    paddingLeft: '4px',
+    paddingRight: '4px',
+    borderTop: '1px solid rgba(0,0,0,0.1)'
+  };
+
+  const bannerItemStyle: React.CSSProperties = {
+    fontSize: '12px',
+    color: invertedBanner ? 'white' : '#333', // 根据参数切换文字颜色
+    fontWeight: 'normal',
+    textAlign: 'center',
+    minWidth: '80px', // 设置最小宽度确保不会太挤
+    whiteSpace: 'nowrap' // 防止文字换行
+  };
+
   return (
     <div style={containerStyle}>
       {/* 顶部信息条：城市 + 湿度 */}
@@ -198,6 +264,15 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data })
           {getWeatherIcon(data.weather)}
           <div style={weatherTextStyle}>{data.weather}</div>
         </div>
+      </div>
+
+      {/* 底部横条banner：体感温度 + 风向风力 + 明日天气 */}
+      <div style={bottomBannerStyle}>
+        <div style={bannerItemStyle}>体感 {getFeelsLikeTemp()}°C</div>
+        <div style={bannerItemStyle}>
+          {data.windDirection ? `${data.windDirection}风 ${data.windPower?.replace('≤', '≤ ') || ''}` : `风力 ${data.windPower || 'N/A'}`}
+        </div>
+        <div style={bannerItemStyle}>明日 {data.tomorrowWeather || data.forecast?.tomorrow?.weather || '未知'}</div>
       </div>
     </div>
   );

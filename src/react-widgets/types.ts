@@ -12,6 +12,7 @@ export interface WeatherData {
   // 基础字段（组件必需）
   windDirection?: string;
   windLevel?: number;
+  windPower?: string;  // 风力等级文字描述
   aqi?: number;
   aqiLevel?: string;
   pressure?: number;
@@ -29,6 +30,7 @@ export interface WeatherData {
   visibility?: number;   // 能见度
   
   // 预报数据（可选）
+  tomorrowWeather?: string;  // 明日天气简单描述
   forecast?: {
     tomorrow?: {
       weather: string;

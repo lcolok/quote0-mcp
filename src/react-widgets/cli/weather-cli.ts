@@ -153,6 +153,15 @@ async function main(): Promise<void> {
                 throw new Error(`高德API未找到城市 ${city} 的编码`);
             }
             const amapData = await amapService.getCurrentWeather(adcode);
+            
+            // 获取预报数据
+            let forecastData = null;
+            try {
+                forecastData = await amapService.getWeatherForecast(adcode);
+            } catch (error) {
+                console.log('⚠️ 获取预报数据失败，跳过明日天气');
+            }
+            
             // 转换为标准WeatherData格式
             weatherData = {
                 city: amapData.city,
@@ -161,11 +170,16 @@ async function main(): Promise<void> {
                 weather: amapData.weather,
                 humidity: amapData.humidity,
                 windDirection: amapData.windDirection,
+                windPower: amapData.windPower,
                 windSpeed: amapData.windPower,
                 pressure: 0,
                 visibility: 0,
                 updateTime: amapData.reportTime,
-                source: '高德天气API'
+                source: '高德天气API',
+                tomorrowWeather: forecastData?.forecast?.[1]?.dayWeather || 
+                               (forecastData?.forecast?.[1] ? 
+                                `${forecastData.forecast[1].dayWeather} ${forecastData.forecast[1].nightTemp}-${forecastData.forecast[1].dayTemp}°C` 
+                                : undefined)
             };
             console.log(`✅ 高德API数据获取成功: ${weatherData.city} ${weatherData.temperature}°C ${weatherData.weather}`);
         } else if (dataSource === 'multi') {

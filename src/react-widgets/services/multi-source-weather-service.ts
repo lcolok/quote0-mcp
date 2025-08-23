@@ -93,6 +93,7 @@ export class MultiSourceWeatherService {
       weather: cmaData.weather, // 气象局天气描述更专业
       humidity: amapData.humidity > 0 ? amapData.humidity : 0,
       windDirection: amapData.windDirection || '',
+      windPower: amapData.windPower || '',
       windSpeed: amapData.windPower || '',
       pressure: 0,
       visibility: 0,
@@ -112,6 +113,7 @@ export class MultiSourceWeatherService {
       weather: amapData.weather,
       humidity: amapData.humidity,
       windDirection: amapData.windDirection,
+      windPower: amapData.windPower,
       windSpeed: amapData.windPower,
       pressure: 0,
       visibility: 0,
