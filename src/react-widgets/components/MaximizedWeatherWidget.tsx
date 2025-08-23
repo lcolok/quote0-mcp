@@ -2,12 +2,17 @@ import React from 'react';
 import { WeatherData } from '../types.js';
 import { FontLoader } from '../font-loader.js';
 
-// 矢量图标 - 使用实心版本
+// 矢量图标 - Weather Icons专业天气图标库
 import { 
-  WiDaySunny, WiCloudy, WiRain, WiSnow, WiThunderstorm 
+  WiDaySunny, WiCloudy, WiRain, WiSnow, WiThunderstorm,
+  WiDayRainMix, WiNightClear, WiDayCloudy, WiRainMix,
+  WiShowers, WiDayShowers, WiDayThunderstorm, WiFog,
+  WiCloudyGusts, WiStrongWind, WiDayHaze, WiSmog,
+  WiRaindrops, WiDaySleet, WiSleet, WiHail
 } from 'react-icons/wi';
 import { 
-  MdSunny, MdCloud, MdGrain, MdAcUnit, MdFlashOn 
+  MdSunny, MdCloud, MdGrain, MdAcUnit, MdFlashOn, 
+  MdCloudQueue, MdWbCloudy, MdThunderstorm, MdFoggy
 } from 'react-icons/md';
 import { BsDropletFill } from 'react-icons/bs';
 
@@ -94,35 +99,82 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
 
   // 获取体感温度
   const getFeelsLikeTemp = (): number => {
-    return calculateFeelsLike(data.temperature, data.humidity, data.windSpeed);
+    return calculateFeelsLike(data.temperature, data.humidity, data.windPower);
   };
 
-  // 超大实心天气图标
+  // 专业天气图标 - 使用Weather Icons库
   const getWeatherIcon = (weather: string) => {
-    const iconProps = { size: 96, color: '#000' }; // 最大化天气图标
+    const iconProps = { size: 120, color: '#000' }; // Weather Icons需要更大的size值
     
-    switch (weather.toLowerCase()) {
-      case 'sunny':
-      case '晴':
-      case 'clear':
-        return <MdSunny {...iconProps} />;
-      case 'cloudy':
-      case '多云':
-      case 'overcast':
-        return <MdCloud {...iconProps} />;
-      case 'rainy':
-      case '雨':
-      case 'rain':
-        return <MdGrain {...iconProps} />;
-      case 'snow':
-      case '雪':
-        return <MdAcUnit {...iconProps} />;
-      case 'thunderstorm':
-      case '雷雨':
-        return <MdFlashOn {...iconProps} />;
-      default:
-        return <MdSunny {...iconProps} />;
+    const weatherLower = weather.toLowerCase();
+    
+    // 晴天类型
+    if (weatherLower.includes('晴') || weatherLower.includes('sunny') || weatherLower.includes('clear')) {
+      return <WiDaySunny {...iconProps} />;
     }
+    
+    // 阴天/全云类型
+    if (weatherLower.includes('阴') || weatherLower.includes('overcast')) {
+      return <WiCloudy {...iconProps} />;
+    }
+    
+    // 多云类型
+    if (weatherLower.includes('多云') || weatherLower.includes('cloudy') || weatherLower.includes('partly')) {
+      return <WiDayCloudy {...iconProps} />;
+    }
+    
+    // 阵雨/淋雨类型
+    if (weatherLower.includes('阵雨') || weatherLower.includes('shower')) {
+      return <WiDayShowers {...iconProps} />;
+    }
+    
+    // 雷阵雨类型
+    if (weatherLower.includes('雷阵雨') || weatherLower.includes('雷雨')) {
+      return <WiDayThunderstorm {...iconProps} />;
+    }
+    
+    // 普通雨天类型
+    if (weatherLower.includes('雨') || weatherLower.includes('rain') || weatherLower.includes('drizzle')) {
+      return <WiRain {...iconProps} />;
+    }
+    
+    // 雷暴类型
+    if (weatherLower.includes('雷') || weatherLower.includes('thunder') || weatherLower.includes('storm')) {
+      return <WiThunderstorm {...iconProps} />;
+    }
+    
+    // 雨夹雪/雨雪类型
+    if (weatherLower.includes('雨夹雪') || weatherLower.includes('sleet')) {
+      return <WiSleet {...iconProps} />;
+    }
+    
+    // 雪天类型
+    if (weatherLower.includes('雪') || weatherLower.includes('snow')) {
+      return <WiSnow {...iconProps} />;
+    }
+    
+    // 雾天类型
+    if (weatherLower.includes('雾') || weatherLower.includes('fog')) {
+      return <WiFog {...iconProps} />;
+    }
+    
+    // 霾/烟雾类型
+    if (weatherLower.includes('霾') || weatherLower.includes('haze') || weatherLower.includes('smog')) {
+      return <WiSmog {...iconProps} />;
+    }
+    
+    // 大风类型
+    if (weatherLower.includes('大风') || weatherLower.includes('windy') || weatherLower.includes('gust')) {
+      return <WiStrongWind {...iconProps} />;
+    }
+    
+    // 冰雹类型
+    if (weatherLower.includes('冰雹') || weatherLower.includes('hail')) {
+      return <WiHail {...iconProps} />;
+    }
+    
+    // 默认 - 多云
+    return <WiDayCloudy {...iconProps} />;
   };
 
   // 容器 - 完全填满屏幕

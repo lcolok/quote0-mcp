@@ -33,7 +33,7 @@ function showUsage(): void {
     console.log('参数说明:');
     console.log('  城市名称: 任意中国城市名称，如 海珠区、朝阳区、杭州 (默认: guangzhou)');
     console.log('  边框: 0=白色, 1=黑色 (默认: 0)');
-    console.log('  数据源: robust, smart, real, amap, multi (默认: robust - 最新研究成果)');
+    console.log('  数据源: robust, smart, real, amap, multi (默认: amap - 高德天气API)');
     console.log('');
     console.log('🏆 最新数据源优势 (基于网络诊断研究):');
     console.log('  • robust  - 💪 最新研究成果！5次智能重试 + 渐进超时 + 错误分类处理');
@@ -43,7 +43,7 @@ function showUsage(): void {
     console.log('  • multi   - 🌐 多源融合，CMA+高德双重保障，最高可靠性');
     console.log('');
     console.log('💡 推荐使用方式（最新成果）:');
-    console.log('  npm run widget:weather 海珠区       # 使用默认robust模式');
+    console.log('  npm run widget:weather 海珠区       # 使用默认高德API模式');
     console.log('  npm run widget:weather 海珠区 0 amap # 使用高德API精确数据');
     console.log('  npm run widget:weather 花都 0 multi  # 使用多源融合最高可靠性');
     console.log('  npm run widget:weather 朝阳区 1 amap # 黑边框 + 高德数据');
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
     const city = args[0] || 'guangzhou';
     const version = 'maximized'; // 固定使用maximized样式
     const border = args[1] || '0';
-    const dataSource = args[2] || 'robust'; // 默认使用robust模式（最新研究成果）
+    const dataSource = args[2] || 'amap'; // 默认使用高德API（更好的城市支持和数据准确性）
     
     // 验证数据源和城市支持
     if (dataSource === 'real') {
