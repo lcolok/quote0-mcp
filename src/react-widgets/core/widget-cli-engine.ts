@@ -93,7 +93,7 @@ export class WidgetCLIEngine {
       console.log(`📁 组件图片: ${outputPath}`);
 
       // 发送到设备 (允许失败)
-      const pushSuccess = await this.sendToDevice(outputPath, config);
+      const pushSuccess = await this.sendToDevice(outputPath, config, data);
 
       const executionTime = Date.now() - startTime;
       console.log(`🎉 ${plugin.meta.name}组件生成完成！耗时: ${executionTime}ms`);
@@ -157,7 +157,7 @@ export class WidgetCLIEngine {
     return key.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_');
   }
 
-  private async sendToDevice(outputPath: string, config: WidgetConfig): Promise<boolean> {
+  private async sendToDevice(outputPath: string, config: WidgetConfig, data?: any): Promise<boolean> {
     try {
       console.log('📤 发送到设备...');
       
@@ -166,7 +166,25 @@ export class WidgetCLIEngine {
       
       // 发送到设备
       const border = config.border || '0';
-      const sendCmd = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${outputPath}" "${border}" "" "ORDERED"`;
+      let link = data?.link || "";
+      
+      // 确保链接格式正确
+      if (link && link !== "") {
+        // 验证链接格式
+        try {
+          const url = new URL(link);
+          console.log(`🔗 链接参数: ${link}`);
+          console.log(`🔗 链接验证: 协议=${url.protocol}, 主机=${url.hostname}`);
+        } catch (error) {
+          console.log(`⚠️  链接格式无效: ${link}`);
+          link = ""; // 清空无效链接
+        }
+      } else {
+        console.log(`📝 无链接参数传递`);
+      }
+      
+      const sendCmd = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${outputPath}" "${border}" "${link}" "ORDERED"`;
+      
       await execAsync(sendCmd);
       
       console.log('✅ 设备发送完成');

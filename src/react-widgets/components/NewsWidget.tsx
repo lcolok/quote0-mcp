@@ -14,10 +14,11 @@ export interface NewsData {
   source?: string;
   publishTime?: string;
   category?: string;
+  link?: string;
 }
 
 export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
-  const { title, message, signature, source, publishTime, category } = data;
+  const { title, message, source } = data;
   
   // 使用智能字体样式
   const contentFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染

@@ -11,7 +11,8 @@ import {
   WidgetConfig, 
   WidgetDataParams 
 } from '../core/widget-plugin.js';
-import { NewsWidget, NewsData, NewsItem } from '../components/NewsWidget.js';
+import { NewsWidget, NewsData } from '../components/NewsWidget.js';
+import Parser from 'rss-parser';
 
 /**
  * 新闻数据参数接口
@@ -21,6 +22,7 @@ interface NewsDataParams extends WidgetDataParams {
   category?: string;
   source?: string;
   count?: number;
+  index?: number; // RSS新闻索引
 }
 
 /**
@@ -115,8 +117,63 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
   }
 
   private async getRSSData(params: NewsDataParams): Promise<NewsData> {
-    // TODO: 实现RSS数据获取
-    throw new Error('RSS数据源暂未实现，请使用mock数据源进行测试');
+    const parser = new Parser({
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NewsWidget/1.0)'
+      }
+    });
+
+    try {
+      // Solidot RSS 源
+      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      
+      if (!feed.items || feed.items.length === 0) {
+        throw new Error('RSS源没有找到新闻条目');
+      }
+
+      // 获取新闻条目 - 默认随机选择，或使用指定索引
+      let index = params.index;
+      if (index === undefined) {
+        // 随机选择一条新闻（从前10条中选择，避免太旧的新闻）
+        const availableItems = Math.min(feed.items.length, 10);
+        index = Math.floor(Math.random() * availableItems);
+      } else {
+        // 确保索引在有效范围内
+        index = Math.max(0, Math.min(index, feed.items.length - 1));
+      }
+      
+      const item = feed.items[index];
+      console.log(`📰 选择第${index + 1}条新闻: ${item.title}`);
+      
+      // 清理描述内容，移除HTML标签
+      let cleanDescription = item.contentSnippet || item.content || '';
+      if (!cleanDescription && item.description) {
+        cleanDescription = item.description.replace(/<[^>]*>/g, '').trim();
+      }
+      
+      // 限制标题长度为10个字符
+      let title = item.title || '无标题';
+      if (title.length > 10) {
+        title = title.substring(0, 10);
+      }
+      
+      // 使用原始链接，如果设备不支持外网访问，用户可以手动访问
+      const newsLink = item.link;
+      console.log(`🔗 原始新闻链接: ${newsLink}`);
+      
+      return {
+        title: title,
+        message: cleanDescription || '暂无内容',
+        signature: '来自Solidot',
+        source: 'Solidot',
+        publishTime: item.pubDate || new Date().toISOString(),
+        category: '科技',
+        link: newsLink || undefined
+      };
+    } catch (error) {
+      console.error('RSS获取失败:', error);
+      throw new Error(`RSS数据获取失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
   }
 
   private async getAPIData(params: NewsDataParams): Promise<NewsData> {
@@ -187,7 +244,7 @@ export class NewsPlugin implements WidgetPlugin<NewsData, NewsConfig> {
     }
 
     return {
-      params: { category, source },
+      params: { category, dataSource: source },
       config: { border: border as '0' | '1' }
     };
   }
