@@ -9,41 +9,35 @@ import { smartFont } from '../utils/smart-font-utils.js';
 
 export interface NewsData {
   title: string;
-  summary?: string;
-  source: string;
-  publishTime: string;
-  category?: string;
-  items?: NewsItem[];
-}
-
-export interface NewsItem {
-  title: string;
+  message: string;
+  signature: string;
   source?: string;
-  time?: string;
+  publishTime?: string;
+  category?: string;
 }
 
 export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
-  const { title, summary, source, publishTime, category, items } = data;
+  const { title, message, signature, source, publishTime, category } = data;
   
   // 使用智能字体样式
-  const titleFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染
+  const contentFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染
 
   return (
     <div style={{
       width: '296px',
       height: '152px',
       backgroundColor: '#FFFFFF',
-      ...titleFont,  // 使用智能字体样式
+      ...contentFont,  // 使用智能字体样式
       padding: '0px',
       boxSizing: 'border-box',
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
-      {/* 顶部信息条 - 效仿天气组件样式 */}
+      {/* 顶部信息条 - 使用新闻标题 */}
       <div style={{
         display: 'flex',
-        justifyContent: 'space-between',
+        justifyContent: 'flex-start',
         alignItems: 'center',
         height: '32px',
         paddingLeft: '6px',
@@ -54,21 +48,12 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
         <div style={{
           fontSize: '28px',
           fontWeight: 'normal',
-          lineHeight: '1'
+          lineHeight: '1',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
         }}>
-{category || '实时新闻'}
-        </div>
-        <div style={{
-          fontSize: '12px',
-          color: 'white',
-          fontWeight: 'normal'
-        }}>
-          {new Date(publishTime).toLocaleDateString('zh-CN', {
-            month: 'numeric',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })}
+          {title}
         </div>
       </div>
 
@@ -82,85 +67,21 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
         paddingTop: '2px',
         overflow: 'hidden'
       }}>
-        {/* 主新闻标题 */}
-      {title && (
-        <div style={{
-          fontSize: '12px',
-          fontWeight: 'normal',
-          color: '#000000',
-          marginBottom: '2px',
-          lineHeight: '14px'
-        }}>
-          {title.length > 28 ? `${title.substring(0, 25)}...` : title}
-        </div>
-      )}
-
-      {/* 摘要 */}
-      {summary && (
-        <div style={{
-          fontSize: '12px',
-          color: '#333333',
-          marginBottom: '2px',
-          lineHeight: '14px'
-        }}>
-          {summary.length > 40 ? `${summary.substring(0, 37)}...` : summary}
-        </div>
-      )}
-
-      {/* 新闻列表 */}
-      {items && items.length > 0 && (
+        {/* 新闻内容 */}
         <div style={{
           flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1px'
+          ...contentFont,
+          color: '#333333',
+          overflow: 'hidden'
         }}>
-          {items.slice(0, 4).map((item, index) => (
-            <div key={index} style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '4px',
-              fontSize: '12px',
-              lineHeight: '14px'
-            }}>
-              <span style={{
-                color: '#666666',
-                minWidth: '16px',
-                fontSize: '12px'
-              }}>
-                {index + 1}.
-              </span>
-              <div style={{
-                flex: 1,
-                lineHeight: '14px'
-              }}>
-                <div style={{
-                  color: '#000000',
-                  marginBottom: '1px',
-                  fontSize: '12px'
-                }}>
-                  {item.title.length > 22 ? `${item.title.substring(0, 19)}...` : item.title}
-                </div>
-                {item.source && (
-                  <div style={{
-                    fontSize: '12px',
-                    color: '#999999',
-                    lineHeight: '12px'
-                  }}>
-                    {item.source} {item.time && `• ${item.time}`}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
+          {message}
         </div>
-      )}
       </div>
 
-      {/* 底部信息栏 - 效仿天气组件样式 */}
+      {/* 底部信息栏 - 单条banner */}
       <div style={{
         display: 'flex',
-        justifyContent: 'space-around',
+        justifyContent: 'center',
         alignItems: 'center',
         height: '16px',
         paddingLeft: '4px',
@@ -171,8 +92,7 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
         fontWeight: 'normal',
         textAlign: 'center'
       }}>
-        <span>来源: {source}</span>
-        <span>{items ? `共${items.length}条` : '单条新闻'}</span>
+        <span>来源: {source || '未知'}</span>
       </div>
     </div>
   );

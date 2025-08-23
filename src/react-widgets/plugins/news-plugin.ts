@@ -35,47 +35,28 @@ interface NewsConfig extends WidgetConfig {
  */
 const mockNewsData: Record<string, NewsData> = {
   technology: {
-    title: 'AI技术在各行业加速应用',
-    summary: '人工智能技术在医疗、教育、金融等领域的应用越来越广泛，为各行业带来变革。',
-    source: '科技日报',
+    title: '3D打印树脂有毒性风险',
+    message: '光敏树脂加热与固化会释放挥发性有机物和刺激性气体，部分材料有皮肤刺激甚至致敏可能，建议佩戴手套、加强通风打印后彻底固化和清洗成品可降低健康风险',
+    signature: '合理防护可大幅降低危害',
+    source: '3D打印安全研究',
     publishTime: new Date().toISOString(),
-    category: '科技',
-    items: [
-      { title: 'ChatGPT用户突破1亿', source: 'TechCrunch', time: '10:30' },
-      { title: '苹果发布新款MacBook Pro', source: 'Apple', time: '09:15' },
-      { title: 'Meta推出VR新产品线', source: 'Meta', time: '08:45' },
-      { title: '特斯拉自动驾驶技术升级', source: 'Tesla', time: '07:30' },
-      { title: '微软AI助手集成Office套件', source: 'Microsoft', time: '06:20' },
-      { title: '谷歌量子计算取得突破', source: 'Google', time: '05:15' }
-    ]
+    category: '科技'
   },
   finance: {
-    title: '全球股市波动加剧',
-    summary: '受地缘政治影响，全球主要股指出现较大波动，投资者情绪谨慎。',
-    source: '财经网',
+    title: '央行数字货币全国试点',
+    message: '人民银行宣布数字人民币试点范围从26个城市扩展至全国所有地级市，支持线上线下全场景支付，与支付宝微信并存互补，推动金融基础设施现代化建设',
+    signature: '数字化支付新时代到来',
+    source: '中国人民银行',
     publishTime: new Date().toISOString(),
-    category: '财经',
-    items: [
-      { title: '沪深300指数收涨1.2%', source: '上交所', time: '15:30' },
-      { title: '美联储加息预期升温', source: 'Fed', time: '14:15' },
-      { title: '比特币价格回调至4万美元', source: 'CoinDesk', time: '13:45' },
-      { title: '黄金价格创年内新高', source: 'COMEX', time: '12:30' },
-      { title: '原油期货价格上涨2%', source: 'WTI', time: '11:20' }
-    ]
+    category: '财经'
   },
   sports: {
-    title: 'NBA季后赛激战正酣',
-    summary: '各支球队为争夺总冠军展开激烈角逐，精彩比赛连连。',
-    source: 'ESPN中文',
+    title: '中国男篮战胜澳大利亚',
+    message: '中国男篮在世界杯亚太区预选赛中以87-81战胜强敌澳大利亚队，这场胜利让中国队在积分榜上占据有利位置，有望直接晋级2024年巴黎奥运会篮球比赛',
+    signature: '团结拼搏铸就辉煌',
+    source: '中国篮协',
     publishTime: new Date().toISOString(),
-    category: '体育',
-    items: [
-      { title: '湖人队击败勇士队进入下一轮', source: 'NBA', time: '11:30' },
-      { title: '詹姆斯创季后赛得分纪录', source: 'ESPN', time: '10:15' },
-      { title: '凯尔特人横扫对手晋级', source: 'NBA', time: '09:45' },
-      { title: '中国女排备战世锦赛', source: '中国排协', time: '08:30' },
-      { title: '北京冬奥会筹备进展顺利', source: 'IOC', time: '07:20' }
-    ]
+    category: '体育'
   }
 };
 
