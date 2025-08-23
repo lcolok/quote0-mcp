@@ -4,6 +4,7 @@
 
 export interface WeatherData {
   city: string;
+  province?: string;  // 省份信息（可选）
   temperature: number;
   weather: string;
   humidity: number;
@@ -23,6 +24,9 @@ export interface WeatherData {
   feelst?: number;        // 体感温度
   lastUpdate?: string;    // 最后更新时间
   jieQi?: string;        // 节气
+  source?: string;       // 数据源
+  updateTime?: string;   // 更新时间
+  visibility?: number;   // 能见度
   
   // 预报数据（可选）
   forecast?: {

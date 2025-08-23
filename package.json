@@ -24,6 +24,8 @@
     "widget:test": "tsx src/react-widgets/tests/weather-services.test.ts",
     "widget:test-api": "tsx src/react-widgets/tests/api-integration.test.ts",
     "widget:test-city": "tsx src/react-widgets/tools/city-service-test.ts",
+    "widget:test-amap": "tsx src/react-widgets/tests/amap-weather.test.ts",
+    "widget:test-multi": "tsx src/react-widgets/tests/multi-source.test.ts",
     "widget:diagnostics": "tsx src/react-widgets/tools/network-diagnostics.ts",
     "widget:monitor": "tsx src/react-widgets/tools/api-monitor.ts",
     "icons:test": "tsx scripts/test-icons.ts"
