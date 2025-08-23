@@ -8,6 +8,7 @@ import { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RenderOptions } from './types.js';
 import { FontLoader } from './font-loader.js';
+import { EnhancedFontLoader } from './core/enhanced-font-loader.js';
 import { LocalFontServer } from './local-font-server.js';
 
 export class WidgetRenderer {
@@ -97,7 +98,40 @@ export class WidgetRenderer {
     }
   }
 
+  private detectFontSize(markup: string): number {
+    // 检测markup中的fontSize样式，支持多种格式
+    const patterns = [
+      /fontSize:\s*['"](\d+)px['"]/,        // fontSize: "16px"
+      /fontSize:\s*(\d+)px/,                // fontSize: 16px (without quotes)
+      /fontSize:['"](\d+)px['"]/,           // fontSize:"16px"
+      /font-size:\s*(\d+)px/                // font-size: 16px
+    ];
+
+    for (const pattern of patterns) {
+      const match = markup.match(pattern);
+      if (match) {
+        const size = parseInt(match[1]);
+        console.log(`🔍 检测到字体大小: ${size}px`);
+        return size;
+      }
+    }
+    
+    console.log('⚠️ 未检测到字体大小，使用默认12px');
+    return 12;
+  }
+
   private createHTMLPage(markup: string, backgroundColor: string): string {
+    const detectedFontSize = this.detectFontSize(markup);
+    
+    // 使用增强字体加载器进行智能分析和渲染
+    const fontAnalysis = EnhancedFontLoader.analyzeComponentFontUsage(markup);
+    console.log(`🔍 字体使用分析: ${fontAnalysis.recommendations.join(' | ')}`);
+    
+    if (fontAnalysis.optimizationSuggestions.length > 0) {
+      console.log(`💡 优化建议:`);
+      fontAnalysis.optimizationSuggestions.forEach(suggestion => console.log(`   ${suggestion}`));
+    }
+    
     return `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -112,7 +146,7 @@ export class WidgetRenderer {
             box-sizing: border-box;
         }
         
-        ${FontLoader.getFusionPixelCSS()}
+        ${EnhancedFontLoader.getSmartFontCSS(detectedFontSize)}
         
         body {
             width: 296px;

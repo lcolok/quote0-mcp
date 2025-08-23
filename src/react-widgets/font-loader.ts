@@ -104,4 +104,19 @@ export class FontLoader {
       }
     `;
   }
+
+  /**
+   * 为Puppeteer环境加载指定大小的Fusion Pixel中文像素字体
+   */
+  static getFusionPixelCSSForSize(fontSize: number): string {
+    return `
+      @font-face {
+        font-family: 'FusionPixelFont';
+        src: url('http://localhost:3001/fusion-pixel-${fontSize}px.woff2') format('woff2');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+    `;
+  }
 }

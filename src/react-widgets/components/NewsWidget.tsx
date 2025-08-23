@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { WidgetProps } from '../core/widget-plugin.js';
-import { FontLoader } from '../font-loader.js';
+import { smartFont } from '../utils/smart-font-utils.js';
 
 export interface NewsData {
   title: string;
@@ -22,44 +22,46 @@ export interface NewsItem {
   time?: string;
 }
 
-export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data, config }) => {
+export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
   const { title, summary, source, publishTime, category, items } = data;
-  const borderColor = config?.border === '1' ? '#000000' : '#FFFFFF';
+  
+  // 使用智能字体样式
+  const titleFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染
 
   return (
     <div style={{
       width: '296px',
       height: '152px',
       backgroundColor: '#FFFFFF',
-      border: `2px solid ${borderColor}`,
-      fontFamily: FontLoader.getFusionPixelFontFamily(),
-      fontSize: '12px',
-      lineHeight: '14px',
-      padding: '8px',
+      ...titleFont,  // 使用智能字体样式
+      padding: '0px',
       boxSizing: 'border-box',
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
-      {/* 标题栏 */}
+      {/* 顶部信息条 - 效仿天气组件样式 */}
       <div style={{
         display: 'flex',
-        alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: '6px',
-        paddingBottom: '4px',
-        borderBottom: '1px solid #333333'
+        alignItems: 'center',
+        height: '32px',
+        paddingLeft: '6px',
+        paddingRight: '6px',
+        backgroundColor: 'black',
+        color: 'white'
       }}>
         <div style={{
-          fontSize: '12px',
+          fontSize: '28px',
           fontWeight: 'normal',
-          color: '#000000'
+          lineHeight: '1'
         }}>
-          📰 {category || '实时新闻'}
+{category || '实时新闻'}
         </div>
         <div style={{
           fontSize: '12px',
-          color: '#666666'
+          color: 'white',
+          fontWeight: 'normal'
         }}>
           {new Date(publishTime).toLocaleDateString('zh-CN', {
             month: 'numeric',
@@ -70,16 +72,26 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data, config }) =>
         </div>
       </div>
 
-      {/* 主新闻标题 */}
+      {/* 主内容区域 - 152px - 32px顶部 - 16px底部 = 104px */}
+      <div style={{
+        height: '104px',
+        display: 'flex',
+        flexDirection: 'column',
+        paddingLeft: '4px',
+        paddingRight: '4px',
+        paddingTop: '2px',
+        overflow: 'hidden'
+      }}>
+        {/* 主新闻标题 */}
       {title && (
         <div style={{
           fontSize: '12px',
           fontWeight: 'normal',
           color: '#000000',
-          marginBottom: '4px',
+          marginBottom: '2px',
           lineHeight: '14px'
         }}>
-          {title.length > 35 ? `${title.substring(0, 32)}...` : title}
+          {title.length > 28 ? `${title.substring(0, 25)}...` : title}
         </div>
       )}
 
@@ -88,10 +100,10 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data, config }) =>
         <div style={{
           fontSize: '12px',
           color: '#333333',
-          marginBottom: '6px',
+          marginBottom: '2px',
           lineHeight: '14px'
         }}>
-          {summary.length > 55 ? `${summary.substring(0, 52)}...` : summary}
+          {summary.length > 40 ? `${summary.substring(0, 37)}...` : summary}
         </div>
       )}
 
@@ -101,18 +113,19 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data, config }) =>
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
-          gap: '2px'
+          gap: '1px'
         }}>
-          {items.slice(0, 5).map((item, index) => (
+          {items.slice(0, 4).map((item, index) => (
             <div key={index} style={{
               display: 'flex',
               alignItems: 'flex-start',
               gap: '4px',
-              fontSize: '12px'
+              fontSize: '12px',
+              lineHeight: '14px'
             }}>
               <span style={{
                 color: '#666666',
-                minWidth: '12px',
+                minWidth: '16px',
                 fontSize: '12px'
               }}>
                 {index + 1}.
@@ -123,14 +136,16 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data, config }) =>
               }}>
                 <div style={{
                   color: '#000000',
-                  marginBottom: '1px'
+                  marginBottom: '1px',
+                  fontSize: '12px'
                 }}>
-                  {item.title.length > 32 ? `${item.title.substring(0, 29)}...` : item.title}
+                  {item.title.length > 22 ? `${item.title.substring(0, 19)}...` : item.title}
                 </div>
                 {item.source && (
                   <div style={{
                     fontSize: '12px',
-                    color: '#999999'
+                    color: '#999999',
+                    lineHeight: '12px'
                   }}>
                     {item.source} {item.time && `• ${item.time}`}
                   </div>
@@ -140,17 +155,21 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data, config }) =>
           ))}
         </div>
       )}
+      </div>
 
-      {/* 底部信息栏 */}
+      {/* 底部信息栏 - 效仿天气组件样式 */}
       <div style={{
         display: 'flex',
-        justifyContent: 'space-between',
+        justifyContent: 'space-around',
         alignItems: 'center',
-        marginTop: '4px',
-        paddingTop: '4px',
-        borderTop: '1px solid #DDDDDD',
+        height: '16px',
+        paddingLeft: '4px',
+        paddingRight: '4px',
+        borderTop: '1px solid rgba(0,0,0,0.1)',
         fontSize: '12px',
-        color: '#999999'
+        color: '#333',
+        fontWeight: 'normal',
+        textAlign: 'center'
       }}>
         <span>来源: {source}</span>
         <span>{items ? `共${items.length}条` : '单条新闻'}</span>
