@@ -52,6 +52,8 @@ interface AmapWeatherCast {
 export interface AmapWeatherData {
   city: string;
   province: string;
+  district?: string; // 新增区县信息
+  realCity?: string; // 新增真实市级名称
   temperature: number;
   weather: string;
   humidity: number;
@@ -70,6 +72,12 @@ export interface AmapWeatherData {
 export class AmapWeatherService {
   private apiKey: string;
   private baseUrl = 'https://restapi.amap.com/v3/weather/weatherInfo';
+  private cachedGeoInfo: {
+    province: string;
+    city: string; 
+    district: string;
+    adcode: string;
+  } | null = null;
 
   constructor() {
     this.apiKey = process.env.AMAP_API_KEY || '';
@@ -144,9 +152,14 @@ export class AmapWeatherService {
    * 转换实时天气数据格式
    */
   private transformWeatherData(weather: AmapLiveWeather): AmapWeatherData {
+    // 使用缓存的地理信息，提供更准确的城市名称
+    const geoInfo = this.cachedGeoInfo;
+    
     return {
       city: weather.city,
       province: weather.province,
+      district: geoInfo?.district || '',
+      realCity: geoInfo?.city || '', // 从地理编码获取的真实市级名称
       temperature: parseFloat(weather.temperature_float || weather.temperature),
       weather: weather.weather,
       humidity: parseFloat(weather.humidity_float || weather.humidity),
@@ -210,7 +223,7 @@ export class AmapWeatherService {
   }
 
   /**
-   * 使用高德地理编码API动态获取adcode
+   * 使用高德地理编码API动态获取adcode和完整地理信息
    */
   private async getDynamicAdcode(cityName: string): Promise<string | null> {
     const geocodeUrl = 'https://restapi.amap.com/v3/geocode/geo';
@@ -228,6 +241,19 @@ export class AmapWeatherService {
 
       if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
         const geocode = data.geocodes[0];
+        
+        // 缓存完整的地理信息，供后续使用
+        this.cachedGeoInfo = {
+          province: geocode.province || '',
+          city: geocode.city || '', 
+          district: geocode.district || '',
+          adcode: geocode.adcode
+        };
+        
+        // 设置全局缓存供组件使用（Node.js环境的替代方案）
+        (global as any).__amapGeoCache = this.cachedGeoInfo;
+        
+        console.log(`🗺️ 获取完整地理信息:`, this.cachedGeoInfo);
         return geocode.adcode;
       }
     } catch (error) {

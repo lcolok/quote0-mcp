@@ -5,6 +5,8 @@
 export interface WeatherData {
   city: string;
   province?: string;  // 省份信息（可选）
+  district?: string;  // 区县信息（可选）
+  realCity?: string;  // 真实市级名称（来自高德API）
   temperature: number;
   weather: string;
   humidity: number;

@@ -130,16 +130,18 @@ class WeatherDataProvider implements WidgetDataProvider<WeatherData> {
       console.log('⚠️ 获取预报数据失败，跳过明日天气');
     }
     
-    // 转换为标准WeatherData格式
+    // 转换为标准WeatherData格式 - 传递完整的高德地理信息
     return {
-      city: amapData.city,
+      city: amapData.city, // 保持原始API返回值（如"海珠区"）
       province: amapData.province,
+      district: amapData.district, // 区县信息
+      realCity: amapData.realCity, // 真实市级名称（如"广州市"）
       temperature: amapData.temperature,
       weather: amapData.weather,
       humidity: amapData.humidity,
       windDirection: amapData.windDirection,
       windPower: amapData.windPower,
-      windSpeed: amapData.windPower,
+      windSpeed: 0, // windPower是字符串，这里用0
       pressure: 0,
       visibility: 0,
       updateTime: amapData.reportTime,

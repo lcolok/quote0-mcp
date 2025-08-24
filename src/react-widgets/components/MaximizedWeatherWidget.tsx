@@ -22,44 +22,32 @@ interface MaximizedWeatherWidgetProps {
 }
 
 const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, invertedBanner = true }) => {
-  // 构建城市显示文本：优先显示"城市•区县"格式
+  // 构建城市显示文本：直接使用高德API提供的完整地理信息
   const getCityDisplayText = () => {
-    if (data.province && data.city) {
-      // 处理高德API数据：从"广东省"提取"广东"，从"海珠区"显示完整名称
-      const cityName = data.city.replace(/(市|区|县)$/, ''); // 移除后缀
-      const provinceName = data.province.replace(/省$/, ''); // 移除"省"后缀
-      
-      // 如果城市名包含区县信息（如"海珠区"），使用特殊格式
-      if (data.city.match(/(区|县)$/)) {
-        // 对于区县，显示为 "广州海珠"（直接连接，最紧凑）
-        const mainCity = getMainCityName(provinceName, data.city);
-        const districtName = data.city.replace(/(区|县)$/, ''); // 移除区县后缀
-        return `${mainCity}${districtName}`;
-      } else {
-        // 对于地级市，显示为 "广东广州"  
-        return `${provinceName}${cityName}`;
-      }
+    // 检查全局缓存的地理信息（从高德API直接获取）
+    const geoInfo = (global as any).__amapGeoCache;
+    if (geoInfo && geoInfo.city && geoInfo.district) {
+      const cityName = geoInfo.city.replace(/(市|区|县)$/, '');
+      const districtName = geoInfo.district.replace(/(区|县)$/, '');
+      return `${cityName}${districtName}`;
     }
     
-    // 回退到原始城市名
+    // 优先使用传递的完整地理信息
+    if (data.realCity && data.district) {
+      const cityName = data.realCity.replace(/(市|区|县)$/, '');
+      const districtName = data.district.replace(/(区|县)$/, '');
+      return `${cityName}${districtName}`;
+    }
+    
+    // 回退到省市数据
+    if (data.province && data.city) {
+      const cityName = data.city.replace(/(市|区|县)$/, '');
+      const provinceName = data.province.replace(/省$/, '');
+      return `${provinceName}${cityName}`;
+    }
+    
+    // 最终回退
     return data.city;
-  };
-
-  // 根据省份和区县推断主要城市名
-  const getMainCityName = (province: string, district: string): string => {
-    // 广州市区县映射
-    const guangzhouDistricts = ['海珠区', '天河区', '越秀区', '荔湾区', '白云区', '黄埔区', '花都区', '番禺区', '南沙区', '从化区', '增城区'];
-    // 深圳市区县映射  
-    const shenzhenDistricts = ['福田区', '罗湖区', '南山区', '宝安区', '龙岗区', '盐田区', '龙华区', '坪山区', '光明区', '大鹏新区'];
-    // 北京市区县映射
-    const beijingDistricts = ['东城区', '西城区', '朝阳区', '丰台区', '石景山区', '海淀区', '门头沟区', '房山区', '通州区', '顺义区', '昌平区', '大兴区', '怀柔区', '平谷区', '密云区', '延庆区'];
-    
-    if (guangzhouDistricts.includes(district)) return '广州';
-    if (shenzhenDistricts.includes(district)) return '深圳'; 
-    if (beijingDistricts.includes(district)) return '北京';
-    
-    // 默认情况：使用省份名去掉"省"
-    return province.replace(/省$/, '');
   };
 
   // 计算体感温度 (Heat Index / Apparent Temperature)
