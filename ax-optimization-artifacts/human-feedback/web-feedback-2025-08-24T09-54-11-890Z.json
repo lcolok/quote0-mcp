@@ -1,0 +1,64 @@
+{
+  "format": "ax_training_data",
+  "version": "1.0",
+  "generated_at": "2025-08-24T09:54:11.890Z",
+  "total_examples": 1,
+  "examples": [
+    {
+      "input": {
+        "news_content": "OpenAI发布了最新的GPT-5模型，在多个基准测试中取得了突破性成果。新模型在理解能力、推理能力和创造性方面都有显著提升，同时支持更长的上下文窗口，可以处理多达200万个token。",
+        "category": "technology"
+      },
+      "expected_output": {
+        "title": {
+          "content": "OpenAI发布GPT-5：支持200万token长上下文",
+          "human_score": 4,
+          "human_feedback": {
+            "length_appropriate": true,
+            "information_complete": true,
+            "readability_good": true,
+            "accuracy_good": true,
+            "suggestions": "可以更突出GPT-5的核心优势",
+            "improved_version": "OpenAI发布GPT-5：理解推理全面提升，支持200万token超长上下文"
+          }
+        },
+        "summary": {
+          "content": "OpenAI新推出GPT-5模型，在理解、推理和创造性方面显著提升，支持200万token长上下文处理，在多个基准测试中取得突破。",
+          "human_score": 4,
+          "human_feedback": {
+            "length_appropriate": true,
+            "accuracy_good": true,
+            "completeness_good": true,
+            "clarity_good": true,
+            "suggestions": "可以更具体说明提升的程度",
+            "improved_version": "一个改进版本的摘要示例"
+          }
+        }
+      },
+      "reviewer": {
+        "name": "张专家",
+        "expertise": "journalism",
+        "experience": 8
+      },
+      "overall_score": 4,
+      "expert_annotations": {
+        "keyEntities": [
+          "OpenAI",
+          "GPT-5",
+          "200万token",
+          "长上下文"
+        ],
+        "coreEvents": [
+          "模型发布",
+          "基准测试突破",
+          "能力提升"
+        ],
+        "importance": "high",
+        "difficulty": "medium"
+      },
+      "comments": "整体质量不错，建议在突出核心亮点方面进一步优化",
+      "timestamp": "2025-08-24T09:54:11.888Z",
+      "task_id": "web_task_1756029251888"
+    }
+  ]
+}

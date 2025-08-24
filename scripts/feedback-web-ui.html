@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AX模型质量反馈系统</title>
+    <style>
+        body {
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f7;
+            line-height: 1.6;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1d1d1f;
+            text-align: center;
+            margin-bottom: 30px;
+            font-weight: 600;
+        }
+        .section {
+            margin: 25px 0;
+            padding: 20px;
+            background: #fbfbfd;
+            border-radius: 8px;
+            border-left: 4px solid #007aff;
+        }
+        .section h3 {
+            color: #007aff;
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .ai-output {
+            background: #e8f4ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        .form-group {
+            margin: 15px 0;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #1d1d1f;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d2d2d7;
+            border-radius: 6px;
+            font-size: 16px;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #007aff;
+            box-shadow: 0 0 0 3px rgba(0,122,255,0.1);
+        }
+        .rating {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .star {
+            font-size: 24px;
+            color: #d2d2d7;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .star:hover, .star.active {
+            color: #ffca28;
+        }
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin: 10px 0;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .checkbox-item input[type="checkbox"] {
+            width: auto;
+        }
+        button {
+            background: #007aff;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #0056cc;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #e5e5e7;
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #007aff;
+        }
+        .emoji {
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1><span class="emoji">🎯</span> AX模型质量反馈系统</h1>
+        
+        <div class="section">
+            <h3><span class="emoji">📰</span> 原始新闻内容</h3>
+            <div class="ai-output" id="original-news">
+                SpaceX成功发射最新一批Starlink卫星，本次任务搭载60颗卫星，使在轨卫星总数达到5000颗。马斯克表示，Starlink网络现已覆盖全球99%的人口，下载速度可达1Gbps。该服务已在50多个国家提供，用户超过300万。SpaceX计划未来五年内将卫星数量增加到12000颗。
+            </div>
+        </div>
+
+        <div class="section">
+            <h3><span class="emoji">🤖</span> AI生成结果</h3>
+            <div class="form-group">
+                <label>AI生成标题:</label>
+                <div class="ai-output" id="ai-title">SpaceX发射Starlink卫星达5000颗 (16字符)</div>
+            </div>
+            <div class="form-group">
+                <label>AI生成摘要:</label>
+                <div class="ai-output" id="ai-summary">SpaceX发射60颗Starlink卫星，总数达5000颗，网络覆盖全球99%人口，速度达1Gbps，用户超300万，计划5年内增至12000颗。 (69字符)</div>
+            </div>
+        </div>
+
+        <form id="feedback-form">
+            <div class="section">
+                <h3><span class="emoji">👤</span> 评估者信息</h3>
+                <div class="form-group">
+                    <label for="reviewer-name">姓名:</label>
+                    <input type="text" id="reviewer-name" required>
+                </div>
+                <div class="form-group">
+                    <label for="expertise">专业领域:</label>
+                    <select id="expertise" required>
+                        <option value="">请选择...</option>
+                        <option value="journalism">新闻学</option>
+                        <option value="ai-ml">人工智能/机器学习</option>
+                        <option value="technology">科技行业</option>
+                        <option value="linguistics">语言学</option>
+                        <option value="other">其他</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="experience">相关工作经验（年）:</label>
+                    <input type="number" id="experience" min="0" max="50" required>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3><span class="emoji">⭐</span> 整体质量评分</h3>
+                <div class="form-group">
+                    <label>请对AI输出的整体质量打分:</label>
+                    <div class="rating" data-field="overall">
+                        <span class="star" data-value="1">⭐</span>
+                        <span class="star" data-value="2">⭐</span>
+                        <span class="star" data-value="3">⭐</span>
+                        <span class="star" data-value="4">⭐</span>
+                        <span class="star" data-value="5">⭐</span>
+                    </div>
+                    <small>1=很差，2=较差，3=一般，4=良好，5=优秀</small>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3><span class="emoji">🏷️</span> 标题质量评估</h3>
+                <div class="form-group">
+                    <label>标题质量评分:</label>
+                    <div class="rating" data-field="title">
+                        <span class="star" data-value="1">⭐</span>
+                        <span class="star" data-value="2">⭐</span>
+                        <span class="star" data-value="3">⭐</span>
+                        <span class="star" data-value="4">⭐</span>
+                        <span class="star" data-value="5">⭐</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>标题问题诊断:</label>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="title-length" name="title-issues">
+                            <label for="title-length">长度不合适</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="title-info" name="title-issues">
+                            <label for="title-info">信息不完整</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="title-read" name="title-issues">
+                            <label for="title-read">可读性差</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="title-accurate" name="title-issues">
+                            <label for="title-accurate">准确性不足</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="title-suggestions">改进建议:</label>
+                    <textarea id="title-suggestions" rows="2" placeholder="请提供具体的改进建议..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="title-improved">您的改进版本:</label>
+                    <input type="text" id="title-improved" placeholder="请提供您认为更好的标题版本...">
+                </div>
+            </div>
+
+            <div class="section">
+                <h3><span class="emoji">📝</span> 摘要质量评估</h3>
+                <div class="form-group">
+                    <label>摘要质量评分:</label>
+                    <div class="rating" data-field="summary">
+                        <span class="star" data-value="1">⭐</span>
+                        <span class="star" data-value="2">⭐</span>
+                        <span class="star" data-value="3">⭐</span>
+                        <span class="star" data-value="4">⭐</span>
+                        <span class="star" data-value="5">⭐</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>摘要问题诊断:</label>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="summary-length" name="summary-issues">
+                            <label for="summary-length">长度不合适</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="summary-accurate" name="summary-issues">
+                            <label for="summary-accurate">准确性不足</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="summary-complete" name="summary-issues">
+                            <label for="summary-complete">完整性不足</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="summary-clear" name="summary-issues">
+                            <label for="summary-clear">表达不够清晰</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="summary-suggestions">改进建议:</label>
+                    <textarea id="summary-suggestions" rows="3" placeholder="请提供具体的改进建议..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="summary-improved">您的改进版本:</label>
+                    <textarea id="summary-improved" rows="3" placeholder="请提供您认为更好的摘要版本..."></textarea>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3><span class="emoji">🔬</span> 专家标注</h3>
+                <div class="form-group">
+                    <label for="key-entities">关键实体（用逗号分隔）:</label>
+                    <input type="text" id="key-entities" placeholder="如: SpaceX, Starlink, 马斯克">
+                </div>
+                <div class="form-group">
+                    <label for="core-events">核心事件（用逗号分隔）:</label>
+                    <input type="text" id="core-events" placeholder="如: 卫星发射, 网络扩展, 用户增长">
+                </div>
+                <div class="form-group">
+                    <label for="importance">新闻重要程度:</label>
+                    <select id="importance">
+                        <option value="medium">中等</option>
+                        <option value="high">高</option>
+                        <option value="low">低</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="difficulty">处理难度:</label>
+                    <select id="difficulty">
+                        <option value="medium">中等</option>
+                        <option value="easy">简单</option>
+                        <option value="hard">困难</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3><span class="emoji">💬</span> 其他反馈</h3>
+                <div class="form-group">
+                    <textarea id="comments" rows="4" placeholder="请分享您的其他意见、建议或观察..."></textarea>
+                </div>
+            </div>
+
+            <button type="submit"><span class="emoji">📤</span> 提交反馈</button>
+        </form>
+    </div>
+
+    <script>
+        // 星级评分功能
+        document.querySelectorAll('.rating').forEach(rating => {
+            const stars = rating.querySelectorAll('.star');
+            stars.forEach((star, index) => {
+                star.addEventListener('click', () => {
+                    const value = parseInt(star.dataset.value);
+                    rating.dataset.score = value;
+                    
+                    stars.forEach((s, i) => {
+                        s.classList.toggle('active', i < value);
+                    });
+                });
+            });
+        });
+
+        // 表单提交处理
+        document.getElementById('feedback-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            // 收集所有反馈数据
+            const feedback = {
+                taskId: `task_${Date.now()}`,
+                timestamp: new Date().toISOString(),
+                reviewer: {
+                    name: document.getElementById('reviewer-name').value,
+                    expertise: document.getElementById('expertise').value,
+                    experience: parseInt(document.getElementById('experience').value)
+                },
+                scores: {
+                    overall: parseInt(document.querySelector('[data-field="overall"]').dataset.score) || 3,
+                    title: parseInt(document.querySelector('[data-field="title"]').dataset.score) || 3,
+                    summary: parseInt(document.querySelector('[data-field="summary"]').dataset.score) || 3
+                },
+                titleFeedback: {
+                    suggestions: document.getElementById('title-suggestions').value,
+                    improved: document.getElementById('title-improved').value,
+                    issues: Array.from(document.querySelectorAll('input[name="title-issues"]:checked')).map(cb => cb.id)
+                },
+                summaryFeedback: {
+                    suggestions: document.getElementById('summary-suggestions').value,
+                    improved: document.getElementById('summary-improved').value,
+                    issues: Array.from(document.querySelectorAll('input[name="summary-issues"]:checked')).map(cb => cb.id)
+                },
+                annotations: {
+                    keyEntities: document.getElementById('key-entities').value.split(',').map(s => s.trim()).filter(s => s),
+                    coreEvents: document.getElementById('core-events').value.split(',').map(s => s.trim()).filter(s => s),
+                    importance: document.getElementById('importance').value,
+                    difficulty: document.getElementById('difficulty').value
+                },
+                comments: document.getElementById('comments').value
+            };
+            
+            // 显示收集到的数据（实际应用中应发送到服务器）
+            console.log('收集到的反馈数据:', feedback);
+            alert('反馈提交成功！感谢您的宝贵意见，这将帮助我们持续改进AI模型质量。');
+            
+            // 在实际应用中，这里应该发送数据到服务器
+            // fetch('/api/feedback', { method: 'POST', body: JSON.stringify(feedback) })
+        });
+
+        // 初始化默认评分
+        document.querySelectorAll('.rating').forEach(rating => {
+            rating.querySelector('[data-value="3"]').click();
+        });
+    </script>
+</body>
+</html>

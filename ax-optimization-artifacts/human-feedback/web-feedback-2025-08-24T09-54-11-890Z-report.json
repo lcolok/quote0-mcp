@@ -1,0 +1,21 @@
+{
+  "total_feedback": 1,
+  "average_scores": {
+    "overall": 4,
+    "title": 4,
+    "summary": 4
+  },
+  "expertise_distribution": {
+    "journalism": 1
+  },
+  "quality_insights": {
+    "high_quality_rate": "100.0%",
+    "low_quality_rate": "0.0%",
+    "most_common_issues": [],
+    "improvement_suggestions": [
+      "可以更突出GPT-5的核心优势",
+      "可以更具体说明提升的程度"
+    ]
+  },
+  "recommendations": []
+}

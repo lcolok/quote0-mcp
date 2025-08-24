@@ -94,7 +94,7 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
   }
 
   getSources(): string[] {
-    return ['mock', 'rss', 'rss-llm', 'rss-enhanced', 'rss-ax', 'rss-ax-inspired', 'api'];
+    return ['mock', 'rss', 'rss-llm', 'rss-enhanced', 'rss-ax', 'rss-ax-inspired', 'ax-optimized', 'api'];
   }
 
   getDefaultSource(): string {
@@ -109,6 +109,7 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       'rss-enhanced': '✨ 增强工作流RSS - 多步骤AI处理，支持关键词高亮和严格约束',
       'rss-ax': '🔥 AX框架RSS - 基于AX框架的智能内容生成，支持XML结构化和迭代优化',
       'rss-ax-inspired': '⚡ AX风格RSS - 声明式工作流，智能迭代优化，支持自定义API',
+      'ax-optimized': '🧠 AX完整优化 - 自动学习训练，few-shot优化，中间产物生成，生产级部署',
       api: '🌐 新闻API - 从第三方新闻服务获取实时新闻'
     };
     return descriptions[source] || '未知数据源';
@@ -133,6 +134,9 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       
       case 'rss-ax-inspired':
         return await this.getAxInspiredRSSData(params);
+      
+      case 'ax-optimized':
+        return await this.getAxOptimizedData(params);
       
       case 'api':
         return await this.getAPIData(params);
@@ -407,6 +411,83 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
     } catch (error) {
       console.error('AX框架处理失败:', error);
       throw new Error(`AX处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  /**
+   * 使用AX完整优化处理器处理RSS数据
+   * 包含自动学习训练、few-shot优化、中间产物生成
+   */
+  private async getAxOptimizedData(params: NewsDataParams): Promise<NewsData> {
+    console.log('🧠 启动AX完整优化处理器...');
+    
+    try {
+      // 1. 动态导入简化版AxOptimizedNewsProcessor
+      const { AxOptimizedNewsProcessorSimplified } = await import('../services/ax-optimized-news-processor-simplified.js');
+      
+      // 2. 初始化AX优化处理器
+      const processor = new AxOptimizedNewsProcessorSimplified({
+        apiKey: process.env.LLM_API_KEY || '',
+        baseURL: process.env.LLM_BASE_URL || '',
+        model: process.env.LLM_MODEL || 'gpt-5-mini'
+      });
+      
+      // 3. 尝试加载预训练的优化产物
+      console.log('📚 尝试加载预训练模型...');
+      const loadSuccess = await processor.loadOptimizationArtifacts('production/latest.json');
+      
+      if (!loadSuccess) {
+        // 如果没有预训练模型，使用基础训练数据进行快速训练
+        console.log('⚡ 预训练模型未找到，使用基础数据进行训练...');
+        
+        // 导入基础训练数据
+        const { trainingData } = await import('../../../scripts/ax-training-data.js');
+        const sampleData = trainingData.slice(0, 3); // 使用前3个样本进行快速训练
+        
+        console.log(`🔄 开始快速训练 (${sampleData.length} 个样本)...`);
+        await processor.quickTrain(sampleData);
+        console.log('✅ 快速训练完成');
+      } else {
+        console.log('✅ 预训练模型加载成功');
+      }
+      
+      // 4. 获取RSS数据并处理
+      const parser = new Parser();
+      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      
+      if (!feed.items || feed.items.length === 0) {
+        throw new Error('RSS源无数据');
+      }
+
+      // 5. 选择目标新闻
+      const targetIndex = params.index !== undefined ? 
+        params.index % feed.items.length : 
+        Math.floor(Math.random() * Math.min(feed.items.length, 10));
+      
+      const item = feed.items[targetIndex];
+      console.log(`📰 选择第${targetIndex + 1}条新闻进行AX优化处理: ${item.title}`);
+
+      // 6. 准备新闻内容
+      const originalContent = `标题: ${item.title}\n内容: ${item.content || item.summary || '无内容'}`;
+      
+      // 7. 使用优化后的程序处理内容
+      const processedContent = await processor.processNewsWithOptimizedProgram(originalContent);
+
+      // 8. 转换为NewsData格式
+      return {
+        title: processedContent.title,
+        message: processedContent.body,
+        signature: `AI训练·${processedContent.footer}`,
+        source: 'Solidot AX Optimized',
+        publishTime: item.pubDate || new Date().toISOString(),
+        category: '科技',
+        link: item.link || undefined
+        // AX优化版支持完整功能，未来可扩展highlights
+      };
+
+    } catch (error) {
+      console.error('❌ AX优化处理失败:', error);
+      throw new Error(`AX优化处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
 

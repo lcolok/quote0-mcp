@@ -1,0 +1,32 @@
+{
+  "name": "ax-feedback-ui",
+  "version": "1.0.0",
+  "description": "Modern React-based feedback system for AX model training",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite dev --host 0.0.0.0 --port 3002"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.400.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^11.2.0",
+    "react-hot-toast": "^2.4.1",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8"
+  }
+}
