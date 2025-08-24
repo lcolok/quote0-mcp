@@ -22,6 +22,34 @@ export interface NewsData {
 export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
   const { title, message, source, highlights } = data;
   
+  // 智能计算标题行数和高度
+  const calculateTitleLayout = (title: string, maxWidth: number = 284) => {
+    const fontSize = 28; // 更新字体大小为28px
+    const charWidth = fontSize * 0.8; // 优化中文字符宽度（28px * 0.8 = 22.4px）
+    const maxCharsPerLine = Math.floor(maxWidth / charWidth);
+    
+    // 计算实际需要的行数
+    let estimatedLines = Math.ceil(title.length / maxCharsPerLine);
+    
+    // 限制最大行数为3行，确保布局不会过高
+    const maxLines = 3;
+    const actualLines = Math.min(estimatedLines, maxLines);
+    
+    // 根据行数计算合适的高度
+    const lineHeight = fontSize * 1.1;
+    const padding = 8; // 上下padding总和
+    const minHeight = 42; // 调整最小高度适配28px字体
+    const calculatedHeight = Math.max(minHeight, actualLines * lineHeight + padding);
+    
+    return {
+      lines: actualLines,
+      height: calculatedHeight,
+      lineHeight: lineHeight / fontSize // 相对行高
+    };
+  };
+  
+  const titleLayout = calculateTitleLayout(title);
+  
   // 渲染带高亮的文本
   const renderHighlightedText = (text: string, highlights: HighlightedWord[] = []) => {
     if (!highlights || highlights.length === 0) {
@@ -80,6 +108,9 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
   // 使用智能字体样式
   const contentFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染
 
+  // 计算内容区域高度（总高度 - 标题高度 - 底部高度）
+  const contentHeight = 152 - titleLayout.height - 16;
+  
   return (
     <div style={{
       width: '296px',
@@ -92,41 +123,47 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
-      {/* 顶部信息条 - 使用新闻标题，支持两行显示 */}
+      {/* 动态标题banner - 根据标题长度调整行数和高度 */}
       <div style={{
         display: 'flex',
         justifyContent: 'flex-start',
         alignItems: 'flex-start',
-        height: '58px',
+        height: `${titleLayout.height}px`,
         paddingLeft: '6px',
         paddingRight: '6px',
         paddingTop: '4px',
+        paddingBottom: '4px',
         backgroundColor: 'black',
-        color: 'white'
+        color: 'white',
+        transition: 'height 0.2s ease-in-out' // 平滑高度变化
       }}>
         <div style={{
-          fontSize: '24px',
+          fontSize: '28px',
           fontWeight: 'normal',
-          lineHeight: '1.1',
+          lineHeight: titleLayout.lineHeight,
           wordWrap: 'break-word',
+          wordBreak: 'break-all', // 强制在任何字符处断行
           overflow: 'hidden',
           display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical'
+          WebkitLineClamp: titleLayout.lines,
+          WebkitBoxOrient: 'vertical',
+          width: '100%',
+          whiteSpace: 'normal' // 确保允许换行
         }}>
           {title}
         </div>
       </div>
 
-      {/* 主内容区域 - 152px - 58px顶部 - 16px底部 = 78px */}
+      {/* 自适应主内容区域 - 根据标题高度动态调整 */}
       <div style={{
-        height: '78px',
+        height: `${contentHeight}px`,
         display: 'flex',
         flexDirection: 'column',
         paddingLeft: '4px',
         paddingRight: '4px',
         paddingTop: '2px',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        transition: 'height 0.2s ease-in-out' // 平滑高度变化
       }}>
         {/* 新闻内容 */}
         <div style={{
