@@ -13,6 +13,11 @@ import {
 } from '../core/widget-plugin.js';
 import { NewsWidget, NewsData } from '../components/NewsWidget.js';
 import Parser from 'rss-parser';
+import { CachedLLMService, LLMConfig, ContentProcessingOptions } from '../services/llm-content-processor.js';
+import { LLMWorkflowEngine, EnhancedContent } from '../services/llm-workflow-engine.js';
+import { AxNewsProcessor } from '../services/ax-news-processor.js';
+import { AxInspiredNewsProcessor } from '../services/ax-inspired-processor.js';
+import { EnvLoader } from '../../image-sender/adapters/environments/env-loader.js';
 
 /**
  * 新闻数据参数接口
@@ -66,8 +71,30 @@ const mockNewsData: Record<string, NewsData> = {
  * 新闻数据提供者实现
  */
 class NewsDataProvider implements WidgetDataProvider<NewsData> {
+  private llmService: CachedLLMService;
+  private workflowEngine: LLMWorkflowEngine;
+
+  constructor() {
+    // 确保环境变量已加载
+    EnvLoader.load();
+    
+    // 从环境变量读取LLM配置
+    const llmConfig: LLMConfig = {
+      provider: (process.env.LLM_PROVIDER as any) || 'mock',
+      apiKey: process.env.LLM_API_KEY,
+      baseURL: process.env.LLM_BASE_URL,
+      model: process.env.LLM_MODEL || 'gpt-4o',
+      maxTokens: parseInt(process.env.LLM_MAX_TOKENS || '1000'),
+      temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.7')
+    };
+    
+    console.log(`🔧 LLM配置: ${llmConfig.provider}/${llmConfig.model} @ ${llmConfig.baseURL}`);
+    this.llmService = new CachedLLMService(llmConfig);
+    this.workflowEngine = new LLMWorkflowEngine();
+  }
+
   getSources(): string[] {
-    return ['mock', 'rss', 'api'];
+    return ['mock', 'rss', 'rss-llm', 'rss-enhanced', 'rss-ax', 'rss-ax-inspired', 'api'];
   }
 
   getDefaultSource(): string {
@@ -78,6 +105,10 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
     const descriptions: Record<string, string> = {
       mock: '📝 模拟数据 - 用于测试和演示的示例新闻',
       rss: '📡 RSS源 - 从RSS订阅获取新闻内容',
+      'rss-llm': '🤖 AI优化RSS - 使用LLM智能处理和优化RSS新闻内容',
+      'rss-enhanced': '✨ 增强工作流RSS - 多步骤AI处理，支持关键词高亮和严格约束',
+      'rss-ax': '🔥 AX框架RSS - 基于AX框架的智能内容生成，支持XML结构化和迭代优化',
+      'rss-ax-inspired': '⚡ AX风格RSS - 声明式工作流，智能迭代优化，支持自定义API',
       api: '🌐 新闻API - 从第三方新闻服务获取实时新闻'
     };
     return descriptions[source] || '未知数据源';
@@ -90,6 +121,18 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       
       case 'rss':
         return await this.getRSSData(params);
+      
+      case 'rss-llm':
+        return await this.getLLMProcessedRSSData(params);
+      
+      case 'rss-enhanced':
+        return await this.getEnhancedRSSData(params);
+      
+      case 'rss-ax':
+        return await this.getAxProcessedRSSData(params);
+      
+      case 'rss-ax-inspired':
+        return await this.getAxInspiredRSSData(params);
       
       case 'api':
         return await this.getAPIData(params);
@@ -173,6 +216,252 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
     } catch (error) {
       console.error('RSS获取失败:', error);
       throw new Error(`RSS数据获取失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  private async getLLMProcessedRSSData(params: NewsDataParams): Promise<NewsData> {
+    const parser = new Parser({
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NewsWidget/1.0)'
+      }
+    });
+
+    try {
+      // 获取RSS源数据
+      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      
+      if (!feed.items || feed.items.length === 0) {
+        throw new Error('RSS源没有找到新闻条目');
+      }
+
+      // 选择新闻条目（与原RSS方法相同的逻辑）
+      let index = params.index;
+      if (index === undefined) {
+        const availableItems = Math.min(feed.items.length, 10);
+        index = Math.floor(Math.random() * availableItems);
+      } else {
+        index = Math.max(0, Math.min(index, feed.items.length - 1));
+      }
+      
+      const item = feed.items[index];
+      console.log(`📰 选择第${index + 1}条新闻进行LLM处理: ${item.title}`);
+
+      // 获取原始内容
+      const originalTitle = item.title || '无标题';
+      const originalContent = item.contentSnippet || item.content || item.description || '';
+
+      // 通过LLM处理内容
+      console.log(`🤖 开始LLM内容处理...`);
+      const processingOptions: ContentProcessingOptions = {
+        maxLength: 120,           // 适合水墨屏的长度
+        style: 'concise',         // 简洁风格
+        focus: 'summary',         // 重点摘要
+        targetDevice: 'eink'      // 水墨屏设备
+      };
+
+      const processedContent = await this.llmService.processContent(
+        originalTitle,
+        originalContent,
+        processingOptions
+      );
+
+      console.log(`✅ LLM处理完成: ${processedContent.title}`);
+
+      return {
+        title: processedContent.title,
+        message: processedContent.summary,
+        signature: `AI优化 · ${processedContent.model}`,
+        source: 'Solidot AI',
+        publishTime: item.pubDate || new Date().toISOString(),
+        category: '科技',
+        link: item.link || undefined
+      };
+
+    } catch (error) {
+      console.error('LLM处理RSS失败:', error);
+      throw new Error(`LLM处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  private async getEnhancedRSSData(params: NewsDataParams): Promise<NewsData> {
+    const parser = new Parser({
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NewsWidget/1.0)'
+      }
+    });
+
+    try {
+      console.log('🚀 启动增强工作流处理...');
+      
+      // 获取RSS源数据
+      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      
+      if (!feed.items || feed.items.length === 0) {
+        throw new Error('RSS源没有找到新闻条目');
+      }
+
+      // 选择新闻条目（与其他RSS方法相同的逻辑）
+      let index = params.index;
+      if (index === undefined) {
+        const availableItems = Math.min(feed.items.length, 10);
+        index = Math.floor(Math.random() * availableItems);
+      } else {
+        index = Math.max(0, Math.min(index, feed.items.length - 1));
+      }
+      
+      const item = feed.items[index];
+      console.log(`📰 选择第${index + 1}条新闻进行增强工作流处理: ${item.title}`);
+
+      // 获取原始内容
+      const originalTitle = item.title || '无标题';
+      const originalContent = item.contentSnippet || item.content || item.description || '';
+
+      // 使用工作流引擎处理内容
+      const processor = this.llmService.processor;
+      const enhancedContent: EnhancedContent = await this.workflowEngine.executeWorkflow(
+        processor,
+        originalTitle,
+        originalContent,
+        {
+          titleMaxLength: 20,    // 两行显示，支持更完整的标题
+          contentMaxLength: 140, // 严格控制内容长度
+          enableHighlights: true,
+          highlightMaxCount: 3,
+          enableValidation: true,
+          maxRetries: 2,
+          outputFormat: 'enhanced'
+        }
+      );
+
+      console.log(`✅ 增强工作流完成: "${enhancedContent.title}" (质量分: ${enhancedContent.qualityScore})`);
+      console.log(`📊 摘要内容: "${enhancedContent.summary}"`);
+      console.log(`🏷️ 高亮词汇: ${JSON.stringify(enhancedContent.highlights)}`);
+
+      return {
+        title: enhancedContent.title,
+        message: enhancedContent.summary,
+        signature: `增强AI · Q${enhancedContent.qualityScore}`,
+        source: 'Solidot Enhanced',
+        publishTime: item.pubDate || new Date().toISOString(),
+        category: '科技',
+        link: item.link || undefined,
+        highlights: enhancedContent.highlights
+      };
+
+    } catch (error) {
+      console.error('增强工作流处理失败:', error);
+      throw new Error(`增强工作流失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  /**
+   * 使用AX框架处理RSS数据
+   * 提供XML结构化输出和迭代优化
+   */
+  private async getAxProcessedRSSData(params: NewsDataParams): Promise<NewsData> {
+    console.log('🚀 启动AX框架处理RSS数据...');
+    
+    try {
+      // 1. 获取RSS数据
+      const parser = new Parser();
+      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      
+      if (!feed.items || feed.items.length === 0) {
+        throw new Error('RSS源无数据');
+      }
+
+      // 2. 随机选择一条新闻（或根据params.index选择）
+      const targetIndex = params.index !== undefined ? 
+        params.index % feed.items.length : 
+        Math.floor(Math.random() * Math.min(feed.items.length, 10));
+      
+      const item = feed.items[targetIndex];
+      console.log(`📰 选择第${targetIndex + 1}条新闻进行AX处理: ${item.title}`);
+
+      // 3. 初始化AX处理器
+      const axProcessor = new AxNewsProcessor({
+        apiKey: process.env.LLM_API_KEY || '',
+        baseURL: process.env.LLM_BASE_URL || '',
+        strongModel: process.env.LLM_MODEL || 'gpt-5-mini',
+        fastModel: process.env.LLM_FAST_MODEL || 'gpt-4o'
+      });
+
+      // 4. 准备原始新闻内容
+      const originalContent = `标题: ${item.title}\n内容: ${item.content || item.summary || '无内容'}`;
+      
+      // 5. 使用AX框架处理内容
+      const processedContent = await axProcessor.processNews(originalContent);
+
+      // 6. 转换为NewsData格式
+      return {
+        title: processedContent.title,
+        message: processedContent.body,
+        signature: `AX智能·${processedContent.footer}`,
+        source: 'Solidot AX Enhanced',
+        publishTime: item.pubDate || new Date().toISOString(),
+        category: '科技',
+        link: item.link || undefined
+        // 注意：AX版本暂时不支持highlights，未来可以扩展
+      };
+
+    } catch (error) {
+      console.error('AX框架处理失败:', error);
+      throw new Error(`AX处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  /**
+   * 使用AX风格处理器处理RSS数据  
+   * 声明式工作流，支持自定义API
+   */
+  private async getAxInspiredRSSData(params: NewsDataParams): Promise<NewsData> {
+    console.log('⚡ 启动AX风格处理器处理RSS数据...');
+    
+    try {
+      // 1. 获取RSS数据
+      const parser = new Parser();
+      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      
+      if (!feed.items || feed.items.length === 0) {
+        throw new Error('RSS源无数据');
+      }
+
+      // 2. 随机选择一条新闻
+      const targetIndex = params.index !== undefined ? 
+        params.index % feed.items.length : 
+        Math.floor(Math.random() * Math.min(feed.items.length, 10));
+      
+      const item = feed.items[targetIndex];
+      console.log(`📰 选择第${targetIndex + 1}条新闻进行AX风格处理: ${item.title}`);
+
+      // 3. 初始化AX风格处理器
+      const axProcessor = new AxInspiredNewsProcessor({
+        llmService: this.llmService,
+        strongModel: process.env.LLM_MODEL || 'gpt-5-mini',
+        fastModel: process.env.LLM_FAST_MODEL || 'gpt-4o'
+      });
+
+      // 4. 准备原始新闻内容
+      const originalContent = `标题: ${item.title}\n内容: ${item.content || item.summary || '无内容'}`;
+      
+      // 5. 使用AX风格处理器处理内容
+      const processedContent = await axProcessor.processNews(originalContent);
+
+      // 6. 转换为NewsData格式
+      return {
+        title: processedContent.title,
+        message: processedContent.body,
+        signature: `AX风格·${processedContent.footer}`,
+        source: 'Solidot AX Inspired',
+        publishTime: item.pubDate || new Date().toISOString(),
+        category: '科技',
+        link: item.link || undefined
+        // 注意：暂时不支持highlights，但可以在后续版本中扩展
+      };
+
+    } catch (error) {
+      console.error('AX风格处理器失败:', error);
+      throw new Error(`AX风格处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
 

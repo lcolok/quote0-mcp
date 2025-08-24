@@ -6,6 +6,7 @@
 import React from 'react';
 import { WidgetProps } from '../core/widget-plugin.js';
 import { smartFont } from '../utils/smart-font-utils.js';
+import { HighlightedWord } from '../services/llm-workflow-engine.js';
 
 export interface NewsData {
   title: string;
@@ -15,10 +16,66 @@ export interface NewsData {
   publishTime?: string;
   category?: string;
   link?: string;
+  highlights?: HighlightedWord[];  // 新增高亮词汇支持
 }
 
 export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
-  const { title, message, source } = data;
+  const { title, message, source, highlights } = data;
+  
+  // 渲染带高亮的文本
+  const renderHighlightedText = (text: string, highlights: HighlightedWord[] = []) => {
+    if (!highlights || highlights.length === 0) {
+      return <span>{text}</span>;
+    }
+
+    const elements: React.ReactNode[] = [];
+    let lastIndex = 0;
+
+    // 按位置排序高亮词汇
+    const sortedHighlights = [...highlights].sort((a, b) => a.startIndex - b.startIndex);
+
+    for (const highlight of sortedHighlights) {
+      // 添加高亮前的普通文本
+      if (highlight.startIndex > lastIndex) {
+        elements.push(
+          <span key={`text-${lastIndex}`}>
+            {text.substring(lastIndex, highlight.startIndex)}
+          </span>
+        );
+      }
+
+      // 添加高亮文本（反色显示）
+      elements.push(
+        <span
+          key={`highlight-${highlight.startIndex}`}
+          style={{
+            backgroundColor: '#000000',
+            color: '#FFFFFF',
+            padding: '2px 3px',
+            margin: '0 1px',
+            borderRadius: '3px',
+            fontWeight: 'bold',
+            border: '1px solid #000000'
+          }}
+        >
+          {highlight.word}
+        </span>
+      );
+
+      lastIndex = highlight.endIndex;
+    }
+
+    // 添加最后剩余的普通文本
+    if (lastIndex < text.length) {
+      elements.push(
+        <span key={`text-${lastIndex}`}>
+          {text.substring(lastIndex)}
+        </span>
+      );
+    }
+
+    return <>{elements}</>;
+  };
   
   // 使用智能字体样式
   const contentFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染
@@ -35,32 +92,35 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
-      {/* 顶部信息条 - 使用新闻标题 */}
+      {/* 顶部信息条 - 使用新闻标题，支持两行显示 */}
       <div style={{
         display: 'flex',
         justifyContent: 'flex-start',
-        alignItems: 'center',
-        height: '32px',
+        alignItems: 'flex-start',
+        height: '58px',
         paddingLeft: '6px',
         paddingRight: '6px',
+        paddingTop: '4px',
         backgroundColor: 'black',
         color: 'white'
       }}>
         <div style={{
-          fontSize: '28px',
+          fontSize: '24px',
           fontWeight: 'normal',
-          lineHeight: '1',
-          whiteSpace: 'nowrap',
+          lineHeight: '1.1',
+          wordWrap: 'break-word',
           overflow: 'hidden',
-          textOverflow: 'ellipsis'
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical'
         }}>
           {title}
         </div>
       </div>
 
-      {/* 主内容区域 - 152px - 32px顶部 - 16px底部 = 104px */}
+      {/* 主内容区域 - 152px - 58px顶部 - 16px底部 = 78px */}
       <div style={{
-        height: '104px',
+        height: '78px',
         display: 'flex',
         flexDirection: 'column',
         paddingLeft: '4px',
@@ -75,7 +135,7 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
           color: '#333333',
           overflow: 'hidden'
         }}>
-          {message}
+          {renderHighlightedText(message, highlights)}
         </div>
       </div>
 
