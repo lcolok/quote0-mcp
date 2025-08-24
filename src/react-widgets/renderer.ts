@@ -98,30 +98,44 @@ export class WidgetRenderer {
     }
   }
 
-  private detectFontSize(markup: string): number {
-    // 检测markup中的fontSize样式，支持多种格式
+  private detectAllFontSizes(markup: string): number[] {
+    // 检测markup中的所有fontSize样式，支持多种格式
     const patterns = [
-      /fontSize:\s*['"](\d+)px['"]/,        // fontSize: "16px"
-      /fontSize:\s*(\d+)px/,                // fontSize: 16px (without quotes)
-      /fontSize:['"](\d+)px['"]/,           // fontSize:"16px"
-      /font-size:\s*(\d+)px/                // font-size: 16px
+      /fontSize:\s*['"](\d+)px['"]/g,        // fontSize: "16px"
+      /fontSize:\s*(\d+)px/g,                // fontSize: 16px (without quotes)
+      /fontSize:['"](\d+)px['"]/g,           // fontSize:"16px"
+      /font-size:\s*(\d+)px/g                // font-size: 16px
     ];
 
+    const allSizes = new Set<number>();
+
     for (const pattern of patterns) {
-      const match = markup.match(pattern);
-      if (match) {
+      const matches = markup.matchAll(pattern);
+      for (const match of matches) {
         const size = parseInt(match[1]);
-        console.log(`🔍 检测到字体大小: ${size}px`);
-        return size;
+        allSizes.add(size);
       }
     }
     
+    const sizeArray = Array.from(allSizes).sort((a, b) => a - b);
+    
+    if (sizeArray.length > 0) {
+      console.log(`🔍 检测到 ${sizeArray.length} 种字体大小: ${sizeArray.join('px, ')}px`);
+      return sizeArray;
+    }
+    
     console.log('⚠️ 未检测到字体大小，使用默认12px');
-    return 12;
+    return [12];
+  }
+
+  private detectFontSize(markup: string): number {
+    const allSizes = this.detectAllFontSizes(markup);
+    return allSizes[0]; // 保持向后兼容性，返回最小的字体大小
   }
 
   private createHTMLPage(markup: string, backgroundColor: string): string {
-    const detectedFontSize = this.detectFontSize(markup);
+    // 检测所有字体大小，为多字体大小组件生成最优CSS
+    const allFontSizes = this.detectAllFontSizes(markup);
     
     // 使用增强字体加载器进行智能分析和渲染
     const fontAnalysis = EnhancedFontLoader.analyzeComponentFontUsage(markup);
@@ -131,6 +145,9 @@ export class WidgetRenderer {
       console.log(`💡 优化建议:`);
       fontAnalysis.optimizationSuggestions.forEach(suggestion => console.log(`   ${suggestion}`));
     }
+    
+    // 为所有检测到的字体大小生成智能CSS
+    const smartFontCSS = EnhancedFontLoader.getMultiSizeFontCSS(allFontSizes);
     
     return `
 <!DOCTYPE html>
@@ -146,7 +163,7 @@ export class WidgetRenderer {
             box-sizing: border-box;
         }
         
-        ${EnhancedFontLoader.getSmartFontCSS(detectedFontSize)}
+        ${smartFontCSS}
         
         body {
             width: 296px;

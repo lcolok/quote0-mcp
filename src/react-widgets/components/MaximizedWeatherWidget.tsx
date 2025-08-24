@@ -102,9 +102,9 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
     return calculateFeelsLike(data.temperature, data.humidity, data.windPower);
   };
 
-  // 专业天气图标 - 使用Weather Icons库
+  // 专业天气图标 - 使用Weather Icons库，调整为更大尺寸充分利用空间
   const getWeatherIcon = (weather: string) => {
-    const iconProps = { size: 120, color: '#000' }; // Weather Icons需要更大的size值
+    const iconProps = { size: 90, color: '#000' }; // 增大图标以充分利用90x90容器
     
     const weatherLower = weather.toLowerCase();
     
@@ -218,22 +218,23 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
     fontSize: '24px' // 恢复合适的湿度数值
   };
 
-  // 主内容区域 - 在固定高度内分配空间
+  // 主内容区域 - 居中布局，两边等距
   const mainContentStyle: React.CSSProperties = {
     height: '104px', // 152px总高度 - 32px顶部 - 16px底部 = 104px主内容
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: '8px',
-    paddingRight: '8px'
+    justifyContent: 'center', // 改为居中
+    gap: '20px', // 设置固定间距，让两个组件居中且等距
+    padding: '0 10px' // 两边预留相等边距
   };
 
-  // 左侧温度区域 - 只显示主温度
+  // 左侧温度区域 - 居中对齐
   const tempSectionStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'baseline', // 基线对齐
-    justifyContent: 'flex-start',
-    gap: '4px'
+    justifyContent: 'center', // 温度数字居中
+    gap: '4px',
+    flex: '0 0 auto' // 不允许伸缩，保持固定尺寸
   };
 
   const tempStyle: React.CSSProperties = {
@@ -241,7 +242,7 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
     fontWeight: 'normal',
     lineHeight: '0.8',
     letterSpacing: '-4px',
-    textAlign: 'left'
+    textAlign: 'center' // 改为居中对齐
   };
 
   const degreeStyle: React.CSSProperties = {
@@ -251,13 +252,25 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
     marginTop: '8px' // 微调垂直位置
   };
 
-  // 右侧天气图标区域 - 适应竖排文字
+  // 右侧天气图标区域 - 优化布局充分利用空间
   const weatherSectionStyle: React.CSSProperties = {
     display: 'flex',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '6px'
+    gap: '4px', // 减少间距以节省空间
+    flex: '0 0 auto' // 不允许收缩或扩张，保持固定尺寸
+  };
+
+  // 天气图标容器 - 调整为更合适的尺寸以充分利用空间
+  const weatherIconContainerStyle: React.CSSProperties = {
+    width: '90px',
+    height: '90px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0, // 防止容器被压缩
+    backgroundColor: 'transparent'
   };
 
   const weatherTextStyle: React.CSSProperties = {
@@ -313,7 +326,9 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
         </div>
         
         <div style={weatherSectionStyle}>
-          {getWeatherIcon(data.weather)}
+          <div style={weatherIconContainerStyle}>
+            {getWeatherIcon(data.weather)}
+          </div>
           <div style={weatherTextStyle}>{data.weather}</div>
         </div>
       </div>
