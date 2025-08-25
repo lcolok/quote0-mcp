@@ -22,33 +22,9 @@ export interface NewsData {
 export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
   const { title, message, source, highlights } = data;
   
-  // 智能计算标题行数和高度
-  const calculateTitleLayout = (title: string, maxWidth: number = 284) => {
-    const fontSize = 28; // 更新字体大小为28px
-    const charWidth = fontSize * 0.8; // 优化中文字符宽度（28px * 0.8 = 22.4px）
-    const maxCharsPerLine = Math.floor(maxWidth / charWidth);
-    
-    // 计算实际需要的行数
-    let estimatedLines = Math.ceil(title.length / maxCharsPerLine);
-    
-    // 限制最大行数为3行，确保布局不会过高
-    const maxLines = 3;
-    const actualLines = Math.min(estimatedLines, maxLines);
-    
-    // 根据行数计算合适的高度
-    const lineHeight = fontSize * 1.1;
-    const padding = 8; // 上下padding总和
-    const minHeight = 42; // 调整最小高度适配28px字体
-    const calculatedHeight = Math.max(minHeight, actualLines * lineHeight + padding);
-    
-    return {
-      lines: actualLines,
-      height: calculatedHeight,
-      lineHeight: lineHeight / fontSize // 相对行高
-    };
-  };
-  
-  const titleLayout = calculateTitleLayout(title);
+  // 使用智能字体样式
+  const titleFont = smartFont(24);   // 28px字体 - 使用智能字体系统
+  const contentFont = smartFont(12);  // 12px字体 - A级渲染
   
   // 渲染带高亮的文本
   const renderHighlightedText = (text: string, highlights: HighlightedWord[] = []) => {
@@ -105,12 +81,6 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
     return <>{elements}</>;
   };
   
-  // 使用智能字体样式
-  const contentFont = smartFont(12);  // 12px = 12px基础字体×1，A级渲染
-
-  // 计算内容区域高度（总高度 - 标题高度 - 底部高度）
-  const contentHeight = 152 - titleLayout.height - 16;
-  
   return (
     <div style={{
       width: '296px',
@@ -123,47 +93,41 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
-      {/* 动态标题banner - 根据标题长度调整行数和高度 */}
+      {/* 动态标题banner - 完全自适应内容高度 */}
       <div style={{
         display: 'flex',
-        justifyContent: 'flex-start',
         alignItems: 'flex-start',
-        height: `${titleLayout.height}px`,
+        // 移除固定高度限制，让内容自然撑开
         paddingLeft: '6px',
         paddingRight: '6px',
         paddingTop: '4px',
         paddingBottom: '4px',
         backgroundColor: 'black',
         color: 'white',
-        transition: 'height 0.2s ease-in-out' // 平滑高度变化
+        flexShrink: 0  // 防止被压缩
       }}>
         <div style={{
-          fontSize: '28px',
+          ...titleFont,  // 使用智能字体系统
           fontWeight: 'normal',
-          lineHeight: titleLayout.lineHeight,
+          lineHeight: 1.1,
           wordWrap: 'break-word',
-          wordBreak: 'break-all', // 强制在任何字符处断行
-          overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: titleLayout.lines,
-          WebkitBoxOrient: 'vertical',
+          wordBreak: 'normal', // 使用正常的换行规则（英文在单词边界换行，中文任意位置）
           width: '100%',
-          whiteSpace: 'normal' // 确保允许换行
+          whiteSpace: 'normal' // 允许自然换行
         }}>
           {title}
         </div>
       </div>
 
-      {/* 自适应主内容区域 - 根据标题高度动态调整 */}
+      {/* 主内容区域 - 使用flex自动填充剩余空间 */}
       <div style={{
-        height: `${contentHeight}px`,
+        flex: 1,
         display: 'flex',
         flexDirection: 'column',
         paddingLeft: '4px',
         paddingRight: '4px',
         paddingTop: '2px',
-        overflow: 'hidden',
-        transition: 'height 0.2s ease-in-out' // 平滑高度变化
+        overflow: 'hidden'
       }}>
         {/* 新闻内容 */}
         <div style={{
@@ -185,7 +149,7 @@ export const NewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
         paddingLeft: '4px',
         paddingRight: '4px',
         borderTop: '1px solid rgba(0,0,0,0.1)',
-        fontSize: '12px',
+        ...contentFont,  // 使用智能字体系统（同内容12px）
         color: '#333',
         fontWeight: 'normal',
         textAlign: 'center'

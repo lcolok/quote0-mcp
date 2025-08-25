@@ -100,11 +100,12 @@ export class WidgetRenderer {
 
   private detectAllFontSizes(markup: string): number[] {
     // 检测markup中的所有fontSize样式，支持多种格式
+    // React renderToStaticMarkup 生成的是 kebab-case (font-size)
     const patterns = [
-      /fontSize:\s*['"](\d+)px['"]/g,        // fontSize: "16px"
-      /fontSize:\s*(\d+)px/g,                // fontSize: 16px (without quotes)
-      /fontSize:['"](\d+)px['"]/g,           // fontSize:"16px"
-      /font-size:\s*(\d+)px/g                // font-size: 16px
+      /font-size:\s*(\d+)px/g,               // font-size: 16px (React内联样式主要格式)
+      /font-size:(\d+)px/g,                  // font-size:16px (无空格)
+      /fontSize:\s*['"](\d+)px['"]/g,        // fontSize: "16px" (可能的JSX属性)
+      /fontSize:\s*(\d+)px/g                 // fontSize: 16px (without quotes)
     ];
 
     const allSizes = new Set<number>();

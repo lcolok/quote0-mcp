@@ -118,8 +118,8 @@ export class EnhancedFontLoader extends FontLoader {
     recommendations: string[];
     optimizationSuggestions: string[];
   } {
-    // 提取所有字体大小
-    const fontSizePattern = /fontSize:\s*['"]?(\d+)px['"]?/g;
+    // 提取所有字体大小 - 支持camelCase和kebab-case
+    const fontSizePattern = /font-?[Ss]ize:\s*['"]?(\d+)px['"]?/g;
     const matches = [...markup.matchAll(fontSizePattern)];
     const detectedSizes = [...new Set(matches.map(m => parseInt(m[1])))].sort((a, b) => a - b);
     

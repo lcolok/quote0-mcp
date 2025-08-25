@@ -20,7 +20,8 @@ export class SmartFontUtils {
     const result = IntelligentFontRenderer.getOptimalRenderSolution({ targetSize: preferredSize });
     
     return {
-      fontFamily: EnhancedFontLoader.getFusionPixelFontFamily(),
+      // 使用特定大小的字体家族名，与@font-face定义匹配
+      fontFamily: `'FusionPixelFont-${result.actualSize}px', ${EnhancedFontLoader.getFusionPixelFontFamily()}`,
       fontSize: `${result.actualSize}px`, // 使用实际最优大小而不是期望大小
       lineHeight: `${result.actualSize + 2}px`,
       // 添加渲染优化CSS属性
