@@ -81,12 +81,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   
+  // 检查是否有--force参数
+  const hasForce = args.includes('--force');
+  const filteredArgs = args.filter(arg => arg !== '--force');
+  
   // 执行组件生成
   const context = {
     widgetType,
-    args: args.slice(1),
+    args: filteredArgs.slice(1),
     outputDir: './processed-images/widgets',
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    force: hasForce
   };
   
   const result = await engine.execute(context);

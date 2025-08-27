@@ -5,6 +5,7 @@
 
 import { getPostgresDatabase, CacheKey } from './postgres-database.js';
 import { getImageStorage, ImageCacheMetadata } from './image-storage.js';
+import { fontStorageService } from './font-storage.js';
 import { NewsData } from '../components/NewsWidget.js';
 import { createHash } from 'crypto';
 import { existsSync } from 'fs';
@@ -55,6 +56,9 @@ export class StagedCacheManager {
     try {
       // 初始化PostgreSQL
       await this.postgres.initialize();
+      
+      // 初始化字体存储服务
+      await fontStorageService.initialize();
       
       console.log('✅ 分阶段缓存系统初始化完成');
     } catch (error) {

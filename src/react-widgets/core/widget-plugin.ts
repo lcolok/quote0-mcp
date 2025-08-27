@@ -133,6 +133,7 @@ export interface WidgetExecutionContext {
   args: string[];
   outputDir: string;
   timestamp: number;
+  force?: boolean; // 强制刷新，跳过缓存
 }
 
 /**

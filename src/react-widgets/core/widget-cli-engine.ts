@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { WidgetPluginRegistry, WidgetExecutionContext, WidgetExecutionResult, WidgetConfig } from './widget-plugin.js';
-import { widgetRenderer } from '../renderer.js';
+import { minioWidgetRenderer } from './minio-widget-renderer.js';
 import { stagedCacheManager } from './staged-cache-manager.js';
 import { EnvLoader } from '../../image-sender/index.js';
 import { exec } from 'child_process';
@@ -90,6 +90,7 @@ export class WidgetCLIEngine {
       console.log(`📊 使用分阶段缓存获取${plugin.meta.name}数据...`);
 
       // 使用分阶段缓存处理完整流程
+      const forceRefresh = params.force || context.force || false;
       const cacheResult = await stagedCacheManager.processWithStagedCache(
         cacheKey,
         renderConfig,
@@ -108,7 +109,7 @@ export class WidgetCLIEngine {
           const outputPath = `${componentOutputDir}/${this.generateFileName(params)}_${context.timestamp}.png`;
           
           // 渲染为图片
-          await widgetRenderer.renderToFile(widgetComponent, outputPath);
+          await minioWidgetRenderer.renderToFile(widgetComponent, outputPath);
           
           if (!existsSync(outputPath)) {
             throw new Error('组件渲染失败，图片文件未生成');
@@ -119,7 +120,7 @@ export class WidgetCLIEngine {
           
           return outputPath;
         },
-        context.force || false
+        forceRefresh
       );
 
       const data = cacheResult.newsData.data;
@@ -188,7 +189,7 @@ export class WidgetCLIEngine {
     } finally {
       // 清理资源
       try {
-        await widgetRenderer.close();
+        await minioWidgetRenderer.close();
         await stagedCacheManager.close();
       } catch (error) {
         // 忽略清理错误
