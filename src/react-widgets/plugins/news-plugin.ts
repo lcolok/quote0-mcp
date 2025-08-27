@@ -18,6 +18,7 @@ import { LLMWorkflowEngine, EnhancedContent } from '../services/llm-workflow-eng
 import { AxNewsProcessor } from '../services/ax-news-processor.js';
 import { AxInspiredNewsProcessor } from '../services/ax-inspired-processor.js';
 import { EnvLoader } from '../../image-sender/adapters/environments/env-loader.js';
+import { stagedCacheManager } from '../core/staged-cache-manager.js';
 
 /**
  * 新闻数据参数接口
@@ -28,6 +29,7 @@ interface NewsDataParams extends WidgetDataParams {
   source?: string;
   count?: number;
   index?: number; // RSS新闻索引
+  force?: boolean; // 强制刷新，跳过缓存
 }
 
 /**
@@ -91,6 +93,7 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
     console.log(`🔧 LLM配置: ${llmConfig.provider}/${llmConfig.model} @ ${llmConfig.baseURL}`);
     this.llmService = new CachedLLMService(llmConfig);
     this.workflowEngine = new LLMWorkflowEngine();
+    
   }
 
   getSources(): string[] {
@@ -116,6 +119,7 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
   }
 
   async getData(source: string, params: NewsDataParams): Promise<NewsData> {
+    // 直接获取数据，缓存由CLI引擎的分阶段缓存管理器统一处理
     switch (source) {
       case 'mock':
         return this.getMockData(params);
@@ -164,30 +168,28 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
   }
 
   private async getRSSData(params: NewsDataParams): Promise<NewsData> {
-    const parser = new Parser({
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; NewsWidget/1.0)'
-      }
-    });
+    const rssUrl = 'https://www.solidot.org/index.rss';
 
     try {
-      // Solidot RSS 源
-      const feed = await parser.parseURL('https://www.solidot.org/index.rss');
+      // 使用分阶段缓存管理器获取RSS快照
+      const feed = await stagedCacheManager.getOrCacheRSSSnapshot(rssUrl, async () => {
+        console.log(`📡 获取RSS数据: ${rssUrl}`);
+        const parser = new Parser({
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; NewsWidget/1.0)'
+          }
+        });
+        return await parser.parseURL(rssUrl);
+      });
       
       if (!feed.items || feed.items.length === 0) {
         throw new Error('RSS源没有找到新闻条目');
       }
 
-      // 获取新闻条目 - 默认随机选择，或使用指定索引
-      let index = params.index;
-      if (index === undefined) {
-        // 随机选择一条新闻（从前10条中选择，避免太旧的新闻）
-        const availableItems = Math.min(feed.items.length, 10);
-        index = Math.floor(Math.random() * availableItems);
-      } else {
-        // 确保索引在有效范围内
-        index = Math.max(0, Math.min(index, feed.items.length - 1));
-      }
+      // 获取新闻条目 - 支持指定索引，默认选择第一条
+      let index = params.index !== undefined ? params.index : 0;
+      // 确保索引在有效范围内
+      index = Math.max(0, Math.min(index, feed.items.length - 1));
       
       const item = feed.items[index];
       console.log(`📰 选择第${index + 1}条新闻: ${item.title}`);
@@ -238,14 +240,10 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         throw new Error('RSS源没有找到新闻条目');
       }
 
-      // 选择新闻条目（与原RSS方法相同的逻辑）
-      let index = params.index;
-      if (index === undefined) {
-        const availableItems = Math.min(feed.items.length, 10);
-        index = Math.floor(Math.random() * availableItems);
-      } else {
-        index = Math.max(0, Math.min(index, feed.items.length - 1));
-      }
+      // 选择新闻条目 - 支持指定索引，默认选择第一条
+      let index = params.index !== undefined ? params.index : 0;
+      // 确保索引在有效范围内
+      index = Math.max(0, Math.min(index, feed.items.length - 1));
       
       const item = feed.items[index];
       console.log(`📰 选择第${index + 1}条新闻进行LLM处理: ${item.title}`);
@@ -304,14 +302,10 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         throw new Error('RSS源没有找到新闻条目');
       }
 
-      // 选择新闻条目（与其他RSS方法相同的逻辑）
-      let index = params.index;
-      if (index === undefined) {
-        const availableItems = Math.min(feed.items.length, 10);
-        index = Math.floor(Math.random() * availableItems);
-      } else {
-        index = Math.max(0, Math.min(index, feed.items.length - 1));
-      }
+      // 选择新闻条目 - 支持指定索引，默认选择第一条
+      let index = params.index !== undefined ? params.index : 0;
+      // 确保索引在有效范围内
+      index = Math.max(0, Math.min(index, feed.items.length - 1));
       
       const item = feed.items[index];
       console.log(`📰 选择第${index + 1}条新闻进行增强工作流处理: ${item.title}`);
@@ -374,10 +368,9 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         throw new Error('RSS源无数据');
       }
 
-      // 2. 随机选择一条新闻（或根据params.index选择）
+      // 2. 选择指定的新闻（或默认第一条）
       const targetIndex = params.index !== undefined ? 
-        params.index % feed.items.length : 
-        Math.floor(Math.random() * Math.min(feed.items.length, 10));
+        Math.max(0, Math.min(params.index, feed.items.length - 1)) : 0;
       
       const item = feed.items[targetIndex];
       console.log(`📰 选择第${targetIndex + 1}条新闻进行AX处理: ${item.title}`);
@@ -461,8 +454,7 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
 
       // 5. 选择目标新闻
       const targetIndex = params.index !== undefined ? 
-        params.index % feed.items.length : 
-        Math.floor(Math.random() * Math.min(feed.items.length, 10));
+        Math.max(0, Math.min(params.index, feed.items.length - 1)) : 0;
       
       const item = feed.items[targetIndex];
       console.log(`📰 选择第${targetIndex + 1}条新闻进行AX优化处理: ${item.title}`);
@@ -507,10 +499,9 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         throw new Error('RSS源无数据');
       }
 
-      // 2. 随机选择一条新闻
+      // 2. 选择指定的新闻（或默认第一条）
       const targetIndex = params.index !== undefined ? 
-        params.index % feed.items.length : 
-        Math.floor(Math.random() * Math.min(feed.items.length, 10));
+        Math.max(0, Math.min(params.index, feed.items.length - 1)) : 0;
       
       const item = feed.items[targetIndex];
       console.log(`📰 选择第${targetIndex + 1}条新闻进行AX风格处理: ${item.title}`);
@@ -603,9 +594,36 @@ export class NewsPlugin implements WidgetPlugin<NewsData, NewsConfig> {
   }
 
   parseCliArgs(args: string[]): { params: NewsDataParams; config: NewsConfig } {
-    const category = args[0] || 'technology';
-    const border = args[1] || '0';
-    const source = args[2] || this.dataProvider.getDefaultSource();
+    // 处理特殊参数
+    const force = args.includes('--force');
+    const filteredArgs = args.filter(arg => arg !== '--force');
+
+    const category = filteredArgs[0] || 'technology';
+    const indexArg = filteredArgs[1];
+    let source = filteredArgs[2] || this.dataProvider.getDefaultSource();
+    
+    // 解析索引参数
+    let index: number | undefined;
+    let border: '0' | '1' = '0';
+    
+    if (indexArg !== undefined) {
+      const parsed = parseInt(indexArg, 10);
+      if (!isNaN(parsed) && parsed >= 0) {
+        index = parsed;
+        // 如果第二个参数是数字索引，边框参数移到第三个位置
+        // 实际上我们需要重新设计参数格式
+        // 新格式: category index source [--force]
+        // 或: category source [--force] （不指定索引）
+      } else {
+        // 如果第二个参数不是数字，则认为是source参数
+        border = indexArg as '0' | '1';
+        if (!['0', '1'].includes(border)) {
+          // 不是边框参数，当作source处理
+          source = indexArg;
+          border = '0';
+        }
+      }
+    }
 
     // 验证分类
     const validCategories = ['technology', 'finance', 'sports'];
@@ -613,25 +631,35 @@ export class NewsPlugin implements WidgetPlugin<NewsData, NewsConfig> {
       throw new Error(`不支持的新闻分类: ${category}。支持的分类: ${validCategories.join(', ')}`);
     }
 
+    console.log(`📋 解析参数: category=${category}, index=${index}, source=${source}, force=${force}, border=${border}`);
+
     return {
-      params: { category, dataSource: source },
-      config: { border: border as '0' | '1' }
+      params: { 
+        category, 
+        dataSource: source, 
+        index: index,
+        force: force 
+      },
+      config: { border }
     };
   }
 
   getUsageHelp(): string {
     return `📰 新闻组件使用说明
 
-🚀 用法: npm run widget:news [分类] [边框] [数据源]
+🚀 用法: npm run widget:news [分类] [索引] [数据源] [选项]
 
 📝 参数说明:
   分类: technology, finance, sports (默认: technology)
-  边框: 0=白色, 1=黑色 (默认: 0)  
+  索引: 新闻条目索引，从0开始 (默认: 0，选择第一条)
   数据源: ${this.dataProvider.getSources().join(', ')} (默认: ${this.dataProvider.getDefaultSource()})
+  
+🔧 选项:
+  --force  强制刷新，跳过缓存
 
 🏆 数据源详情:
 ${this.dataProvider.getSources().map(source => 
-  `  • ${source.padEnd(8)} - ${this.dataProvider.getSourceDescription(source)}`
+  `  • ${source.padEnd(12)} - ${this.dataProvider.getSourceDescription(source)}`
 ).join('\n')}
 
 💡 示例命令:
@@ -639,6 +667,9 @@ ${this.getExampleCommands().map(cmd => `  ${cmd}`).join('\n')}
 
 🔬 特性:
   ✅ 支持多种新闻分类
+  ✅ 按顺序处理新闻条目，不再随机
+  ✅ 智能缓存系统，相同请求立即返回
+  ✅ 支持强制刷新绕过缓存
   ✅ 紧凑的文字布局设计
   ✅ 水墨屏显示优化
   ✅ 可扩展的数据源系统`;
@@ -647,10 +678,11 @@ ${this.getExampleCommands().map(cmd => `  ${cmd}`).join('\n')}
   getExampleCommands(): string[] {
     return [
       'npm run widget:news',
-      'npm run widget:news technology',
-      'npm run widget:news finance 0 mock',
-      'npm run widget:news sports 1',
-      'npm run widget:news technology 0 mock'
+      'npm run widget:news technology 0',
+      'npm run widget:news technology 1 ax-optimized',
+      'npm run widget:news finance 0 rss',
+      'npm run widget:news technology 5 ax-optimized --force',
+      'npm run widget:news sports 2 mock'
     ];
   }
 }

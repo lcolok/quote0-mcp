@@ -6,6 +6,7 @@
 import React from 'react';
 import { WidgetPluginRegistry, WidgetExecutionContext, WidgetExecutionResult, WidgetConfig } from './widget-plugin.js';
 import { widgetRenderer } from '../renderer.js';
+import { stagedCacheManager } from './staged-cache-manager.js';
 import { EnvLoader } from '../../image-sender/index.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -68,46 +69,100 @@ export class WidgetCLIEngine {
       const componentOutputDir = `${context.outputDir}/${plugin.meta.type}`;
       await execAsync(`mkdir -p "${componentOutputDir}"`);
 
-      // 获取数据
-      const dataSource = this.extractDataSource(params, plugin);
-      console.log(`📊 正在获取${plugin.meta.name}数据 (${dataSource})...`);
-      
-      const data = await plugin.dataProvider.getData(dataSource, params);
-      console.log(`✅ ${plugin.meta.name}数据获取成功`);
+      // 初始化分阶段缓存系统
+      await stagedCacheManager.initialize();
 
-      // 渲染组件
-      console.log(`🔨 渲染 React ${plugin.meta.name}组件...`);
-      const widgetComponent = React.createElement(plugin.component, { data, config });
-      
-      // 生成输出路径（按组件类型分类存储）
-      const outputPath = `${componentOutputDir}/${this.generateFileName(params)}_${context.timestamp}.png`;
-      
-      // 渲染为图片
-      await widgetRenderer.renderToFile(widgetComponent, outputPath);
-      
-      if (!existsSync(outputPath)) {
-        throw new Error('组件渲染失败，图片文件未生成');
+      // 构建缓存键
+      const dataSource = this.extractDataSource(params, plugin);
+      const cacheKey = {
+        source: dataSource,
+        category: params.category || plugin.meta.type,
+        index: params.index || context.index || 0
+      };
+
+      // 准备渲染配置
+      const renderConfig = {
+        ...config,
+        widgetType: plugin.meta.type,
+        timestamp: context.timestamp
+      };
+
+      console.log(`📊 使用分阶段缓存获取${plugin.meta.name}数据...`);
+
+      // 使用分阶段缓存处理完整流程
+      const cacheResult = await stagedCacheManager.processWithStagedCache(
+        cacheKey,
+        renderConfig,
+        // 数据获取器
+        async () => {
+          const data = await plugin.dataProvider.getData(dataSource, params);
+          console.log(`✅ ${plugin.meta.name}数据获取成功 (${dataSource})`);
+          return data;
+        },
+        // 图片渲染器
+        async (data, config) => {
+          console.log(`🔨 渲染 React ${plugin.meta.name}组件...`);
+          const widgetComponent = React.createElement(plugin.component, { data, config });
+          
+          // 生成输出路径（按组件类型分类存储）
+          const outputPath = `${componentOutputDir}/${this.generateFileName(params)}_${context.timestamp}.png`;
+          
+          // 渲染为图片
+          await widgetRenderer.renderToFile(widgetComponent, outputPath);
+          
+          if (!existsSync(outputPath)) {
+            throw new Error('组件渲染失败，图片文件未生成');
+          }
+          
+          console.log('✅ React 组件渲染完成!');
+          console.log(`📁 组件图片: ${outputPath}`);
+          
+          return outputPath;
+        },
+        context.force || false
+      );
+
+      const data = cacheResult.newsData.data;
+      const outputPath = cacheResult.imageUrl.data; // 这里是URL或本地路径
+
+      // 如果是MinIO URL，下载到本地用于设备发送
+      let localImagePath = outputPath;
+      if (outputPath.startsWith('http')) {
+        // 这是MinIO URL，使用URL作为输出路径信息
+        console.log(`🖼️ 图片已缓存在MinIO: ${outputPath}`);
+        localImagePath = `${componentOutputDir}/${this.generateFileName(params)}_${context.timestamp}_cached.png`;
+        // 下载图片到本地用于设备发送
+        const downloadCmd = `curl -s -o "${localImagePath}" "${outputPath}"`;
+        await execAsync(downloadCmd);
+        console.log(`📥 已下载缓存图片到本地: ${localImagePath}`);
       }
-      
-      console.log('✅ React 组件渲染完成!');
-      console.log(`📁 组件图片: ${outputPath}`);
 
       // 发送到设备 (允许失败)
-      const pushSuccess = await this.sendToDevice(outputPath, config, data);
+      const pushSuccess = await this.sendToDevice(localImagePath, config, data);
 
       const executionTime = Date.now() - startTime;
-      console.log(`🎉 ${plugin.meta.name}组件生成完成！耗时: ${executionTime}ms`);
+      
+      // 显示缓存效率信息
+      const { cacheEfficiency } = cacheResult;
+      console.log(`📊 缓存效率: 数据${cacheEfficiency.dataStage}, 图片${cacheEfficiency.imageStage}, 总耗时${cacheResult.totalTime}ms`);
+      console.log(`🎉 ${plugin.meta.name}组件生成完成！CLI总耗时: ${executionTime}ms`);
       
       if (!pushSuccess) {
-        console.log(`⚠️  组件图片已生成，但设备推送失败。图片保存在: ${outputPath}`);
+        console.log(`⚠️  组件图片已生成，但设备推送失败。图片保存在: ${localImagePath}`);
+        if (outputPath.startsWith('http')) {
+          console.log(`🖼️  图片缓存URL: ${outputPath}`);
+        }
       }
 
       return {
         success: true,
-        outputPath,
+        outputPath: localImagePath,
+        cacheUrl: outputPath.startsWith('http') ? outputPath : undefined,
         data,
         metadata: {
           executionTime,
+          totalCacheTime: cacheResult.totalTime,
+          cacheEfficiency,
           dataSource,
           widgetType: context.widgetType,
           params,
@@ -134,6 +189,7 @@ export class WidgetCLIEngine {
       // 清理资源
       try {
         await widgetRenderer.close();
+        await stagedCacheManager.close();
       } catch (error) {
         // 忽略清理错误
       }

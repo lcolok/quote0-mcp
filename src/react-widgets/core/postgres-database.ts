@@ -1,0 +1,806 @@
+/**
+ * PostgreSQL数据库缓存服务
+ * 替换SQLite，支持容器化部署和更强的并发性能
+ */
+
+import { Pool, PoolClient } from 'pg';
+import { createHash } from 'crypto';
+import { NewsData } from '../components/NewsWidget.js';
+
+export interface CacheKey {
+  source: string;
+  category?: string;
+  index?: number;
+  extra?: Record<string, any>;
+}
+
+export interface CacheEntry {
+  id: number;
+  cacheKey: string;
+  source: string;
+  category?: string;
+  index?: number;
+  data: NewsData;
+  createdAt: Date;
+  expiresAt: Date;
+  processingTime?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface ProcessingTask {
+  id: string;
+  type: 'news_processing' | 'rss_fetch' | 'llm_optimization' | 'image_render';
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  inputParams: Record<string, any>;
+  outputData?: any;
+  errorMessage?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  processingTime?: number;
+}
+
+export interface RSSSnapshot {
+  id: number;
+  url: string;
+  title: string;
+  itemsCount: number;
+  itemsHash: string;
+  rawData: any;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export interface ImageCacheEntry {
+  id: number;
+  cacheKey: string;
+  newsCacheId?: number;
+  bucketName: string;
+  objectKey: string;
+  objectSize?: number;
+  contentType: string;
+  etag: string;
+  widgetType: string;
+  renderConfig: Record<string, any>;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export class PostgresDatabase {
+  private pool: Pool;
+  private defaultTTL: number = 30 * 60 * 1000; // 30分钟
+
+  constructor(options: {
+    connectionString?: string;
+    host?: string;
+    port?: number;
+    database?: string;
+    user?: string;
+    password?: string;
+    defaultTTL?: number;
+  } = {}) {
+    this.defaultTTL = options.defaultTTL || this.defaultTTL;
+
+    if (options.connectionString) {
+      this.pool = new Pool({
+        connectionString: options.connectionString
+      });
+    } else {
+      this.pool = new Pool({
+        host: options.host || 'localhost',
+        port: options.port || 5432,
+        database: options.database || 'quote0_cache',
+        user: options.user || 'quote0_user',
+        password: options.password || 'quote0_password',
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000
+      });
+    }
+  }
+
+  /**
+   * 初始化数据库连接
+   */
+  async initialize(): Promise<void> {
+    try {
+      const client = await this.pool.connect();
+      
+      // 测试连接
+      const result = await client.query('SELECT NOW() as current_time');
+      console.log(`🐘 PostgreSQL数据库已连接: ${result.rows[0].current_time}`);
+      
+      // 检查表是否存在
+      const tablesResult = await client.query(`
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_name IN (
+          'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats'
+        )
+      `);
+      
+      const existingTables = tablesResult.rows.map(row => row.table_name);
+      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats'];
+      const missingTables = requiredTables.filter(table => !existingTables.includes(table));
+      
+      console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
+      
+      // 如果有缺失的表，自动创建
+      if (missingTables.length > 0) {
+        console.log(`🔧 发现${missingTables.length}个缺失的表，开始自动初始化...`);
+        await this.createTables(client);
+        console.log(`✅ 数据库表结构初始化完成`);
+      }
+      
+      client.release();
+    } catch (error) {
+      console.error('❌ PostgreSQL初始化失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 自动创建数据库表结构
+   */
+  private async createTables(client: any): Promise<void> {
+    const createTablesSQL = `
+      -- 创建新闻缓存表
+      CREATE TABLE IF NOT EXISTS news_cache (
+          id SERIAL PRIMARY KEY,
+          cache_key VARCHAR(64) UNIQUE NOT NULL,
+          source VARCHAR(50) NOT NULL,
+          category VARCHAR(50),
+          index_num INTEGER,
+          title VARCHAR(200) NOT NULL,
+          message TEXT NOT NULL,
+          signature VARCHAR(100) NOT NULL,
+          source_name VARCHAR(100) NOT NULL,
+          publish_time TIMESTAMP NOT NULL,
+          category_name VARCHAR(50) NOT NULL,
+          link TEXT,
+          highlights JSONB,
+          processing_time INTEGER,
+          metadata JSONB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          expires_at TIMESTAMP NOT NULL,
+          CONSTRAINT news_cache_expires_check CHECK (expires_at > created_at)
+      );
+
+      -- 创建处理任务表
+      CREATE TABLE IF NOT EXISTS processing_tasks (
+          id VARCHAR(32) PRIMARY KEY,
+          type VARCHAR(50) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'pending' 
+              CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+          input_params JSONB NOT NULL,
+          output_data JSONB,
+          error_message TEXT,
+          processing_time INTEGER,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- 创建RSS快照表
+      CREATE TABLE IF NOT EXISTS rss_snapshots (
+          id SERIAL PRIMARY KEY,
+          url VARCHAR(500) NOT NULL UNIQUE,
+          title VARCHAR(200) NOT NULL,
+          items_count INTEGER NOT NULL DEFAULT 0,
+          items_hash VARCHAR(64) NOT NULL,
+          raw_data JSONB NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          expires_at TIMESTAMP NOT NULL,
+          CONSTRAINT rss_snapshots_expires_check CHECK (expires_at > created_at)
+      );
+
+      -- 创建图片缓存表
+      CREATE TABLE IF NOT EXISTS image_cache (
+          id SERIAL PRIMARY KEY,
+          cache_key VARCHAR(64) UNIQUE NOT NULL,
+          news_cache_id INTEGER REFERENCES news_cache(id) ON DELETE CASCADE,
+          bucket_name VARCHAR(100) NOT NULL,
+          object_key VARCHAR(500) NOT NULL,
+          object_size BIGINT,
+          content_type VARCHAR(100),
+          etag VARCHAR(64),
+          widget_type VARCHAR(50) NOT NULL,
+          render_config JSONB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          expires_at TIMESTAMP NOT NULL,
+          CONSTRAINT image_cache_expires_check CHECK (expires_at > created_at)
+      );
+
+      -- 创建缓存统计表
+      CREATE TABLE IF NOT EXISTS cache_stats (
+          id SERIAL PRIMARY KEY,
+          cache_type VARCHAR(50) NOT NULL UNIQUE,
+          hit_count BIGINT DEFAULT 0,
+          miss_count BIGINT DEFAULT 0,
+          total_requests BIGINT DEFAULT 0,
+          avg_processing_time NUMERIC(10,2),
+          last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- 创建索引
+      CREATE INDEX IF NOT EXISTS idx_news_cache_key ON news_cache(cache_key);
+      CREATE INDEX IF NOT EXISTS idx_news_cache_source ON news_cache(source, category, index_num);
+      CREATE INDEX IF NOT EXISTS idx_news_cache_expires ON news_cache(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON processing_tasks(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_tasks_type ON processing_tasks(type);
+      CREATE INDEX IF NOT EXISTS idx_rss_url ON rss_snapshots(url);
+      CREATE INDEX IF NOT EXISTS idx_rss_expires ON rss_snapshots(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_image_cache_key ON image_cache(cache_key);
+      CREATE INDEX IF NOT EXISTS idx_image_cache_news ON image_cache(news_cache_id);
+      CREATE INDEX IF NOT EXISTS idx_image_cache_expires ON image_cache(expires_at);
+
+      -- 插入初始统计数据
+      INSERT INTO cache_stats (cache_type, hit_count, miss_count, total_requests) 
+      VALUES 
+          ('news', 0, 0, 0),
+          ('image', 0, 0, 0),
+          ('rss', 0, 0, 0)
+      ON CONFLICT (cache_type) DO NOTHING;
+
+      -- 创建更新触发器函数
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+          NEW.updated_at = CURRENT_TIMESTAMP;
+          RETURN NEW;
+      END;
+      $$ language 'plpgsql';
+
+      -- 创建触发器
+      DROP TRIGGER IF EXISTS update_processing_tasks_updated_at ON processing_tasks;
+      CREATE TRIGGER update_processing_tasks_updated_at 
+          BEFORE UPDATE ON processing_tasks 
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+      -- 创建清理函数
+      CREATE OR REPLACE FUNCTION cleanup_expired_data()
+      RETURNS INTEGER AS $$
+      DECLARE
+          deleted_count INTEGER := 0;
+          news_deleted INTEGER;
+          rss_deleted INTEGER;
+          image_deleted INTEGER;
+      BEGIN
+          DELETE FROM news_cache WHERE expires_at < CURRENT_TIMESTAMP;
+          GET DIAGNOSTICS news_deleted = ROW_COUNT;
+          
+          DELETE FROM rss_snapshots WHERE expires_at < CURRENT_TIMESTAMP;
+          GET DIAGNOSTICS rss_deleted = ROW_COUNT;
+          
+          DELETE FROM image_cache WHERE expires_at < CURRENT_TIMESTAMP;
+          GET DIAGNOSTICS image_deleted = ROW_COUNT;
+          
+          DELETE FROM processing_tasks 
+          WHERE status IN ('completed', 'failed') 
+            AND created_at < CURRENT_TIMESTAMP - INTERVAL '7 days';
+          
+          deleted_count := news_deleted + rss_deleted + image_deleted;
+          RETURN deleted_count;
+      END;
+      $$ LANGUAGE plpgsql;
+    `;
+
+    try {
+      await client.query(createTablesSQL);
+      console.log('🔧 数据库表结构创建成功');
+    } catch (error) {
+      console.error('❌ 创建数据库表失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 生成缓存键
+   */
+  generateCacheKey(params: CacheKey): string {
+    const keyObject = {
+      source: params.source,
+      category: params.category || 'default',
+      index: params.index ?? 'auto',
+      extra: params.extra || {}
+    };
+    
+    const keyString = JSON.stringify(keyObject, Object.keys(keyObject).sort());
+    return createHash('sha256').update(keyString).digest('hex').substring(0, 16);
+  }
+
+  /**
+   * 获取缓存的新闻数据
+   */
+  async getCachedNews(cacheKey: CacheKey, force: boolean = false): Promise<NewsData | null> {
+    if (force) {
+      console.log('🔄 强制刷新，跳过数据库缓存查询');
+      return null;
+    }
+
+    const client = await this.pool.connect();
+    try {
+      const key = this.generateCacheKey(cacheKey);
+      
+      const result = await client.query(`
+        SELECT * FROM news_cache 
+        WHERE cache_key = $1 AND expires_at > NOW()
+      `, [key]);
+
+      if (result.rows.length === 0) {
+        console.log(`📭 数据库缓存未命中: ${key}`);
+        return null;
+      }
+
+      const row = result.rows[0];
+      console.log(`💾 数据库缓存命中: ${key} (来源: ${row.source}, 创建时间: ${row.created_at})`);
+
+      // 更新统计
+      await this.updateCacheStats('news', true);
+
+      const newsData: NewsData = {
+        title: row.title,
+        message: row.message,
+        signature: row.signature,
+        source: row.source_name,
+        publishTime: row.publish_time,
+        category: row.category_name,
+        link: row.link || undefined,
+        highlights: row.highlights || undefined
+      };
+
+      return newsData;
+    } catch (error) {
+      console.error('❌ 数据库缓存查询失败:', error);
+      await this.updateCacheStats('news', false);
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 保存新闻数据到缓存
+   */
+  async setCachedNews(
+    cacheKey: CacheKey, 
+    newsData: NewsData, 
+    options: {
+      ttl?: number;
+      processingTime?: number;
+    } = {}
+  ): Promise<number | null> {
+    const client = await this.pool.connect();
+    try {
+      const key = this.generateCacheKey(cacheKey);
+      const expiresAt = new Date(Date.now() + (options.ttl || this.defaultTTL));
+
+      const result = await client.query(`
+        INSERT INTO news_cache (
+          cache_key, source, category, index_num, title, message, signature,
+          source_name, publish_time, category_name, link, highlights,
+          processing_time, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT (cache_key) DO UPDATE SET
+          title = EXCLUDED.title,
+          message = EXCLUDED.message,
+          signature = EXCLUDED.signature,
+          source_name = EXCLUDED.source_name,
+          publish_time = EXCLUDED.publish_time,
+          category_name = EXCLUDED.category_name,
+          link = EXCLUDED.link,
+          highlights = EXCLUDED.highlights,
+          processing_time = EXCLUDED.processing_time,
+          expires_at = EXCLUDED.expires_at,
+          created_at = CURRENT_TIMESTAMP
+        RETURNING id
+      `, [
+        key,
+        cacheKey.source,
+        cacheKey.category,
+        cacheKey.index,
+        newsData.title,
+        newsData.message,
+        newsData.signature,
+        newsData.source,
+        newsData.publishTime,
+        newsData.category,
+        newsData.link,
+        newsData.highlights ? JSON.stringify(newsData.highlights) : null,
+        options.processingTime,
+        expiresAt
+      ]);
+
+      const id = result.rows[0]?.id;
+      const ttlMinutes = Math.round((options.ttl || this.defaultTTL) / 60000);
+      console.log(`💾 新闻已缓存到PostgreSQL: ${key} (ID: ${id}, TTL: ${ttlMinutes}分钟)`);
+      
+      return id;
+    } catch (error) {
+      console.error('❌ 数据库缓存保存失败:', error);
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 创建处理任务
+   */
+  async createTask(
+    type: ProcessingTask['type'],
+    inputParams: Record<string, any>
+  ): Promise<string> {
+    const client = await this.pool.connect();
+    try {
+      const taskId = createHash('sha256')
+        .update(`${type}-${JSON.stringify(inputParams)}-${Date.now()}`)
+        .digest('hex')
+        .substring(0, 12);
+
+      await client.query(`
+        INSERT INTO processing_tasks (id, type, input_params, status)
+        VALUES ($1, $2, $3, 'pending')
+      `, [taskId, type, JSON.stringify(inputParams)]);
+
+      console.log(`📝 处理任务已创建: ${taskId} (类型: ${type})`);
+      return taskId;
+    } catch (error) {
+      console.error('❌ 创建处理任务失败:', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 更新处理任务状态
+   */
+  async updateTask(
+    taskId: string,
+    updates: {
+      status?: ProcessingTask['status'];
+      outputData?: any;
+      errorMessage?: string;
+      processingTime?: number;
+    }
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      const updateFields: string[] = [];
+      const updateValues: any[] = [];
+      let paramIndex = 1;
+
+      if (updates.status) {
+        updateFields.push(`status = $${paramIndex++}`);
+        updateValues.push(updates.status);
+      }
+      if (updates.outputData) {
+        updateFields.push(`output_data = $${paramIndex++}`);
+        updateValues.push(JSON.stringify(updates.outputData));
+      }
+      if (updates.errorMessage) {
+        updateFields.push(`error_message = $${paramIndex++}`);
+        updateValues.push(updates.errorMessage);
+      }
+      if (updates.processingTime) {
+        updateFields.push(`processing_time = $${paramIndex++}`);
+        updateValues.push(updates.processingTime);
+      }
+
+      if (updateFields.length === 0) return;
+
+      updateValues.push(taskId);
+
+      await client.query(`
+        UPDATE processing_tasks 
+        SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $${paramIndex}
+      `, updateValues);
+
+      console.log(`📝 任务状态更新: ${taskId} → ${updates.status || 'updated'}`);
+    } catch (error) {
+      console.error('❌ 更新处理任务失败:', error);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 保存RSS快照
+   */
+  async saveRSSSnapshot(url: string, feedData: any, ttl: number = 10 * 60 * 1000): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      const itemsHash = createHash('md5')
+        .update(JSON.stringify(feedData.items || []))
+        .digest('hex');
+
+      const expiresAt = new Date(Date.now() + ttl);
+
+      await client.query(`
+        INSERT INTO rss_snapshots (
+          url, title, items_count, items_hash, raw_data, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (url) DO UPDATE SET
+          title = EXCLUDED.title,
+          items_count = EXCLUDED.items_count,
+          items_hash = EXCLUDED.items_hash,
+          raw_data = EXCLUDED.raw_data,
+          expires_at = EXCLUDED.expires_at,
+          created_at = CURRENT_TIMESTAMP
+      `, [
+        url,
+        feedData.title || 'Unknown Feed',
+        feedData.items?.length || 0,
+        itemsHash,
+        JSON.stringify(feedData),
+        expiresAt
+      ]);
+
+      console.log(`📡 RSS快照已保存到PostgreSQL: ${url} (${feedData.items?.length || 0}条)`);
+    } catch (error) {
+      console.error('❌ 保存RSS快照失败:', error);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 获取RSS快照
+   */
+  async getRSSSnapshot(url: string): Promise<any | null> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(`
+        SELECT * FROM rss_snapshots 
+        WHERE url = $1 AND expires_at > NOW()
+        ORDER BY created_at DESC LIMIT 1
+      `, [url]);
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      const row = result.rows[0];
+      console.log(`📡 RSS快照命中: ${url} (${row.items_count}条, 创建时间: ${row.created_at})`);
+      
+      return JSON.parse(row.raw_data);
+    } catch (error) {
+      console.error('❌ 获取RSS快照失败:', error);
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 保存图片缓存信息
+   */
+  async setCachedImage(imageInfo: {
+    cacheKey: string;
+    newsCacheId?: number;
+    bucketName: string;
+    objectKey: string;
+    objectSize?: number;
+    contentType: string;
+    etag: string;
+    widgetType: string;
+    renderConfig: Record<string, any>;
+    ttl?: number;
+  }): Promise<number | null> {
+    const client = await this.pool.connect();
+    try {
+      const expiresAt = new Date(Date.now() + (imageInfo.ttl || 24 * 60 * 60 * 1000)); // 默认24小时
+
+      const result = await client.query(`
+        INSERT INTO image_cache (
+          cache_key, news_cache_id, bucket_name, object_key, object_size,
+          content_type, etag, widget_type, render_config, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (cache_key) DO UPDATE SET
+          news_cache_id = EXCLUDED.news_cache_id,
+          bucket_name = EXCLUDED.bucket_name,
+          object_key = EXCLUDED.object_key,
+          object_size = EXCLUDED.object_size,
+          content_type = EXCLUDED.content_type,
+          etag = EXCLUDED.etag,
+          widget_type = EXCLUDED.widget_type,
+          render_config = EXCLUDED.render_config,
+          expires_at = EXCLUDED.expires_at,
+          created_at = CURRENT_TIMESTAMP
+        RETURNING id
+      `, [
+        imageInfo.cacheKey,
+        imageInfo.newsCacheId,
+        imageInfo.bucketName,
+        imageInfo.objectKey,
+        imageInfo.objectSize,
+        imageInfo.contentType,
+        imageInfo.etag,
+        imageInfo.widgetType,
+        JSON.stringify(imageInfo.renderConfig),
+        expiresAt
+      ]);
+
+      const id = result.rows[0]?.id;
+      console.log(`🖼️ 图片缓存信息已保存: ${imageInfo.cacheKey} (ID: ${id})`);
+      
+      return id;
+    } catch (error) {
+      console.error('❌ 保存图片缓存信息失败:', error);
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 获取图片缓存信息
+   */
+  async getCachedImage(cacheKey: string): Promise<ImageCacheEntry | null> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(`
+        SELECT * FROM image_cache 
+        WHERE cache_key = $1 AND expires_at > NOW()
+      `, [cacheKey]);
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      const row = result.rows[0];
+      console.log(`🖼️ 图片缓存命中: ${cacheKey} (对象: ${row.object_key})`);
+
+      return {
+        id: row.id,
+        cacheKey: row.cache_key,
+        newsCacheId: row.news_cache_id,
+        bucketName: row.bucket_name,
+        objectKey: row.object_key,
+        objectSize: row.object_size,
+        contentType: row.content_type,
+        etag: row.etag,
+        widgetType: row.widget_type,
+        renderConfig: typeof row.render_config === 'string' ? JSON.parse(row.render_config) : row.render_config,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at
+      };
+    } catch (error) {
+      console.error('❌ 获取图片缓存信息失败:', error);
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 更新缓存统计
+   */
+  private async updateCacheStats(cacheType: string, hit: boolean): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      if (hit) {
+        await client.query(`
+          UPDATE cache_stats 
+          SET hit_count = hit_count + 1, total_requests = total_requests + 1
+          WHERE cache_type = $1
+        `, [cacheType]);
+      } else {
+        await client.query(`
+          UPDATE cache_stats 
+          SET miss_count = miss_count + 1, total_requests = total_requests + 1
+          WHERE cache_type = $1
+        `, [cacheType]);
+      }
+    } catch (error) {
+      // 忽略统计更新错误
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 清理过期数据
+   */
+  async cleanup(): Promise<{ news: number; rss: number; images: number; tasks: number }> {
+    const client = await this.pool.connect();
+    try {
+      const results = await Promise.all([
+        client.query('DELETE FROM news_cache WHERE expires_at < NOW()'),
+        client.query('DELETE FROM rss_snapshots WHERE expires_at < NOW()'),
+        client.query('DELETE FROM image_cache WHERE expires_at < NOW()'),
+        client.query(`
+          DELETE FROM processing_tasks 
+          WHERE status IN ('completed', 'failed') 
+            AND created_at < NOW() - INTERVAL '7 days'
+        `)
+      ]);
+
+      const deleted = {
+        news: results[0].rowCount || 0,
+        rss: results[1].rowCount || 0,
+        images: results[2].rowCount || 0,
+        tasks: results[3].rowCount || 0
+      };
+
+      console.log(`🧹 PostgreSQL清理完成: 新闻${deleted.news}条, RSS${deleted.rss}条, 图片${deleted.images}条, 任务${deleted.tasks}条`);
+      
+      return deleted;
+    } catch (error) {
+      console.error('❌ 数据库清理失败:', error);
+      return { news: 0, rss: 0, images: 0, tasks: 0 };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 获取数据库统计信息
+   */
+  async getStats(): Promise<{
+    cachedNews: number;
+    activeTasks: number;
+    rssSnapshots: number;
+    cachedImages: number;
+    cacheStats: Record<string, any>;
+  }> {
+    const client = await this.pool.connect();
+    try {
+      const results = await Promise.all([
+        client.query('SELECT COUNT(*) as count FROM news_cache WHERE expires_at > NOW()'),
+        client.query('SELECT COUNT(*) as count FROM processing_tasks WHERE status IN (\'pending\', \'running\')'),
+        client.query('SELECT COUNT(*) as count FROM rss_snapshots WHERE expires_at > NOW()'),
+        client.query('SELECT COUNT(*) as count FROM image_cache WHERE expires_at > NOW()'),
+        client.query('SELECT * FROM cache_stats')
+      ]);
+
+      const cacheStats: Record<string, any> = {};
+      results[4].rows.forEach(row => {
+        cacheStats[row.cache_type] = {
+          hitCount: parseInt(row.hit_count),
+          missCount: parseInt(row.miss_count),
+          totalRequests: parseInt(row.total_requests),
+          hitRate: row.total_requests > 0 ? (row.hit_count / row.total_requests * 100).toFixed(2) + '%' : '0%'
+        };
+      });
+
+      return {
+        cachedNews: parseInt(results[0].rows[0].count),
+        activeTasks: parseInt(results[1].rows[0].count),
+        rssSnapshots: parseInt(results[2].rows[0].count),
+        cachedImages: parseInt(results[3].rows[0].count),
+        cacheStats
+      };
+    } catch (error) {
+      console.error('❌ 获取数据库统计失败:', error);
+      return { cachedNews: 0, activeTasks: 0, rssSnapshots: 0, cachedImages: 0, cacheStats: {} };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 关闭数据库连接池
+   */
+  async close(): Promise<void> {
+    await this.pool.end();
+    console.log('🐘 PostgreSQL连接池已关闭');
+  }
+}
+
+// 单例实例
+let postgresDatabase: PostgresDatabase | null = null;
+
+export function getPostgresDatabase(): PostgresDatabase {
+  if (!postgresDatabase) {
+    postgresDatabase = new PostgresDatabase({
+      connectionString: process.env.DATABASE_URL,
+      host: process.env.POSTGRES_HOST || 'localhost',
+      port: parseInt(process.env.POSTGRES_PORT || '5432'),
+      database: process.env.POSTGRES_DB || 'quote0_cache',
+      user: process.env.POSTGRES_USER || 'quote0_user',
+      password: process.env.POSTGRES_PASSWORD || 'quote0_password'
+    });
+  }
+  return postgresDatabase;
+}

@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 主数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: quote0-postgres
+    environment:
+      POSTGRES_DB: quote0_cache
+      POSTGRES_USER: quote0_user
+      POSTGRES_PASSWORD: quote0_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quote0_user -d quote0_cache"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - quote0-network
+
+  # MinIO 对象存储
+  minio:
+    image: minio/minio:latest
+    container_name: quote0-minio
+    environment:
+      MINIO_ROOT_USER: quote0_minio
+      MINIO_ROOT_PASSWORD: quote0_minio_password
+    ports:
+      - "9000:9000"  # API端口
+      - "9001:9001"  # Web控制台端口
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - quote0-network
+
+  # Redis 内存缓存
+  redis:
+    image: redis:7-alpine
+    container_name: quote0-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - quote0-network
+
+  # 应用程序服务（可选）
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: quote0-app
+    environment:
+      NODE_ENV: development
+      # 数据库配置
+      DATABASE_URL: postgresql://quote0_user:quote0_password@postgres:5432/quote0_cache
+      # MinIO配置
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: quote0_minio
+      MINIO_SECRET_KEY: quote0_minio_password
+      MINIO_BUCKET: quote0-images
+      # Redis配置
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules
+    working_dir: /app
+    command: ["bun", "dev"]
+    restart: unless-stopped
+    networks:
+      - quote0-network
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  quote0-network:
+    driver: bridge
+
+# 开发环境快速启动配置
+x-development: &dev-config
+  profiles: ["dev"]
+  
+# 生产环境配置
+x-production: &prod-config
+  profiles: ["prod"]
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
