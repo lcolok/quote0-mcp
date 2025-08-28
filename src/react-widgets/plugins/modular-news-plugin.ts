@@ -205,7 +205,12 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
     const dataSource = filteredArgs[1] || 'mock';
     const processor = filteredArgs[2] || 'passthrough';
     const index = filteredArgs[3] ? parseInt(filteredArgs[3], 10) : 0;
-    const renderer = filteredArgs[4] || 'news';
+    let renderer = filteredArgs[4] || 'news';
+    
+    // 如果没有显式指定渲染器，且是完整的数据源+处理器组合，默认使用设备推送
+    if (!filteredArgs[4] && dataSource !== 'mock' && processor !== 'passthrough') {
+      renderer = 'device'; // 默认推送到设备
+    }
 
     // 验证分类
     const validCategories = ['technology', 'finance', 'sports'];
@@ -288,10 +293,10 @@ ${this.getExampleCommands().map(cmd => `  ${cmd}`).join('\\n')}
   getExampleCommands(): string[] {
     return [
       'npm run widget:modular-news',
-      'npm run widget:modular-news technology mock passthrough',
-      'npm run widget:modular-news technology rss ax-optimized 0 news',
-      'npm run widget:modular-news finance rss basic-llm 1 json',
-      'npm run widget:modular-news technology mock ax-optimized 0 news --force'
+      'npm run widget:modular-news technology mock passthrough 0 json',
+      'npm run widget:modular-news technology rss passthrough 0 device',
+      'npm run widget:modular-news finance rss basic-llm 1 device',
+      'npm run widget:modular-news technology mock ax-optimized 0 device --force'
     ];
   }
 
