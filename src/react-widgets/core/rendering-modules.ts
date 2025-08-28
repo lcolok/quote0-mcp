@@ -141,7 +141,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       // 动态导入所需的模块
       const { NewsWidget } = await import('../components/NewsWidget.js');
       const { minioWidgetRenderer } = await import('./minio-widget-renderer.js');
-      const { ImageStorage } = await import('./image-storage.js');
+      const { getImageStorage } = await import('./image-storage.js');
       const React = await import('react');
       
       // 初始化渲染器
@@ -175,7 +175,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       );
       
       // 保存图片到MinIO
-      const imageStorage = ImageStorage.getInstance();
+      const imageStorage = getImageStorage();
       await imageStorage.initialize();
       
       const timestamp = Date.now();
@@ -361,67 +361,129 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
   async render(data: RenderableDataItem, config: RenderingConfig): Promise<{ imageUrl: string; deviceResult: string }> {
     console.log(`📱 渲染并推送到设备: ${data.title}`);
     
+    // 声明渲染器变量，以便在错误处理中使用
+    let minioWidgetRenderer: any = null;
+    
     try {
-      // 使用现有的CLI工具链，复用已有的逻辑
+      // 直接使用传入的数据进行渲染，而不是调用CLI工具
+      const { NewsWidget } = await import('../components/NewsWidget.js');
+      const { minioWidgetRenderer: renderer } = await import('./minio-widget-renderer.js');
+      minioWidgetRenderer = renderer;
+      const { getImageStorage } = await import('./image-storage.js');
+      const React = await import('react');
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
       const fs = await import('fs/promises');
-      const path = await import('path');
       
-      // 构造临时的新闻数据参数
-      const tempParams = {
-        category: data.category || 'technology',
-        dataSource: 'mock', // 使用mock数据源，但数据来自处理后的结果
-        index: 0,
-        border: config.border || '0',
-        force: false
-      };
+      const execAsync = promisify(exec);
       
-      // 创建临时mock数据，替换原有数据
-      const tempMockData = {
-        id: data.id,
+      // 初始化渲染器
+      await minioWidgetRenderer.initialize();
+      
+      // 创建新闻数据对象，使用传入的处理后数据
+      const newsData = {
         title: data.title,
-        content: data.message,
+        message: data.message,
+        signature: data.signature,
         source: data.source,
         publishTime: data.publishTime,
         category: data.category,
-        link: data.link
+        link: data.link,
+        highlights: data.highlights?.map(word => ({ word, color: '#ff0000' })) // 转换为HighlightedWord格式
       };
       
-      // 调用原有的新闻CLI工具
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
+      console.log(`🎨 渲染新闻数据:`, {
+        title: newsData.title,
+        source: newsData.source,
+        signature: newsData.signature,
+        messageLength: newsData.message.length
+      });
       
-      console.log('🔄 使用集成的新闻组件生成器...');
-      const newsCommand = `bun widget news ${data.category || 'technology'} mock passthrough 0`;
+      // 渲染组件为图片
+      const borderColor = config.border === '1' ? '#000000' : '#ffffff';
+      
+      const imageBuffer = await minioWidgetRenderer.renderToImage(
+        React.createElement(NewsWidget, { 
+          data: newsData,
+          border: borderColor 
+        }),
+        {
+          format: 'png',
+          quality: 100,
+          backgroundColor: config.backgroundColor || '#ffffff'
+        }
+      );
+      
+      // 保存图片到本地临时文件
+      const timestamp = Date.now();
+      const filename = `modular_${data.id}_${timestamp}.png`;
+      const localImagePath = `./processed-images/widgets/news/${filename}`;
+      
+      // 确保目录存在
+      const dirPath = './processed-images/widgets/news';
+      await fs.mkdir(dirPath, { recursive: true });
+      
+      // 保存到本地文件
+      await fs.writeFile(localImagePath, imageBuffer);
+      console.log(`💾 图片已保存到本地: ${localImagePath}`);
+      
+      // 上传到MinIO
+      const imageStorage = getImageStorage();
+      
+      const metadata = {
+        widgetType: 'news',
+        cacheKey: `modular_${data.id}_${timestamp}`,
+        renderConfig: {
+          border: config.border,
+          width: config.width || 640,
+          height: config.height || 384
+        }
+      };
+      
+      const uploadResult = await imageStorage.uploadImage(localImagePath, metadata);
+      const imageUrl = uploadResult.url;
+      console.log(`✅ 新闻组件已保存到MinIO: ${imageUrl}`);
+      
+      // 推送到设备
+      console.log('📤 推送到MindReset设备...');
+      const deviceCommand = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${localImagePath}" "0" "${data.link || ''}" "ORDERED"`;
       
       try {
-        const { stdout, stderr } = await execAsync(newsCommand);
-        console.log('✅ 新闻组件生成完成');
-        
-        // 解析输出获取图片路径和URL
-        const imageUrlMatch = stdout.match(/图片缓存URL: (http[^\s]+)/);
-        const imagePathMatch = stdout.match(/图片保存在: ([^\s]+)/);
-        
-        const imageUrl = imageUrlMatch?.[1] || '未知URL';
-        const deviceResult = stdout.includes('设备发送完成') ? '推送成功' : '推送状态未知';
+        const { stdout, stderr } = await execAsync(deviceCommand);
+        console.log('✅ 设备推送完成');
+        if (stdout) console.log('设备响应:', stdout);
         
         return {
           imageUrl,
-          deviceResult
+          deviceResult: '推送成功'
         };
-        
-      } catch (newsError: any) {
-        console.error('❌ 新闻组件生成失败:', newsError.message);
-        
-        // 降级处理：至少返回一个模拟结果
+      } catch (deviceError: any) {
+        console.error('❌ 设备推送失败:', deviceError.message);
         return {
-          imageUrl: `mock-image-${data.id}-${Date.now()}.png`,
-          deviceResult: `生成失败: ${newsError.message}`
+          imageUrl,
+          deviceResult: `推送失败: ${deviceError.message}`
         };
+      } finally {
+        // 确保渲染器资源被清理
+        if (minioWidgetRenderer) {
+          try {
+            await minioWidgetRenderer.close();
+          } catch (cleanupError) {
+            console.warn('⚠️ 渲染器清理失败:', cleanupError);
+          }
+        }
       }
       
     } catch (error) {
       console.error('设备推送渲染失败:', error);
+      // 确保在错误情况下也清理渲染器
+      if (minioWidgetRenderer) {
+        try {
+          await minioWidgetRenderer.close();
+        } catch (cleanupError) {
+          console.warn('⚠️ 渲染器清理失败:', cleanupError);
+        }
+      }
       throw new Error(`设备推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
