@@ -23,6 +23,7 @@
     "widget:weather": "tsx src/react-widgets/cli/weather-cli.ts",
     "widget:weather-new": "tsx src/react-widgets/cli/weather-cli-new.ts",
     "widget:news": "tsx src/react-widgets/cli/news-cli.ts",
+    "widget:modular-news": "tsx src/react-widgets/cli/modular-news-cli.ts",
     "widget:preview": "tsx src/react-widgets/examples/weather-example.tsx",
     "widget:compare": "tsx scripts/compare-widgets.ts",
     "widget:test": "tsx src/react-widgets/tests/weather-services.test.ts",
