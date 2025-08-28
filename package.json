@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:ax-framework": "tsc -p ax-framework/tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1",

@@ -427,14 +427,14 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       
       // 3. 尝试加载预训练的优化产物
       console.log('📚 尝试加载预训练模型...');
-      const loadSuccess = await processor.loadOptimizationArtifacts('production/latest.json');
+      const loadSuccess = await processor.loadOptimizationArtifacts('ax-framework/models/production/latest.json');
       
       if (!loadSuccess) {
         // 如果没有预训练模型，使用基础训练数据进行快速训练
         console.log('⚡ 预训练模型未找到，使用基础数据进行训练...');
         
         // 导入基础训练数据
-        const { trainingData } = await import('../../../scripts/ax-training-data.js');
+        const { trainingData } = await import('../../../ax-framework/compiled/ax-training-data.js');
         const sampleData = trainingData.slice(0, 3); // 使用前3个样本进行快速训练
         
         console.log(`🔄 开始快速训练 (${sampleData.length} 个样本)...`);

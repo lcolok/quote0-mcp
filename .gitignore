@@ -8,6 +8,18 @@ yarn-error.log*
 dist/
 build/
 
+# AX Framework编译产物（由训练数据源码自动生成）
+ax-framework/compiled/
+
+# 其他TypeScript编译产物
+*.js.map
+*.d.ts.map
+# 排除scripts目录中的TS编译产物（保留源码.ts文件）  
+scripts/*.js
+scripts/*.d.ts
+scripts/*.js.map
+scripts/*.d.ts.map
+
 # Environment variables
 .env
 .env.local
