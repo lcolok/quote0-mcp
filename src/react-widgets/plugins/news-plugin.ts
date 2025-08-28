@@ -19,6 +19,7 @@ import { AxNewsProcessor } from '../services/ax-news-processor.js';
 import { AxInspiredNewsProcessor } from '../services/ax-inspired-processor.js';
 import { EnvLoader } from '../../image-sender/adapters/environments/env-loader.js';
 import { stagedCacheManager } from '../core/staged-cache-manager.js';
+import { dataSourceRegistry } from '../core/data-source-modules.js';
 
 /**
  * 新闻数据参数接口
@@ -119,7 +120,20 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
   }
 
   async getData(source: string, params: NewsDataParams): Promise<NewsData> {
-    // 直接获取数据，缓存由CLI引擎的分阶段缓存管理器统一处理
+    // 检查是否是RSS源的直接名称（如sspai、solidot等）
+    const rssModule = dataSourceRegistry.get('rss');
+    if (rssModule) {
+      const rssSourceParam = rssModule.getSupportedParams().find(p => p.name === 'source');
+      console.log(`🔍 RSS支持的源:`, rssSourceParam?.choices);
+      console.log(`🔍 请求的源: ${source}`);
+      if (rssSourceParam?.choices?.includes(source)) {
+        console.log(`✅ 使用RSS预设源: ${source}`);
+        // 如果source是RSS预设源名称，使用RSS数据源处理
+        return await this.getRSSData({ ...params, source });
+      }
+    }
+    
+    // 传统的数据源处理方式
     switch (source) {
       case 'mock':
         return this.getMockData(params);
@@ -146,7 +160,14 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         return await this.getAPIData(params);
       
       default:
-        throw new Error(`不支持的数据源: ${source}`);
+        const supportedSources = ['mock', 'rss', 'rss-llm', 'rss-enhanced', 'rss-ax', 'rss-ax-inspired', 'ax-optimized', 'api'];
+        if (rssModule) {
+          const rssSourceParam = rssModule.getSupportedParams().find(p => p.name === 'source');
+          if (rssSourceParam?.choices) {
+            supportedSources.push(...rssSourceParam.choices);
+          }
+        }
+        throw new Error(`不支持的数据源: ${source}。支持的数据源: ${supportedSources.join(', ')}`);
     }
   }
 
@@ -168,37 +189,27 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
   }
 
   private async getRSSData(params: NewsDataParams): Promise<NewsData> {
-    const rssUrl = 'https://www.solidot.org/index.rss';
-
     try {
-      // 使用分阶段缓存管理器获取RSS快照
-      const feed = await stagedCacheManager.getOrCacheRSSSnapshot(rssUrl, async () => {
-        console.log(`📡 获取RSS数据: ${rssUrl}`);
-        const parser = new Parser({
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; NewsWidget/1.0)'
-          }
-        });
-        return await parser.parseURL(rssUrl);
-      });
-      
-      if (!feed.items || feed.items.length === 0) {
-        throw new Error('RSS源没有找到新闻条目');
+      // 使用模块化RSS数据源
+      const rssModule = dataSourceRegistry.get('rss');
+      if (!rssModule) {
+        throw new Error('RSS数据源模块未找到');
       }
 
-      // 获取新闻条目 - 支持指定索引，默认选择第一条
-      let index = params.index !== undefined ? params.index : 0;
-      // 确保索引在有效范围内
-      index = Math.max(0, Math.min(index, feed.items.length - 1));
-      
-      const item = feed.items[index];
-      console.log(`📰 选择第${index + 1}条新闻: ${item.title}`);
-      
-      // 清理描述内容，移除HTML标签
-      let cleanDescription = item.contentSnippet || item.content || '';
-      if (!cleanDescription && item.description) {
-        cleanDescription = item.description.replace(/<[^>]*>/g, '').trim();
+      // 获取RSS数据
+      const rawDataItems = await rssModule.fetchRawData({
+        source: params.source || 'solidot', // 默认使用solidot
+        count: 1,
+        startIndex: params.index || 0,
+        category: params.category || 'technology'
+      });
+
+      if (!rawDataItems || rawDataItems.length === 0) {
+        throw new Error('RSS数据源没有返回数据');
       }
+
+      const item = rawDataItems[0];
+      console.log(`📰 选择RSS新闻: ${item.title} (来源: ${item.source})`);
       
       // 限制标题长度为10个字符
       let title = item.title || '无标题';
@@ -206,21 +217,22 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         title = title.substring(0, 10);
       }
       
-      // 使用原始链接，如果设备不支持外网访问，用户可以手动访问
-      const newsLink = item.link;
-      console.log(`🔗 原始新闻链接: ${newsLink}`);
-      
+      if (item.link) {
+        console.log(`🔗 原始新闻链接: ${item.link}`);
+      }
+
       return {
         title: title,
-        message: cleanDescription || '暂无内容',
-        signature: '来自Solidot',
-        source: 'Solidot',
-        publishTime: item.pubDate || new Date().toISOString(),
-        category: '科技',
-        link: newsLink || undefined
+        message: item.content || '暂无内容',
+        signature: `来自${item.source}`,
+        source: item.source,
+        publishTime: item.publishTime,
+        category: item.category || 'technology',
+        link: item.link || undefined
       };
+      
     } catch (error) {
-      console.error('RSS获取失败:', error);
+      console.error('RSS数据获取失败:', error);
       throw new Error(`RSS数据获取失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }

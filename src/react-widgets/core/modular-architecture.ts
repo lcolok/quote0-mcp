@@ -203,6 +203,7 @@ export interface HealthStatus {
 export interface DataSourceHealthStatus extends HealthStatus {
   dataAvailability?: boolean;
   connectionStatus?: 'connected' | 'disconnected' | 'error';
+  dataQuality?: number;
 }
 
 export interface ProcessingHealthStatus extends HealthStatus {

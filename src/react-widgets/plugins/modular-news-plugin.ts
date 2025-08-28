@@ -26,6 +26,8 @@ interface ModularNewsParams extends WidgetDataParams {
   processor?: string;
   renderer?: string;
   force?: boolean;
+  rssSource?: string; // 新增: RSS源选择参数
+  border?: string; // 边框设置
 }
 
 /**
@@ -78,7 +80,7 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
           category: category,
           startIndex: index,
           count: 1,
-          url: dataSource === 'rss' ? 'https://www.solidot.org/index.rss' : undefined
+          source: params.rssSource || 'solidot' // 使用RSS源选择参数
         },
         processor: processor,
         processingParams: {
@@ -206,6 +208,7 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
     const processor = filteredArgs[2] || 'passthrough';
     const index = filteredArgs[3] ? parseInt(filteredArgs[3], 10) : 0;
     let renderer = filteredArgs[4] || 'news';
+    const rssSource = filteredArgs[5] || 'solidot'; // 新增：RSS源选择参数
     
     // 如果没有显式指定渲染器，且是完整的数据源+处理器组合，默认使用设备推送
     if (!filteredArgs[4] && dataSource !== 'mock' && processor !== 'passthrough') {
@@ -217,8 +220,19 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
     if (!validCategories.includes(category)) {
       throw new Error(`不支持的新闻分类: ${category}。支持的分类: ${validCategories.join(', ')}`);
     }
+    
+    // 验证RSS源（仅当使用RSS数据源时）
+    if (dataSource === 'rss') {
+      const rssModule = dataSourceRegistry.get('rss');
+      if (rssModule) {
+        const rssSourceParam = rssModule.getSupportedParams().find(p => p.name === 'source');
+        if (rssSourceParam?.choices && !rssSourceParam.choices.includes(rssSource)) {
+          throw new Error(`不支持的RSS源: ${rssSource}。支持的RSS源: ${rssSourceParam.choices.join(', ')}`);
+        }
+      }
+    }
 
-    console.log(`📋 模块化参数解析: category=${category}, dataSource=${dataSource}, processor=${processor}, renderer=${renderer}, index=${index}, force=${force}`);
+    console.log(`📋 模块化参数解析: category=${category}, dataSource=${dataSource}, processor=${processor}, renderer=${renderer}, index=${index}, rssSource=${rssSource}, force=${force}`);
 
     return {
       params: { 
@@ -227,6 +241,7 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
         processor,
         renderer,
         index: isNaN(index) ? 0 : index,
+        rssSource,
         force 
       },
       config: { 
@@ -243,7 +258,7 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
   getUsageHelp(): string {
     return `🧩 模块化新闻组件使用说明
 
-🚀 用法: npm run widget:modular-news [分类] [数据源] [处理器] [索引] [渲染器] [选项]
+🚀 用法: npm run widget:modular-news [分类] [数据源] [处理器] [索引] [渲染器] [RSS源] [选项]
 
 📝 参数说明:
   分类: technology, finance, sports (默认: technology)
@@ -251,6 +266,12 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
   处理器: ${processingRegistry.getAvailable().join(', ')} (默认: passthrough)
   索引: 新闻条目索引，从0开始 (默认: 0)
   渲染器: ${renderingRegistry.getAvailable().join(', ')} (默认: news)
+  RSS源: 当数据源为rss时的RSS订阅源选择 (默认: solidot)
+         可用RSS源: ${(() => {
+           const rssModule = dataSourceRegistry.get('rss');
+           const sourceParam = rssModule?.getSupportedParams().find(p => p.name === 'source');
+           return sourceParam?.choices?.join(', ') || 'solidot, sspai, cnbeta, 36kr, pingwest, techcrunch, arstechnica, reuters-tech, designer-news, github-trending, dev-to';
+         })()}
   
 🔧 选项:
   --force  强制刷新，跳过缓存
@@ -295,8 +316,9 @@ ${this.getExampleCommands().map(cmd => `  ${cmd}`).join('\\n')}
       'npm run widget:modular-news',
       'npm run widget:modular-news technology mock passthrough 0 json',
       'npm run widget:modular-news technology rss passthrough 0 device',
-      'npm run widget:modular-news finance rss basic-llm 1 device',
-      'npm run widget:modular-news technology mock ax-optimized 0 device --force'
+      'npm run widget:modular-news technology rss ax-optimized 7 device sspai',
+      'npm run widget:modular-news finance rss basic-llm 1 device 36kr',
+      'npm run widget:modular-news technology mock ax-optimized 0 device solidot --force'
     ];
   }
 
