@@ -2,6 +2,7 @@
  * LLM处理模块抽象基类和具体实现
  */
 
+import fs from 'fs';
 import { 
   ProcessingModule, 
   RawDataItem, 
@@ -449,23 +450,78 @@ export class ProcessingRegistry {
    */
   private initializeLLMModules(): void {
     try {
-      // 从环境变量获取LLM配置
-      const llmConfig = {
+      // 直接从项目根目录的.env文件读取LLM配置
+      const envPath = '/Users/lco/GitHub/quote0-mcp/.env';
+      
+      let llmConfig = {
         apiKey: process.env.LLM_API_KEY || '',
         baseURL: process.env.LLM_BASE_URL || '',
         model: process.env.LLM_MODEL || 'gpt-4o'
       };
       
-      if (llmConfig.apiKey && llmConfig.baseURL) {
+      // 总是尝试直接读取.env文件来获取最新配置
+      try {
+        console.log(`📄 尝试读取.env文件: ${envPath}`);
+        
+        // 检查文件是否存在
+        if (!fs.existsSync(envPath)) {
+          throw new Error(`文件不存在: ${envPath}`);
+        }
+        
+        const envContent = fs.readFileSync(envPath, 'utf8');
+        console.log(`📄 .env文件读取成功，内容长度: ${envContent.length} 字符`);
+        
+        // 解析.env文件内容
+        const envLines = envContent.split('\n');
+        const envVars: Record<string, string> = {};
+        
+        for (const line of envLines) {
+          const trimmedLine = line.trim();
+          if (trimmedLine && !trimmedLine.startsWith('#')) {
+            const equalIndex = trimmedLine.indexOf('=');
+            if (equalIndex > 0) {
+              const key = trimmedLine.substring(0, equalIndex).trim();
+              const value = trimmedLine.substring(equalIndex + 1).trim();
+              envVars[key] = value;
+            }
+          }
+        }
+        
+        // 显示找到的LLM相关配置
+        console.log(`🔍 找到的LLM配置:`);
+        console.log(`   LLM_BASE_URL: ${envVars.LLM_BASE_URL || '未设置'}`);
+        console.log(`   LLM_API_KEY: ${envVars.LLM_API_KEY ? (envVars.LLM_API_KEY === 'your_api_key_here' ? '占位符' : '已设置') : '未设置'}`);
+        console.log(`   LLM_MODEL: ${envVars.LLM_MODEL || '未设置'}`);
+        
+        // 使用.env文件中的配置覆盖默认值
+        llmConfig = {
+          apiKey: envVars.LLM_API_KEY || llmConfig.apiKey,
+          baseURL: envVars.LLM_BASE_URL || llmConfig.baseURL,
+          model: envVars.LLM_MODEL || llmConfig.model
+        };
+        
+        console.log(`✅ 从.env文件成功读取LLM配置`);
+      } catch (envError: any) {
+        console.warn(`⚠️ 读取.env文件失败: ${envError.message}`);
+        console.warn('   回退使用环境变量配置');
+      }
+      
+      // 验证配置并注册模块
+      if (llmConfig.baseURL) {
+        console.log(`🔗 检测到自定义LLM端点: ${llmConfig.baseURL}`);
+        console.log(`🔑 API密钥状态: ${llmConfig.apiKey === 'your_api_key_here' ? '占位符' : '已配置'}`);
+        console.log(`🤖 LLM模型: ${llmConfig.model}`);
+        
         // 注册基础LLM处理模块
         this.register('basic-llm', new BasicLLMProcessingModule(llmConfig));
         
         // 注册AX优化处理模块
         this.register('ax-optimized', new AxOptimizedProcessingModule(llmConfig));
         
-        console.log('🤖 LLM处理模块初始化完成');
+        console.log('🤖 LLM处理模块初始化完成（自动读取.env配置）');
       } else {
-        console.warn('⚠️  LLM配置不完整，跳过LLM处理模块注册');
+        console.warn('⚠️  LLM_BASE_URL未配置，跳过LLM处理模块注册');
+        console.warn('   请在.env文件中配置 LLM_BASE_URL 和 LLM_API_KEY');
       }
     } catch (error) {
       console.error('❌ LLM处理模块初始化失败:', error);
