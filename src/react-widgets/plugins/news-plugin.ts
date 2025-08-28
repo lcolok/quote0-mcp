@@ -599,30 +599,24 @@ export class NewsPlugin implements WidgetPlugin<NewsData, NewsConfig> {
     const filteredArgs = args.filter(arg => arg !== '--force');
 
     const category = filteredArgs[0] || 'technology';
-    const indexArg = filteredArgs[1];
-    let source = filteredArgs[2] || this.dataProvider.getDefaultSource();
+    const sourceArg = filteredArgs[1] || this.dataProvider.getDefaultSource();
+    const indexArg = filteredArgs[2];
     
-    // 解析索引参数
+    // 新格式: category source [index] [--force]
+    let source = sourceArg;
     let index: number | undefined;
     let border: '0' | '1' = '0';
     
+    // 解析第三个参数（索引）
     if (indexArg !== undefined) {
       const parsed = parseInt(indexArg, 10);
       if (!isNaN(parsed) && parsed >= 0) {
         index = parsed;
-        // 如果第二个参数是数字索引，边框参数移到第三个位置
-        // 实际上我们需要重新设计参数格式
-        // 新格式: category index source [--force]
-        // 或: category source [--force] （不指定索引）
-      } else {
-        // 如果第二个参数不是数字，则认为是source参数
+      } else if (['0', '1'].includes(indexArg)) {
+        // 如果是边框参数，保留为边框设置
         border = indexArg as '0' | '1';
-        if (!['0', '1'].includes(border)) {
-          // 不是边框参数，当作source处理
-          source = indexArg;
-          border = '0';
-        }
       }
+      // 如果不是数字也不是边框参数，忽略
     }
 
     // 验证分类
@@ -631,7 +625,13 @@ export class NewsPlugin implements WidgetPlugin<NewsData, NewsConfig> {
       throw new Error(`不支持的新闻分类: ${category}。支持的分类: ${validCategories.join(', ')}`);
     }
 
-    console.log(`📋 解析参数: category=${category}, index=${index}, source=${source}, force=${force}, border=${border}`);
+    // 验证数据源
+    const validSources = this.dataProvider.getSources();
+    if (!validSources.includes(source)) {
+      throw new Error(`不支持的数据源: ${source}。支持的数据源: ${validSources.join(', ')}`);
+    }
+
+    console.log(`📋 解析参数: category=${category}, source=${source}, index=${index}, force=${force}, border=${border}`);
 
     return {
       params: { 
@@ -647,12 +647,12 @@ export class NewsPlugin implements WidgetPlugin<NewsData, NewsConfig> {
   getUsageHelp(): string {
     return `📰 新闻组件使用说明
 
-🚀 用法: npm run widget:news [分类] [索引] [数据源] [选项]
+🚀 用法: npm run widget:news [分类] [数据源] [索引] [选项]
 
 📝 参数说明:
   分类: technology, finance, sports (默认: technology)
-  索引: 新闻条目索引，从0开始 (默认: 0，选择第一条)
   数据源: ${this.dataProvider.getSources().join(', ')} (默认: ${this.dataProvider.getDefaultSource()})
+  索引: 新闻条目索引，从0开始 (默认: 0，选择第一条)
   
 🔧 选项:
   --force  强制刷新，跳过缓存
@@ -678,11 +678,11 @@ ${this.getExampleCommands().map(cmd => `  ${cmd}`).join('\n')}
   getExampleCommands(): string[] {
     return [
       'npm run widget:news',
-      'npm run widget:news technology 0',
-      'npm run widget:news technology 1 ax-optimized',
-      'npm run widget:news finance 0 rss',
-      'npm run widget:news technology 5 ax-optimized --force',
-      'npm run widget:news sports 2 mock'
+      'npm run widget:news technology mock',
+      'npm run widget:news technology ax-optimized 0', 
+      'npm run widget:news finance rss 0',
+      'npm run widget:news technology ax-optimized 5 --force',
+      'npm run widget:news sports mock 2'
     ];
   }
 }
