@@ -446,37 +446,149 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       
       // 推送到设备
       console.log('📤 推送到MindReset设备...');
+      
+      // 先进行设备健康检查
+      console.log('🩺 执行设备连通性检查...');
+      const { MindResetDeviceClient } = await import('../../image-sender/services/api/device-client.js');
+      const deviceClient = MindResetDeviceClient.fromEnvironment();
+      const healthCheck = await deviceClient.checkDeviceHealth();
+      
+      if (!healthCheck.success) {
+        console.warn('⚠️ 设备健康检查失败，但仍将尝试推送');
+        console.log(`健康检查结果: ${healthCheck.error}`);
+        console.log(`设备连通性状态: ${healthCheck.connectivity}`);
+        
+        if (healthCheck.connectivity === 'offline') {
+          console.log(`
+🚨 设备似乎处于离线状态
+🔍 建议立即检查：
+1. MindReset设备的电源指示灯状态
+2. USB数据线是否松动，尝试重新插拔
+3. 设备屏幕是否有任何显示
+4. 在 https://dot.mindreset.tech 管理界面查看设备状态`);
+        }
+      } else {
+        console.log('✅ 设备健康检查通过，设备在线且响应正常');
+      }
+      
       const deviceCommand = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${localImagePath}" "0" "${data.link || ''}" "ORDERED"`;
       
-      try {
-        const { stdout, stderr } = await execAsync(deviceCommand);
-        console.log('✅ 设备推送完成');
-        if (stdout) console.log('设备响应:', stdout);
-        
-        return {
-          imageUrl,
-          deviceResult: '推送成功'
-        };
-      } catch (deviceError: any) {
-        console.error('❌ 设备推送失败:', deviceError.message);
-        return {
-          imageUrl,
-          deviceResult: `推送失败: ${deviceError.message}`
-        };
-      } finally {
-        // 确保渲染器资源被清理
-        if (minioWidgetRenderer) {
-          try {
-            await minioWidgetRenderer.close();
-          } catch (cleanupError) {
-            console.warn('⚠️ 渲染器清理失败:', cleanupError);
+      // 实现自动重试机制处理429错误
+      let retryCount = 0;
+      const maxRetries = 2;
+      const baseDelay = 30000; // 30秒基础延迟
+      
+      while (retryCount <= maxRetries) {
+        try {
+          const { stdout, stderr } = await execAsync(deviceCommand);
+          console.log('✅ 设备推送完成');
+          if (stdout) console.log('设备响应:', stdout);
+          
+          return {
+            imageUrl,
+            deviceResult: '推送成功'
+          };
+        } catch (deviceError: any) {
+          // 检查是否是429错误且还有重试次数
+          if (deviceError.message.includes('429 Too Many Requests') && retryCount < maxRetries) {
+            const delay = baseDelay * (retryCount + 1); // 递增延迟
+            console.warn(`⏱️ 遇到API频率限制，${delay/1000}秒后进行第${retryCount + 1}次重试...`);
+            
+            // 等待指定时间
+            await new Promise(resolve => setTimeout(resolve, delay));
+            retryCount++;
+            continue;
           }
+          
+          // 如果不是429错误或重试次数已用完，处理错误
+          console.error('❌ 设备推送失败:', deviceError.message);
+          
+          // 增强的错误信息和用户提醒
+          let enhancedErrorMessage = `推送失败: ${deviceError.message}`;
+          let troubleshootingTips = '';
+          
+          // 检查是否是429错误（请求频率过高）
+          if (deviceError.message.includes('429 Too Many Requests')) {
+            if (retryCount >= maxRetries) {
+              troubleshootingTips = `
+⏱️ API请求频率过高 - 已重试${maxRetries}次仍未成功
+🔍 建议解决方案：
+1. 手动等待更长时间（建议2-5分钟）后再次尝试
+2. 检查是否有其他程序同时在使用设备API
+3. 暂时降低发送频率，避免频繁操作
+4. 如果问题持续，可能需要联系技术支持
+
+💡 提示：系统已自动重试但仍受限，建议稍后手动重试`;
+            } else {
+              troubleshootingTips = `
+⏱️ API请求频率过高 - 系统保护机制触发
+🔍 解决方案：
+1. 等待 30-60 秒后再次尝试发送
+2. 避免在短时间内连续发送多个图片
+3. 如有自动化脚本，请在发送间隔中添加延迟（建议10秒以上）
+4. 检查是否有其他程序同时在使用设备API
+
+💡 提示：这是正常的API保护机制，稍等片刻即可恢复正常`;
+            }
+            
+            console.warn('⏱️ API频率限制触发');
+            console.log(troubleshootingTips);
+            enhancedErrorMessage += troubleshootingTips;
+          
+        } else if (deviceError.message.includes('500 Internal Server Error')) {
+          troubleshootingTips = `
+🔍 故障排查建议：
+1. 检查MindReset设备是否正常连接电源和USB线
+2. 尝试拔插USB数据线重新连接设备
+3. 确认设备屏幕是否有显示（设备可能处于休眠状态）
+4. 检查设备是否在dot.mindreset.tech管理界面中显示为在线状态
+5. 如果问题持续，可能是服务器临时故障，请稍后重试`;
+          
+          console.warn('🚨 设备连接问题检测');
+          console.log(troubleshootingTips);
+          enhancedErrorMessage += troubleshootingTips;
+          
+        } else if (deviceError.message.includes('ECONNREFUSED') || deviceError.message.includes('timeout')) {
+          troubleshootingTips = `
+🔍 网络连接问题：
+1. 检查网络连接是否正常
+2. 确认dot.mindreset.tech服务是否可访问
+3. 检查防火墙设置是否阻止了连接`;
+          
+          console.warn('🌐 网络连接问题检测');
+          console.log(troubleshootingTips);
+          enhancedErrorMessage += troubleshootingTips;
+          
+        } else if (deviceError.message.includes('Command failed')) {
+          troubleshootingTips = `
+🔍 命令执行问题：
+1. 检查image-sender模块是否正确构建 (npm run build)
+2. 确认所有依赖包已正确安装
+3. 检查设备ID和密钥配置是否正确`;
+          
+          console.warn('⚙️ 命令执行问题检测');
+          console.log(troubleshootingTips);
+          enhancedErrorMessage += troubleshootingTips;
+        }
+        
+          return {
+            imageUrl,
+            deviceResult: enhancedErrorMessage
+          };
         }
       }
       
+      // 如果到达这里，说明所有重试都失败了
+      return {
+        imageUrl,
+        deviceResult: '推送失败: 超过最大重试次数'
+      };
+      
     } catch (error) {
       console.error('设备推送渲染失败:', error);
-      // 确保在错误情况下也清理渲染器
+      throw new Error(`设备推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      // 确保渲染器资源被清理
       if (minioWidgetRenderer) {
         try {
           await minioWidgetRenderer.close();
@@ -484,7 +596,6 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
           console.warn('⚠️ 渲染器清理失败:', cleanupError);
         }
       }
-      throw new Error(`设备推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
   
