@@ -12,7 +12,7 @@ async function createPretrainedModel() {
   try {
     // 创建ax-optimization-artifacts目录结构
     const fs = await import('fs/promises');
-    const path = '/Users/lco/GitHub/quote0-mcp/ax-optimization-artifacts';
+    const path = `${process.cwd()}/ax-optimization-artifacts`;
     
     await fs.mkdir(path, { recursive: true });
     await fs.mkdir(`${path}/production`, { recursive: true });

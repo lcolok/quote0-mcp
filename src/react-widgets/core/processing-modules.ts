@@ -451,7 +451,7 @@ export class ProcessingRegistry {
   private initializeLLMModules(): void {
     try {
       // 直接从项目根目录的.env文件读取LLM配置
-      const envPath = '/Users/lco/GitHub/quote0-mcp/.env';
+      const envPath = process.cwd() + '/.env';
       
       let llmConfig = {
         apiKey: process.env.LLM_API_KEY || '',

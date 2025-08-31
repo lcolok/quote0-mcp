@@ -216,7 +216,7 @@ export class AxOptimizedNewsProcessor {
    */
   private async saveOptimizationArtifacts(data: any) {
     const fs = await import('fs/promises');
-    const path = `/Users/lco/GitHub/quote0-mcp/ax-framework/models/`;
+    const path = `${process.cwd()}/ax-framework/models/`;
     
     // 确保目录存在
     try {
@@ -255,7 +255,7 @@ export class AxOptimizedNewsProcessor {
    */
   async loadOptimizationArtifacts(filename: string) {
     const fs = await import('fs/promises');
-    const path = `/Users/lco/GitHub/quote0-mcp/${filename}`;
+    const path = `${process.cwd()}/${filename}`;
     
     try {
       const data = await fs.readFile(path, 'utf-8');

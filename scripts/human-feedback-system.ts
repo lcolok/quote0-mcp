@@ -62,7 +62,7 @@ interface HumanFeedback {
 }
 
 class HumanFeedbackCollector {
-  private feedbackPath = '/Users/lco/GitHub/quote0-mcp/ax-optimization-artifacts/human-feedback/';
+  private feedbackPath = `${process.cwd()}/ax-optimization-artifacts/human-feedback/`;
   
   constructor() {
     this.ensureDirectoryExists();

@@ -23,7 +23,7 @@ interface ProductionData {
 }
 
 class ContinuousTrainingSystem {
-  private productionDataPath = '/Users/lco/GitHub/quote0-mcp/ax-optimization-artifacts/production-data/';
+  private productionDataPath = `${process.cwd()}/ax-optimization-artifacts/production-data/`;
   
   /**
    * 收集生产环境数据
@@ -161,7 +161,7 @@ class ContinuousTrainingSystem {
    */
   private async saveNewModelVersion(timestamp: string, trainingResult: any) {
     const fs = await import('fs/promises');
-    const artifactsPath = '/Users/lco/GitHub/quote0-mcp/ax-optimization-artifacts/';
+    const artifactsPath = `${process.cwd()}/ax-optimization-artifacts/`;
     
     // 备份当前production模型
     try {

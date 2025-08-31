@@ -4,7 +4,7 @@
 
 echo "🚀 开始迁移 image-sender 模块结构..."
 
-cd /Users/lco/GitHub/quote0-mcp/src/image-sender
+cd "$(dirname "$(dirname "$(realpath "$0")")")/src/image-sender"
 
 # 备份原文件
 echo "📁 备份原文件..."

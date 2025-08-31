@@ -2,7 +2,7 @@
 
 echo "🔄 更新import路径..."
 
-cd /Users/lco/GitHub/quote0-mcp/src/image-sender
+cd "$(dirname "$(dirname "$(realpath "$0")")")/src/image-sender"
 
 # 更新orchestrators中的导入
 echo "🎯 更新编排器导入..."

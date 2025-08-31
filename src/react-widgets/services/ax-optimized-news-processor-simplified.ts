@@ -54,7 +54,7 @@ export class AxOptimizedNewsProcessorSimplified {
    */
   async loadOptimizationArtifacts(filename: string): Promise<boolean> {
     const fs = await import('fs/promises');
-    const path = `/Users/lco/GitHub/quote0-mcp/${filename}`;
+    const path = `${process.cwd()}/${filename}`;
     
     try {
       const data = await fs.readFile(path, 'utf-8');

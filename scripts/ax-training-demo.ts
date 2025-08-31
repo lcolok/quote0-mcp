@@ -63,7 +63,7 @@ async function runAxTrainingDemo() {
 
     // 6. 展示中间产物信息
     console.log('\n💾 中间产物已保存到:');
-    console.log('📁 /Users/lco/GitHub/quote0-mcp/ax-optimization-artifacts/');
+    console.log(`📁 ${process.cwd()}/ax-optimization-artifacts/`);
     console.log('   - 包含完整的优化状态和学习结果');
     console.log('   - 可用于生产环境部署');
     console.log('   - 支持版本管理和回滚');
