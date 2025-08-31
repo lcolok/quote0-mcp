@@ -1,6 +1,40 @@
-# MindReset MCP Server
+# Quote0-MCP
 
-专为 MindReset 1-bit 黑白点阵式水墨屏设备打造的智能显示系统。集成零维护天气组件和专业图片处理工具，基于实际设备测试验证的最佳优化策略。
+智能新闻和组件生成系统，支持模块化架构和自动化部署。专为 MindReset 1-bit 黑白点阵式水墨屏设备打造的智能显示系统。
+
+## 🚀 快速开始
+
+### 一键部署（推荐）
+
+在全新机器上，只需一个命令即可完成所有设置：
+
+```bash
+# 安装依赖
+bun install
+
+# 自动化部署所有服务
+bun setup
+```
+
+这将自动完成：
+- ✅ 环境检查（Docker、Bun等）
+- ✅ 创建环境配置文件
+- ✅ 启动必要的Docker服务
+- ✅ 健康检查
+- ✅ 提供使用指南
+
+### 验证部署
+
+```bash
+# 检查服务状态
+bun check
+
+# 查看运行中的服务  
+bun status
+
+# 测试基本功能
+bun widget:modular-news technology rss passthrough 1 json
+```
 
 ## 🎯 核心特性
 

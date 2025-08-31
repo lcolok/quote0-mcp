@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:image-sender": "mkdir -p dist/image-sender/interfaces/cli && cp -r src/image-sender/* dist/image-sender/ 2>/dev/null || echo 'image-sender files copied'",
     "build:ax-framework": "tsc -p ax-framework/tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
@@ -33,7 +34,10 @@
     "widget:test-multi": "tsx src/react-widgets/tests/multi-source.test.ts",
     "widget:diagnostics": "tsx src/react-widgets/tools/network-diagnostics.ts",
     "widget:monitor": "tsx src/react-widgets/tools/api-monitor.ts",
-    "icons:test": "tsx scripts/test-icons.ts"
+    "icons:test": "tsx scripts/test-icons.ts",
+    "setup": "bunx tsx scripts/setup-services.ts",
+    "check": "bunx tsx scripts/check-services.ts",
+    "status": "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}' --filter name=quote0"
   },
   "keywords": [
     "mcp",

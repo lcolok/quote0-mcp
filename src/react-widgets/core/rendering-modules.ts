@@ -147,6 +147,10 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       // 初始化渲染器
       await minioWidgetRenderer.initialize();
       
+      // 初始化字体存储服务（检验并上传字体到MinIO）
+      const { fontStorageService } = await import('./font-storage.js');
+      await fontStorageService.initialize();
+      
       // 创建新闻数据对象
       const newsData = {
         title: data.title,
@@ -162,7 +166,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       // 渲染组件为图片
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
       
-      const imageBuffer = await minioWidgetRenderer.renderToBuffer(
+      const imageBuffer = await minioWidgetRenderer.renderToImage(
         React.createElement(NewsWidget, { 
           data: newsData,
           border: borderColor 
@@ -176,17 +180,38 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       
       // 保存图片到MinIO
       const imageStorage = getImageStorage();
-      await imageStorage.initialize();
+      const { writeFile, unlink } = await import('fs/promises');
+      const { join } = await import('path');
+      const { tmpdir } = await import('os');
       
       const timestamp = Date.now();
       const filename = `modular_${data.id}_${timestamp}.png`;
-      const datePath = new Date().toISOString().split('T')[0].replace(/-/g, '/');
-      const imagePath = `widgets/news/${datePath}/${filename}`;
       
-      const imageUrl = await imageStorage.uploadImage(imagePath, imageBuffer);
+      // 先保存到临时文件
+      const tempPath = join(tmpdir(), filename);
+      await writeFile(tempPath, imageBuffer);
       
-      console.log(`✅ 新闻组件渲染完成: ${imageUrl}`);
-      return imageUrl;
+      try {
+        // 上传到MinIO
+        const metadata = {
+          widgetType: 'news',
+          cacheKey: `${data.category}_${data.index || 0}_${timestamp}`,
+          renderConfig: config
+        };
+        
+        const uploadResult = await imageStorage.uploadImage(tempPath, metadata);
+        const imageUrl = uploadResult.url;
+        
+        console.log(`✅ 新闻组件渲染完成: ${imageUrl}`);
+        return imageUrl;
+      } finally {
+        // 清理临时文件
+        try {
+          await unlink(tempPath);
+        } catch (error) {
+          // 忽略删除错误
+        }
+      }
       
     } catch (error) {
       console.error('新闻组件渲染失败:', error);
@@ -447,31 +472,10 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       // 推送到设备
       console.log('📤 推送到MindReset设备...');
       
-      // 先进行设备健康检查
-      console.log('🩺 执行设备连通性检查...');
-      const { MindResetDeviceClient } = await import('../../image-sender/services/api/device-client.js');
-      const deviceClient = MindResetDeviceClient.fromEnvironment();
-      const healthCheck = await deviceClient.checkDeviceHealth();
+      // 设备健康检查API已移除，直接进行推送
+      console.log('📤 准备推送到MindReset设备...');
       
-      if (!healthCheck.success) {
-        console.warn('⚠️ 设备健康检查失败，但仍将尝试推送');
-        console.log(`健康检查结果: ${healthCheck.error}`);
-        console.log(`设备连通性状态: ${healthCheck.connectivity}`);
-        
-        if (healthCheck.connectivity === 'offline') {
-          console.log(`
-🚨 设备似乎处于离线状态
-🔍 建议立即检查：
-1. MindReset设备的电源指示灯状态
-2. USB数据线是否松动，尝试重新插拔
-3. 设备屏幕是否有任何显示
-4. 在 https://dot.mindreset.tech 管理界面查看设备状态`);
-        }
-      } else {
-        console.log('✅ 设备健康检查通过，设备在线且响应正常');
-      }
-      
-      const deviceCommand = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${localImagePath}" "0" "${data.link || ''}" "ORDERED"`;
+      const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${localImagePath}" "0" "${data.link || ''}" "ORDERED"`;
       
       // 实现自动重试机制处理429错误
       let retryCount = 0;
@@ -480,9 +484,17 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       
       while (retryCount <= maxRetries) {
         try {
-          const { stdout, stderr } = await execAsync(deviceCommand);
-          console.log('✅ 设备推送完成');
-          if (stdout) console.log('设备响应:', stdout);
+          const { stdout, stderr } = await execAsync(deviceCommand, { 
+            cwd: process.cwd(),
+            env: process.env
+          });
+          
+          if (stdout) {
+            console.log(stdout);
+          }
+          if (stderr) {
+            console.error(stderr);
+          }
           
           return {
             imageUrl,

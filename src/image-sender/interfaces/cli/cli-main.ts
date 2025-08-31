@@ -110,6 +110,7 @@ async function handleServerDitherMode(args: string[]) {
   const ditherType = args[3] || 'ORDERED';
   const ditherKernel = args[4] || undefined;
 
+
   if (!imagePath) {
     console.error('❌ 请提供图片路径');
     process.exit(1);
@@ -238,6 +239,13 @@ async function handleMonochromeMode(args: string[]) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// 检查是否作为主模块运行
+import { fileURLToPath } from 'url';
+
+const currentFile = fileURLToPath(import.meta.url);
+const scriptFile = process.argv[1];
+
+
+if (currentFile === scriptFile) {
   main();
 }

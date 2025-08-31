@@ -5,8 +5,29 @@
  */
 
 import { modularNewsPlugin } from '../plugins/modular-news-plugin.js';
+import { readFileSync } from 'fs';
+
+function loadEnvironment(): void {
+  try {
+    const envContent = readFileSync('.env', 'utf8');
+    const lines = envContent.split('\n');
+    for (const line of lines) {
+      if (line.trim() && !line.trim().startsWith('#')) {
+        const [key, ...valueParts] = line.split('=');
+        if (key && valueParts.length > 0) {
+          process.env[key.trim()] = valueParts.join('=').trim();
+        }
+      }
+    }
+    console.log('✅ 已加载环境变量:', process.cwd() + '/.env');
+  } catch (error) {
+    console.warn('警告：无法加载.env文件，MinIO和字体服务可能不可用');
+  }
+}
 
 async function main() {
+  // 首先加载环境变量
+  loadEnvironment();
   try {
     console.log('🧩 模块化新闻组件测试开始...\n');
 
@@ -59,9 +80,18 @@ async function main() {
     console.log('⚙️  配置:', config);
     console.log('');
 
-    // 执行数据获取
+    // 执行数据获取（带超时处理）
     const startTime = Date.now();
-    const result = await modularNewsPlugin.getData(params);
+    console.log('⚡ 开始执行数据获取...');
+    
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('执行超时：操作时间超过60秒，请检查服务状态')), 60000);
+    });
+    
+    const result = await Promise.race([
+      modularNewsPlugin.getData(params),
+      timeoutPromise
+    ]);
     const duration = Date.now() - startTime;
 
     console.log(`\\n✅ 模块化新闻处理完成！`);
@@ -79,12 +109,26 @@ async function main() {
     }
 
   } catch (error) {
-    console.error('❌ 测试失败:', error instanceof Error ? error.message : error);
+    console.error('\n❌ 测试失败:', error instanceof Error ? error.message : error);
+    
+    if (error instanceof Error && error.message.includes('超时')) {
+      console.log('\n🔧 故障排除建议:');
+      console.log('1. 检查 Docker 服务是否正在运行: docker ps');
+      console.log('2. 启动必要的服务: bun setup');
+      console.log('3. 检查服务健康状态: bun widget:modular-news --health');
+      console.log('4. 查看详细日志: docker-compose logs');
+    } else if (error instanceof Error && error.message.includes('连接')) {
+      console.log('\n🔧 网络连接问题:');
+      console.log('1. 检查网络连接');
+      console.log('2. 确认API服务可用');
+      console.log('3. 检查防火墙设置');
+    }
+    
     process.exit(1);
   }
 }
 
 // 运行测试
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.main) {
   main().catch(console.error);
 }

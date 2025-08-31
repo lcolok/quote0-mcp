@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: quote0_user
       POSTGRES_PASSWORD: quote0_password
     ports:
-      - "5432:5432"
+      - "25432:5432"  # 使用非冲突端口
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
@@ -31,8 +31,8 @@ services:
       MINIO_ROOT_USER: quote0_minio
       MINIO_ROOT_PASSWORD: quote0_minio_password
     ports:
-      - "9000:9000"  # API端口
-      - "9001:9001"  # Web控制台端口
+      - "29000:9000"  # API端口使用非冲突端口
+      - "29001:9001"  # Web控制台端口
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
@@ -50,7 +50,7 @@ services:
     image: redis:7-alpine
     container_name: quote0-redis
     ports:
-      - "6379:6379"
+      - "26379:6379"  # 使用非冲突端口
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru

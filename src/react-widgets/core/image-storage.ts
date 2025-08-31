@@ -32,6 +32,13 @@ export class ImageStorageService {
   private bucket: string;
   private baseUrl: string;
 
+  /**
+   * 获取MinIO客户端（供字体存储服务使用）
+   */
+  getClient(): Minio.Client {
+    return this.client;
+  }
+
   constructor(options: {
     endpoint: string;
     accessKey: string;
@@ -342,14 +349,17 @@ let imageStorage: ImageStorageService | null = null;
 
 export function getImageStorage(): ImageStorageService {
   if (!imageStorage) {
-    imageStorage = new ImageStorageService({
+    const config = {
       endpoint: process.env.MINIO_ENDPOINT || 'localhost',
       port: parseInt(process.env.MINIO_PORT || '9000'),
       accessKey: process.env.MINIO_ACCESS_KEY || 'quote0_minio',
       secretKey: process.env.MINIO_SECRET_KEY || 'quote0_minio_password',
       bucket: process.env.MINIO_BUCKET || 'quote0-images',
       useSSL: process.env.MINIO_USE_SSL === 'true'
-    });
+    };
+    
+    console.log(`🔧 MinIO配置: ${config.endpoint}:${config.port} (bucket: ${config.bucket})`);
+    imageStorage = new ImageStorageService(config);
   }
   return imageStorage;
 }

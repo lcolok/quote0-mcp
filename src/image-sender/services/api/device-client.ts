@@ -167,59 +167,6 @@ export class MindResetDeviceClient {
     }
   }
 
-  /**
-   * 检查设备连通性和健康状态
-   */
-  async checkDeviceHealth(): Promise<ApiResponse & { connectivity?: 'online' | 'offline' | 'unknown' }> {
-    try {
-      // 发送一个最小的健康检查请求
-      const healthCheckPayload = {
-        deviceId: this.config.deviceId,
-        message: "健康检查",
-        signature: "系统测试"
-      };
-
-      console.log(`🩺 检查设备健康状态: ${this.config.deviceId}`);
-      
-      const response = await fetch(`${this.baseUrl}/open/text`, {
-        method: "POST",
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(healthCheckPayload),
-      });
-
-      if (response.ok) {
-        const result = await response.text();
-        console.log(`✅ 设备在线且响应正常`);
-        return { 
-          success: true, 
-          data: result,
-          connectivity: 'online'
-        };
-      } else if (response.status === 500) {
-        console.log(`⚠️ 设备可能离线或连接异常`);
-        return { 
-          success: false, 
-          error: "设备连接异常，请检查物理连接",
-          connectivity: 'offline'
-        };
-      } else {
-        const error = await response.text();
-        console.log(`❌ 设备健康检查失败: ${response.status} ${error}`);
-        return { 
-          success: false, 
-          error: `健康检查失败: ${response.status} ${response.statusText}`,
-          connectivity: 'unknown'
-        };
-      }
-    } catch (error) {
-      console.log(`❌ 网络连接失败: ${error instanceof Error ? error.message : error}`);
-      return {
-        success: false,
-        error: `网络连接失败: ${error instanceof Error ? error.message : String(error)}`,
-        connectivity: 'unknown'
-      };
-    }
-  }
 
   async sendText(message: string, options: { title?: string; signature?: string } = {}): Promise<ApiResponse> {
     try {

@@ -57,9 +57,9 @@ export class FontStorageService {
    */
   private async ensureFontBucket(): Promise<void> {
     try {
-      const exists = await this.imageStorage.client.bucketExists(this.fontBucket);
+      const exists = await this.imageStorage.getClient().bucketExists(this.fontBucket);
       if (!exists) {
-        await this.imageStorage.client.makeBucket(this.fontBucket);
+        await this.imageStorage.getClient().makeBucket(this.fontBucket);
         console.log(`📦 创建字体桶: ${this.fontBucket}`);
         
         // 设置公开读取策略
@@ -75,7 +75,7 @@ export class FontStorageService {
           ]
         };
         
-        await this.imageStorage.client.setBucketPolicy(this.fontBucket, JSON.stringify(policy));
+        await this.imageStorage.getClient().setBucketPolicy(this.fontBucket, JSON.stringify(policy));
         console.log(`🔓 字体桶设置为公开访问`);
       } else {
         console.log(`📦 字体桶已存在: ${this.fontBucket}`);
@@ -105,7 +105,7 @@ export class FontStorageService {
         let needsUpload = true;
         
         try {
-          const remoteStat = await this.imageStorage.client.statObject(this.fontBucket, objectKey);
+          const remoteStat = await this.imageStorage.getClient().statObject(this.fontBucket, objectKey);
           const remoteChecksum = remoteStat.metaData['x-checksum'];
           
           if (remoteChecksum === localChecksum) {
@@ -150,7 +150,7 @@ export class FontStorageService {
       };
       
       // 上传到MinIO
-      await this.imageStorage.client.putObject(
+      await this.imageStorage.getClient().putObject(
         this.fontBucket,
         objectKey,
         fontData,
@@ -211,7 +211,7 @@ export class FontStorageService {
     const objectKey = `fonts/${fileName}`;
     
     try {
-      await this.imageStorage.client.statObject(this.fontBucket, objectKey);
+      await this.imageStorage.getClient().statObject(this.fontBucket, objectKey);
       return true;
     } catch (error) {
       return false;
@@ -236,7 +236,7 @@ export class FontStorageService {
       const objectKey = `fonts/${fileName}`;
       
       try {
-        const stat = await this.imageStorage.client.statObject(this.fontBucket, objectKey);
+        const stat = await this.imageStorage.getClient().statObject(this.fontBucket, objectKey);
         const metadata: FontMetadata = {
           size: parseInt(size),
           fileName,
@@ -265,7 +265,7 @@ export class FontStorageService {
     let cleanedCount = 0;
     
     try {
-      const objectsStream = this.imageStorage.client.listObjects(this.fontBucket, 'fonts/', true);
+      const objectsStream = this.imageStorage.getClient().listObjects(this.fontBucket, 'fonts/', true);
       
       for await (const obj of objectsStream) {
         // 检查是否为有效的字体文件
@@ -274,7 +274,7 @@ export class FontStorageService {
         );
         
         if (!isValidFont) {
-          await this.imageStorage.client.removeObject(this.fontBucket, obj.name!);
+          await this.imageStorage.getClient().removeObject(this.fontBucket, obj.name!);
           console.log(`🗑️ 清理无效字体文件: ${obj.name}`);
           cleanedCount++;
         }
