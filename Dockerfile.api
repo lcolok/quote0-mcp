@@ -45,6 +45,7 @@ RUN bun install --frozen-lockfile
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY docker/ ./docker/
+COPY ax-framework/ ./ax-framework/
 
 # 创建必要的目录
 RUN mkdir -p processed-images/widgets/news

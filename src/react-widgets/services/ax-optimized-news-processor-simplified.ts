@@ -101,6 +101,12 @@ export class AxOptimizedNewsProcessorSimplified {
 
     try {
       const { OpenAI } = await import('openai');
+      
+      console.log('🔗 连接LLM服务...');
+      console.log(`📡 端点: ${this.options.baseURL}`);
+      console.log(`🤖 模型: ${this.options.model}`);
+      console.log(`🔑 API密钥: ${this.options.apiKey ? `${this.options.apiKey.substring(0, 8)}...` : '未配置'}`);
+      
       const client = new OpenAI({
         apiKey: this.options.apiKey,
         baseURL: this.options.baseURL
@@ -113,12 +119,20 @@ export class AxOptimizedNewsProcessorSimplified {
         ...titleProgram.modelConfig
       });
 
+      if (!titleResponse.choices || titleResponse.choices.length === 0) {
+        throw new Error('LLM未返回标题优化结果');
+      }
+
       console.log('📝 生成优化摘要...');
       const summaryResponse = await client.chat.completions.create({
         model: this.options.model,
         messages: [{ role: 'user', content: summaryPrompt }],
         ...summaryProgram.modelConfig
       });
+
+      if (!summaryResponse.choices || summaryResponse.choices.length === 0) {
+        throw new Error('LLM未返回摘要优化结果');
+      }
 
       const title = titleResponse.choices[0]?.message?.content?.trim() || '无标题';
       const body = summaryResponse.choices[0]?.message?.content?.trim() || '无内容';
@@ -128,12 +142,37 @@ export class AxOptimizedNewsProcessorSimplified {
       return {
         title: title,
         body: body,
-        footer: 'Solidot AX Optimized',
+        footer: 'AX智能优化',
         optimizationUsed: true
       };
     } catch (error) {
-      console.error('❌ 优化处理失败:', error);
-      throw error;
+      console.error('❌ LLM优化处理失败:', error);
+      
+      // 详细错误分类
+      if (error instanceof Error) {
+        const errorMessage = error.message;
+        const errorString = JSON.stringify(error, null, 2); // 包含更多错误信息
+        
+        if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+          throw new Error(`LLM API认证失败: ${errorMessage} (请检查API密钥是否正确)`);
+        } else if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+          throw new Error(`LLM服务未找到: ${errorMessage} (请检查baseURL和模型名称)`);
+        } else if (errorMessage.includes('timeout') || errorMessage.includes('ETIMEDOUT')) {
+          throw new Error(`LLM服务超时: ${errorMessage} (请检查网络连接和服务状态)`);
+        } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
+          throw new Error(`LLM API调用频率限制: ${errorMessage} (请稍后重试)`);
+        } else if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('Connection error') || errorMessage.includes('UND_ERR_SOCKET')) {
+          throw new Error(`无法连接LLM服务: ${errorMessage} (请检查baseURL是否正确: ${this.options.baseURL})`);
+        } else if (errorMessage.includes('fetch failed') || errorMessage.includes('other side closed')) {
+          throw new Error(`LLM服务连接失败: ${errorMessage} (请检查网络连接和服务端点: ${this.options.baseURL})`);
+        } else if (errorMessage.includes('Invalid URL')) {
+          throw new Error(`LLM服务端点URL无效: ${errorMessage} (请检查baseURL格式: ${this.options.baseURL})`);
+        } else {
+          throw new Error(`LLM优化处理失败: ${errorMessage} (端点: ${this.options.baseURL})`);
+        }
+      } else {
+        throw new Error('LLM优化处理失败: 未知错误类型');
+      }
     }
   }
 

@@ -336,7 +336,19 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       return this.processorInstance;
     }
     
+    // 详细配置检查
+    console.log('🔍 AX处理器配置检查...');
+    const configReport = this.validateConfiguration();
+    if (!configReport.isValid) {
+      const errorMsg = `AX处理器配置错误: ${configReport.errors.join(', ')}`;
+      console.error(`❌ ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
+    console.log('✅ AX处理器配置检查通过');
+    
     try {
+      // 检查核心依赖
+      console.log('📦 检查AX处理器依赖...');
       const { AxOptimizedNewsProcessorSimplified } = await import('../services/ax-optimized-news-processor-simplified.js');
       
       this.processorInstance = new AxOptimizedNewsProcessorSimplified({
@@ -352,12 +364,22 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       if (!loadSuccess) {
         console.log('⚡ 预训练模型未找到，使用基础数据进行快速训练...');
         
-        // 导入训练数据并进行快速训练
-        const { trainingData } = await import('../../../ax-framework/compiled/ax-training-data.js');
-        const sampleData = trainingData.slice(0, 3);
-        
-        await this.processorInstance.quickTrain(sampleData);
-        console.log('✅ 快速训练完成');
+        try {
+          // 导入训练数据并进行快速训练
+          const { trainingData } = await import('../../../ax-framework/compiled/ax-training-data.js');
+          
+          if (!trainingData || !Array.isArray(trainingData) || trainingData.length === 0) {
+            throw new Error('训练数据为空或格式不正确');
+          }
+          
+          const sampleData = trainingData.slice(0, 3);
+          console.log(`📊 使用 ${sampleData.length} 条样本数据进行快速训练...`);
+          
+          await this.processorInstance.quickTrain(sampleData);
+          console.log('✅ 快速训练完成');
+        } catch (trainingError) {
+          throw new Error(`快速训练失败: ${trainingError instanceof Error ? trainingError.message : '训练数据加载错误'}`);
+        }
       } else {
         console.log('✅ 预训练模型加载成功');
       }
@@ -365,9 +387,53 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       return this.processorInstance;
       
     } catch (error) {
-      console.error('AX处理器初始化失败:', error);
-      throw new Error(`AX处理器初始化失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      console.error('❌ AX处理器初始化失败:', error);
+      
+      // 详细错误分类
+      if (error instanceof Error) {
+        if (error.message.includes('训练数据')) {
+          throw new Error(`AX处理器训练数据错误: ${error.message} (请检查 ax-framework/compiled/ax-training-data.js 文件)`);
+        } else if (error.message.includes('模型')) {
+          throw new Error(`AX处理器模型错误: ${error.message} (请检查 ax-framework/models/production/latest.json 文件)`);
+        } else if (error.message.includes('Cannot resolve module')) {
+          throw new Error(`AX处理器依赖缺失: ${error.message} (请检查 ax-framework 目录结构)`);
+        } else {
+          throw new Error(`AX处理器初始化失败: ${error.message}`);
+        }
+      } else {
+        throw new Error('AX处理器初始化失败: 未知错误类型');
+      }
     }
+  }
+  
+  private validateConfiguration(): { isValid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    
+    // API密钥检查
+    if (!this.config.apiKey) {
+      errors.push('LLM_API_KEY 未配置');
+    } else if (this.config.apiKey === 'your_api_key_here') {
+      errors.push('LLM_API_KEY 仍为占位符，请设置真实API密钥');
+    } else if (this.config.apiKey.length < 10) {
+      errors.push('LLM_API_KEY 格式可能不正确 (长度过短)');
+    }
+    
+    // 端点URL检查
+    if (!this.config.baseURL) {
+      errors.push('LLM_BASE_URL 未配置');
+    } else if (!this.config.baseURL.startsWith('http')) {
+      errors.push('LLM_BASE_URL 格式不正确 (必须以http开头)');
+    }
+    
+    // 模型配置检查
+    if (!this.config.model) {
+      errors.push('LLM_MODEL 未配置');
+    }
+    
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
   }
   
   async processData(rawData: RawDataItem, params: ProcessingParams): Promise<ProcessedDataItem> {
