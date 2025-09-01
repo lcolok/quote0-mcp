@@ -1,0 +1,67 @@
+# 模块化新闻API - 一键部署方案
+# 使用Puppeteer官方镜像，在其基础上安装Bun
+
+FROM ghcr.io/puppeteer/puppeteer:latest
+
+# 设置用户为root以进行安装
+USER root
+
+# 安装必要工具和Chrome
+RUN apt-get update && apt-get install -y \
+    unzip \
+    curl \
+    wget \
+    gnupg \
+    ca-certificates \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# 使用官方安装脚本安装Bun（会自动检测架构）
+RUN curl -fsSL https://bun.sh/install | bash \
+    && ln -s /root/.bun/bin/bun /usr/local/bin/bun \
+    && ln -s /root/.bun/bin/bunx /usr/local/bin/bunx \
+    && bun --version
+
+# Puppeteer配置（使用已安装的Chrome）
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+
+# 验证Chrome安装
+RUN /usr/bin/google-chrome-stable --version
+
+WORKDIR /app
+
+# 复制依赖文件
+COPY package.json bun.lock ./
+COPY assets/ ./assets/
+
+# 安装依赖
+RUN bun install --frozen-lockfile
+
+# 复制源代码
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY docker/ ./docker/
+
+# 创建必要的目录
+RUN mkdir -p processed-images/widgets/news
+
+# 设置环境变量
+ENV NODE_ENV=production
+ENV PORT=3001
+
+# 暴露端口
+EXPOSE 3001
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3001/api/health || exit 1
+
+# 继续使用root用户运行（Puppeteer镜像的默认配置）
+# USER pptruser
+
+# 启动命令
+CMD ["bun", "src/api/server.ts"]
