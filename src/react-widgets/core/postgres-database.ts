@@ -114,12 +114,13 @@ export class PostgresDatabase {
         SELECT table_name 
         FROM information_schema.tables 
         WHERE table_schema = 'public' AND table_name IN (
-          'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats'
+          'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats',
+          'news_scheduler_jobs', 'news_push_stats', 'news_push_log'
         )
       `);
       
       const existingTables = tablesResult.rows.map(row => row.table_name);
-      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats'];
+      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log'];
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
       
       console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
@@ -220,6 +221,46 @@ export class PostgresDatabase {
           last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- 调度任务配置
+      CREATE TABLE IF NOT EXISTS news_scheduler_jobs (
+          id VARCHAR(64) PRIMARY KEY,
+          name VARCHAR(100),
+          description TEXT,
+          category VARCHAR(50) NOT NULL,
+          data_source VARCHAR(50) NOT NULL,
+          rss_source VARCHAR(100) NOT NULL,
+          processor VARCHAR(50) NOT NULL,
+          renderer VARCHAR(50) NOT NULL,
+          interval_ms INTEGER NOT NULL,
+          initial_delay_ms INTEGER NOT NULL DEFAULT 0,
+          options JSONB,
+          index_strategy JSONB NOT NULL,
+          enabled BOOLEAN NOT NULL DEFAULT true,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- 新闻推送统计
+      CREATE TABLE IF NOT EXISTS news_push_stats (
+          fingerprint VARCHAR(64) PRIMARY KEY,
+          title TEXT,
+          link TEXT,
+          source VARCHAR(100),
+          category VARCHAR(50),
+          push_count INTEGER NOT NULL DEFAULT 0,
+          last_pushed_at TIMESTAMP,
+          metadata JSONB
+      );
+
+      -- 新闻推送日志
+      CREATE TABLE IF NOT EXISTS news_push_log (
+          id SERIAL PRIMARY KEY,
+          job_id VARCHAR(64),
+          fingerprint VARCHAR(64) NOT NULL REFERENCES news_push_stats(fingerprint) ON DELETE CASCADE,
+          pushed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          result JSONB
+      );
+
       -- 创建索引
       CREATE INDEX IF NOT EXISTS idx_news_cache_key ON news_cache(cache_key);
       CREATE INDEX IF NOT EXISTS idx_news_cache_source ON news_cache(source, category, index_num);
@@ -231,6 +272,10 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_image_cache_key ON image_cache(cache_key);
       CREATE INDEX IF NOT EXISTS idx_image_cache_news ON image_cache(news_cache_id);
       CREATE INDEX IF NOT EXISTS idx_image_cache_expires ON image_cache(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_enabled ON news_scheduler_jobs(enabled);
+      CREATE INDEX IF NOT EXISTS idx_push_stats_last ON news_push_stats(last_pushed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_push_stats_count ON news_push_stats(push_count, last_pushed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_push_log_job ON news_push_log(job_id, pushed_at DESC);
 
       -- 插入初始统计数据
       INSERT INTO cache_stats (cache_type, hit_count, miss_count, total_requests) 
@@ -253,6 +298,11 @@ export class PostgresDatabase {
       DROP TRIGGER IF EXISTS update_processing_tasks_updated_at ON processing_tasks;
       CREATE TRIGGER update_processing_tasks_updated_at 
           BEFORE UPDATE ON processing_tasks 
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+      DROP TRIGGER IF EXISTS update_scheduler_jobs_updated_at ON news_scheduler_jobs;
+      CREATE TRIGGER update_scheduler_jobs_updated_at
+          BEFORE UPDATE ON news_scheduler_jobs
           FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
       -- 创建清理函数
@@ -774,6 +824,247 @@ export class PostgresDatabase {
     } catch (error) {
       console.error('❌ 获取数据库统计失败:', error);
       return { cachedNews: 0, activeTasks: 0, rssSnapshots: 0, cachedImages: 0, cacheStats: {} };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 调度任务：获取全部配置
+   */
+  async getSchedulerJobs(): Promise<any[]> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM news_scheduler_jobs ORDER BY id');
+      return result.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        category: row.category,
+        dataSource: row.data_source,
+        rssSource: row.rss_source,
+        processor: row.processor,
+        renderer: row.renderer,
+        intervalMs: row.interval_ms,
+        initialDelayMs: row.initial_delay_ms,
+        options: row.options || {},
+        indexStrategy: row.index_strategy || {},
+        enabled: row.enabled,
+        createdAt: row.created_at?.toISOString?.() || row.created_at,
+        updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  async getSchedulerJob(id: string): Promise<any | null> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM news_scheduler_jobs WHERE id = $1', [id]);
+      if (result.rows.length === 0) return null;
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        category: row.category,
+        dataSource: row.data_source,
+        rssSource: row.rss_source,
+        processor: row.processor,
+        renderer: row.renderer,
+        intervalMs: row.interval_ms,
+        initialDelayMs: row.initial_delay_ms,
+        options: row.options || {},
+        indexStrategy: row.index_strategy || {},
+        enabled: row.enabled,
+        createdAt: row.created_at?.toISOString?.() || row.created_at,
+        updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async upsertSchedulerJob(job: {
+    id: string;
+    name?: string;
+    description?: string;
+    category: string;
+    dataSource: string;
+    rssSource: string;
+    processor: string;
+    renderer: string;
+    intervalMs: number;
+    initialDelayMs: number;
+    options?: Record<string, any>;
+    indexStrategy: Record<string, any>;
+    enabled?: boolean;
+  }): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO news_scheduler_jobs (
+          id, name, description, category, data_source, rss_source,
+          processor, renderer, interval_ms, initial_delay_ms, options,
+          index_strategy, enabled
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, $11,
+          $12, COALESCE($13, true)
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          name = EXCLUDED.name,
+          description = EXCLUDED.description,
+          category = EXCLUDED.category,
+          data_source = EXCLUDED.data_source,
+          rss_source = EXCLUDED.rss_source,
+          processor = EXCLUDED.processor,
+          renderer = EXCLUDED.renderer,
+          interval_ms = EXCLUDED.interval_ms,
+          initial_delay_ms = EXCLUDED.initial_delay_ms,
+          options = EXCLUDED.options,
+          index_strategy = EXCLUDED.index_strategy,
+          enabled = EXCLUDED.enabled,
+          updated_at = CURRENT_TIMESTAMP
+      `, [
+        job.id,
+        job.name || null,
+        job.description || null,
+        job.category,
+        job.dataSource,
+        job.rssSource,
+        job.processor,
+        job.renderer,
+        job.intervalMs,
+        job.initialDelayMs,
+        job.options || {},
+        job.indexStrategy || {},
+        job.enabled ?? true
+      ]);
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteSchedulerJob(id: string): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('DELETE FROM news_scheduler_jobs WHERE id = $1', [id]);
+    } finally {
+      client.release();
+    }
+  }
+
+  async setSchedulerJobEnabled(id: string, enabled: boolean): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        UPDATE news_scheduler_jobs
+        SET enabled = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [enabled, id]);
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordPushResult(entry: {
+    jobId: string;
+    fingerprint: string;
+    title?: string;
+    link?: string;
+    source?: string;
+    category?: string;
+    metadata?: Record<string, any>;
+    result?: Record<string, any>;
+  }): Promise<void> {
+    const client = await this.pool.connect();
+    const transformedMetadata = entry.metadata || {};
+    try {
+      await client.query('BEGIN');
+
+      await client.query(`
+        INSERT INTO news_push_stats (
+          fingerprint, title, link, source, category, push_count, last_pushed_at, metadata
+        ) VALUES ($1, $2, $3, $4, $5, 1, CURRENT_TIMESTAMP, $6)
+        ON CONFLICT (fingerprint) DO UPDATE SET
+          title = COALESCE(EXCLUDED.title, news_push_stats.title),
+          link = COALESCE(EXCLUDED.link, news_push_stats.link),
+          source = COALESCE(EXCLUDED.source, news_push_stats.source),
+          category = COALESCE(EXCLUDED.category, news_push_stats.category),
+          push_count = news_push_stats.push_count + 1,
+          last_pushed_at = CURRENT_TIMESTAMP,
+          metadata = COALESCE(EXCLUDED.metadata, news_push_stats.metadata)
+      `, [
+        entry.fingerprint,
+        entry.title || null,
+        entry.link || null,
+        entry.source || null,
+        entry.category || null,
+        transformedMetadata
+      ]);
+
+      await client.query(`
+        INSERT INTO news_push_log (job_id, fingerprint, result)
+        VALUES ($1, $2, $3)
+      `, [
+        entry.jobId || null,
+        entry.fingerprint,
+        entry.result || null
+      ]);
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('❌ 记录新闻推送结果失败:', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getPushStatsForFingerprints(fingerprints: string[]): Promise<Record<string, { pushCount: number; lastPushedAt: string | null }>> {
+    if (!fingerprints.length) {
+      return {};
+    }
+    const client = await this.pool.connect();
+    try {
+      const params = fingerprints.map((_, index) => `$${index + 1}`).join(',');
+      const result = await client.query(
+        `SELECT fingerprint, push_count, last_pushed_at FROM news_push_stats WHERE fingerprint IN (${params})`,
+        fingerprints
+      );
+
+      const map: Record<string, { pushCount: number; lastPushedAt: string | null }> = {};
+      for (const row of result.rows) {
+        map[row.fingerprint] = {
+          pushCount: row.push_count || 0,
+          lastPushedAt: row.last_pushed_at ? row.last_pushed_at.toISOString?.() || row.last_pushed_at : null
+        };
+      }
+
+      return map;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getRecentPushLogs(limit: number = 50): Promise<any[]> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT id, job_id, fingerprint, pushed_at, result FROM news_push_log ORDER BY pushed_at DESC LIMIT $1`,
+        [limit]
+      );
+
+      return result.rows.map((row) => ({
+        id: row.id,
+        jobId: row.job_id,
+        fingerprint: row.fingerprint,
+        pushedAt: row.pushed_at?.toISOString?.() || row.pushed_at,
+        result: row.result || null
+      }));
     } finally {
       client.release();
     }

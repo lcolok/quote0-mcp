@@ -50,6 +50,10 @@ RUN bun install --frozen-lockfile
 # ===================== 阶段3: 应用构建 =====================  
 FROM dependencies as app-build
 
+# build cache bust argument (set from deploy tooling)
+ARG BUILD_REVISION=0
+RUN echo "Build revision: ${BUILD_REVISION}"
+
 # 复制框架相关文件 (变化频率中等)
 COPY ax-framework/ ./ax-framework/
 COPY docker/ ./docker/

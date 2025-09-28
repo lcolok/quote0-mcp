@@ -95,6 +95,8 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./processed-images:/app/processed-images
+      - ./src:/app/src
+      - ./scripts:/app/scripts
     networks:
       - quote0-network
     restart: unless-stopped

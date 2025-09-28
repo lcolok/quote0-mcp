@@ -8,7 +8,7 @@
     "mindreset-mcp": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "build:image-sender": "mkdir -p dist/image-sender/interfaces/cli && cp -r src/image-sender/* dist/image-sender/ 2>/dev/null || echo 'image-sender files copied'",
     "build:ax-framework": "tsc -p ax-framework/tsconfig.json",
     "dev": "tsx src/index.ts",
@@ -60,6 +60,7 @@
     "@types/redis": "^4.0.11",
     "@types/sqlite3": "^5.1.0",
     "canvas": "^3.2.0",
+    "dockerode": "^3.3.5",
     "epdoptimize": "^0.1.3",
     "hono": "^4.9.5",
     "minio": "^8.0.5",
@@ -74,6 +75,7 @@
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
     "undici": "^6.19.8",
+    "tar-fs": "^3.0.4",
     "weathercityid": "^0.0.3",
     "zod": "^3.25.76"
   },
