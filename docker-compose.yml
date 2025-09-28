@@ -83,6 +83,8 @@ services:
       MINIO_PORT: 9000
       # Redis配置（容器间通信使用service名）
       REDIS_URL: redis://redis:6379
+      # 时区配置
+      TZ: Asia/Shanghai
     ports:
       - "3001:3001"
     depends_on:

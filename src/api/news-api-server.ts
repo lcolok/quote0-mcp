@@ -15,6 +15,21 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { ensureSchedulerStarted, getSchedulerInstance } from './scheduler-registry.js';
 import type { NewsSchedulerJobConfig } from './news-types.js';
 
+// 时间格式化工具函数
+function formatToChinaTime(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  return d.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+}
+
 // RSS源信息
 interface RSSSourceInfo {
   id: string;
@@ -128,6 +143,13 @@ app.get('/', (c) => {
     endpoints: {
       'POST /api/news/process': '处理新闻请求',
       'GET /api/news/sources': '获取可用RSS源',
+      'GET /api/news/scheduler/jobs': '获取所有调度任务',
+      'POST /api/news/scheduler/jobs': '创建调度任务',
+      'PUT /api/news/scheduler/jobs/:id': '更新调度任务',
+      'DELETE /api/news/scheduler/jobs/:id': '删除调度任务',
+      'POST /api/news/scheduler/jobs/:id/trigger': '手动触发任务',
+      'PATCH /api/news/scheduler/jobs/:id/enabled': '启用/禁用任务',
+      'GET /api/news/scheduler/history': '查看推送历史',
       'GET /api/health': '健康检查',
       'GET /api/health/modules': '模块健康状态'
     }
@@ -284,8 +306,28 @@ app.post('/api/news/scheduler/jobs/:id/trigger', async (c) => {
     return c.json({ success: false, error: '调度器未启用' }, 503);
   }
   try {
-    await scheduler.triggerJob(id);
-    return c.json({ success: true });
+    // 支持可选的覆盖索引参数
+    let overrideIndex: number | undefined;
+    const contentType = c.req.header('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        const body = await c.req.json<{ index?: number }>();
+        if (typeof body.index === 'number') {
+          overrideIndex = body.index;
+        }
+      } catch (jsonError) {
+        // 忽略JSON解析错误，使用默认索引
+      }
+    }
+
+    await scheduler.triggerJob(id, overrideIndex);
+    const result = {
+      success: true,
+      message: overrideIndex !== undefined
+        ? `任务 ${id} 已手动触发，使用索引 ${overrideIndex}`
+        : `任务 ${id} 已手动触发，使用调度器默认索引`
+    };
+    return c.json(result);
   } catch (error) {
     console.error('❌ 手动触发调度任务失败:', error);
     return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 400);
@@ -309,7 +351,18 @@ app.patch('/api/news/scheduler/jobs/:id/enabled', async (c) => {
 app.get('/api/news/scheduler/history', async (c) => {
   const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '50', 10), 200));
   const logs = await postgres.getRecentPushLogs(limit);
-  return c.json({ logs });
+
+  // 转换时间为中国标准时间
+  const logsWithCST = logs.map(log => ({
+    ...log,
+    pushedAt: formatToChinaTime(log.pushedAt),
+    pushedAtUTC: log.pushedAt // 保留原始UTC时间供参考
+  }));
+
+  return c.json({
+    logs: logsWithCST,
+    timezone: 'Asia/Shanghai (CST)'
+  });
 });
 
 /**
@@ -350,9 +403,10 @@ app.get('/api/news/sources', (c) => {
 app.get('/api/health', (c) => {
   return c.json({
     status: 'healthy',
-    timestamp: new Date().toISOString(),
+    timestamp: formatToChinaTime(new Date()),
     service: 'Modular News API',
-    version: '1.0.0'
+    version: '1.0.0',
+    timezone: 'Asia/Shanghai (CST)'
   });
 });
 
@@ -365,13 +419,15 @@ app.get('/api/health/modules', async (c) => {
     
     return c.json({
       status: 'healthy',
-      timestamp: new Date().toISOString(),
+      timestamp: formatToChinaTime(new Date()),
+      timezone: 'Asia/Shanghai (CST)',
       modules: healthStatus
     });
   } catch (error) {
     return c.json({
-      status: 'unhealthy', 
-      timestamp: new Date().toISOString(),
+      status: 'unhealthy',
+      timestamp: formatToChinaTime(new Date()),
+      timezone: 'Asia/Shanghai (CST)',
       error: error instanceof Error ? error.message : '未知错误'
     }, 500);
   }
@@ -426,6 +482,84 @@ app.get('/api/docs', (c) => {
       },
       'GET /health/modules': {
         description: '模块健康状态检查'
+      },
+      'GET /news/scheduler/jobs': {
+        description: '获取所有调度任务列表',
+        response: {
+          jobs: 'Array<SchedulerJob> - 调度任务列表，包含运行时状态'
+        }
+      },
+      'POST /news/scheduler/jobs': {
+        description: '创建新的调度任务',
+        parameters: {
+          id: 'string - 唯一任务ID',
+          name: 'string (可选) - 任务名称',
+          description: 'string (可选) - 任务描述',
+          category: 'string - 新闻分类 (technology, business, design等)',
+          dataSource: 'string - 数据源 (rss, mock等)',
+          rssSource: 'string - RSS订阅源ID',
+          processor: 'string - 处理器 (passthrough, basic-llm, ax-optimized)',
+          renderer: 'string - 渲染器 (device, json, news)',
+          intervalMs: 'number - 执行间隔毫秒数',
+          intervalMinutes: 'number - 执行间隔分钟数 (与intervalMs二选一)',
+          initialDelayMs: 'number (可选) - 初始延迟毫秒数',
+          initialDelayMinutes: 'number (可选) - 初始延迟分钟数',
+          indexStrategy: {
+            type: 'string - 索引策略 (sequential, shuffle, random)',
+            poolSize: 'number - 索引池大小',
+            startIndex: 'number (可选) - 起始索引，默认0'
+          },
+          options: 'object (可选) - 额外配置选项',
+          enabled: 'boolean (可选) - 是否启用，默认true'
+        },
+        example: {
+          id: 'tech-news-hourly',
+          name: '科技新闻每小时推送',
+          description: '每小时推送一条优化后的科技新闻到设备',
+          category: 'technology',
+          dataSource: 'rss',
+          rssSource: 'solidot',
+          processor: 'ax-optimized',
+          renderer: 'device',
+          intervalMinutes: 60,
+          initialDelayMinutes: 5,
+          indexStrategy: {
+            type: 'shuffle',
+            poolSize: 20,
+            startIndex: 0
+          },
+          options: { border: '0' },
+          enabled: true
+        }
+      },
+      'PUT /news/scheduler/jobs/:id': {
+        description: '更新现有调度任务',
+        parameters: '同创建任务，但id从URL路径获取'
+      },
+      'DELETE /news/scheduler/jobs/:id': {
+        description: '删除调度任务',
+        parameters: {
+          id: 'string - 从URL路径获取的任务ID'
+        }
+      },
+      'POST /news/scheduler/jobs/:id/trigger': {
+        description: '手动触发调度任务执行',
+        parameters: {
+          id: 'string - 从URL路径获取的任务ID',
+          index: 'number (可选) - 覆盖索引值'
+        }
+      },
+      'PATCH /news/scheduler/jobs/:id/enabled': {
+        description: '启用或禁用调度任务',
+        parameters: {
+          enabled: 'boolean - true启用，false禁用'
+        }
+      },
+      'GET /news/scheduler/history': {
+        description: '查看推送历史记录',
+        parameters: {
+          limit: 'number (可选) - 限制返回条数，最大200，默认50'
+        }
       }
     },
     availableRSSSources: Object.keys(RSS_SOURCES),
