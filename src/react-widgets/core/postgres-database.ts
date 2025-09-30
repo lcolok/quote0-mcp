@@ -843,6 +843,8 @@ export class PostgresDatabase {
         category: row.category,
         dataSource: row.data_source,
         rssSource: row.rss_source,
+        rssSources: row.rss_sources || undefined, // jsonb类型已自动解析
+        currentSourceIndex: row.current_source_index || 0, // RSS源轮换索引
         processor: row.processor,
         renderer: row.renderer,
         intervalMs: row.interval_ms,
@@ -871,6 +873,8 @@ export class PostgresDatabase {
         category: row.category,
         dataSource: row.data_source,
         rssSource: row.rss_source,
+        rssSources: row.rss_sources || undefined, // jsonb类型已自动解析
+        currentSourceIndex: row.current_source_index || 0, // RSS源轮换索引
         processor: row.processor,
         renderer: row.renderer,
         intervalMs: row.interval_ms,
@@ -892,7 +896,8 @@ export class PostgresDatabase {
     description?: string;
     category: string;
     dataSource: string;
-    rssSource: string;
+    rssSource?: string;
+    rssSources?: string[]; // 多源轮换支持
     processor: string;
     renderer: string;
     intervalMs: number;
@@ -905,13 +910,13 @@ export class PostgresDatabase {
     try {
       await client.query(`
         INSERT INTO news_scheduler_jobs (
-          id, name, description, category, data_source, rss_source,
+          id, name, description, category, data_source, rss_source, rss_sources,
           processor, renderer, interval_ms, initial_delay_ms, options,
           index_strategy, enabled
         ) VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11,
-          $12, COALESCE($13, true)
+          $1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10, $11, $12,
+          $13, COALESCE($14, true)
         )
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
@@ -919,6 +924,7 @@ export class PostgresDatabase {
           category = EXCLUDED.category,
           data_source = EXCLUDED.data_source,
           rss_source = EXCLUDED.rss_source,
+          rss_sources = EXCLUDED.rss_sources,
           processor = EXCLUDED.processor,
           renderer = EXCLUDED.renderer,
           interval_ms = EXCLUDED.interval_ms,
@@ -933,7 +939,8 @@ export class PostgresDatabase {
         job.description || null,
         job.category,
         job.dataSource,
-        job.rssSource,
+        job.rssSource || null,
+        job.rssSources || null, // jsonb类型自动序列化
         job.processor,
         job.renderer,
         job.intervalMs,
@@ -956,6 +963,19 @@ export class PostgresDatabase {
     }
   }
 
+  async updateJobSourceIndex(id: string, currentSourceIndex: number): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        UPDATE news_scheduler_jobs
+        SET current_source_index = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `, [id, currentSourceIndex]);
+    } finally {
+      client.release();
+    }
+  }
+
   async setSchedulerJobEnabled(id: string, enabled: boolean): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -964,6 +984,20 @@ export class PostgresDatabase {
         SET enabled = $1, updated_at = CURRENT_TIMESTAMP
         WHERE id = $2
       `, [enabled, id]);
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateSchedulerJobMetadata(id: string, metadata: Record<string, any>): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        UPDATE news_scheduler_jobs
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [JSON.stringify(metadata), id]);
     } finally {
       client.release();
     }

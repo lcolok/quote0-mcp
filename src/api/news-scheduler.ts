@@ -24,6 +24,8 @@ interface SchedulerJobState {
   shuffledPointer: number;
   running: boolean;
   consecutiveFailures: number;
+  currentSourceIndex: number; // 当前使用的RSS源索引（多源轮换） | Current RSS source index for rotation
+  dynamicPoolSize: number | null; // 动态获取的poolSize（缓存） | Dynamically fetched poolSize (cached)
 }
 
 interface SchedulerJobInstance {
@@ -200,10 +202,13 @@ export class NewsScheduler {
         throw new Error('无法获取有效的新闻候选');
       }
 
+      // 获取当前使用的RSS源（支持多源轮换）
+      const currentRssSource = this.getCurrentRssSource(job);
+
       const request: NewsProcessRequest = {
         category: job.config.category,
         dataSource: job.config.dataSource,
-        rssSource: job.config.rssSource,
+        rssSource: currentRssSource,
         processor: job.config.processor,
         renderer: job.config.renderer,
         index: candidate.index,
@@ -211,7 +216,7 @@ export class NewsScheduler {
         context: candidate.context
       };
 
-      console.log(`🕒 定时任务 ${job.config.id} 准备推送 fingerprint=${candidate.fingerprint} index=${candidate.index}`);
+      console.log(`🕒 定时任务 ${job.config.id} 准备推送 source=${currentRssSource} fingerprint=${candidate.fingerprint} index=${candidate.index}`);
 
       const result = await processNews(request);
       console.log(`✅ 定时任务 ${job.config.id} 成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
@@ -225,7 +230,8 @@ export class NewsScheduler {
         source: candidate.context.source,
         metadata: {
           publishTime: candidate.context.publishTime,
-          index: candidate.index
+          index: candidate.index,
+          rssSource: currentRssSource
         },
         result: {
           workflow: result.workflow,
@@ -234,11 +240,17 @@ export class NewsScheduler {
       });
 
       this.markIndexUsed(job, candidate.index);
+
+      // 轮换到下一个RSS源（多源模式）
+      await this.rotateRssSource(job);
+
       job.state.consecutiveFailures = 0;
     } catch (error) {
       job.state.consecutiveFailures += 1;
       console.error(`❌ 定时任务 ${job.config.id} 执行失败 (连续失败 ${job.state.consecutiveFailures} 次):`, error);
-      if (job.state.consecutiveFailures >= job.config.indexStrategy.poolSize) {
+
+      const effectivePoolSize = this.getEffectivePoolSize(job);
+      if (job.state.consecutiveFailures >= effectivePoolSize) {
         this.resetIndexState(job);
       }
     } finally {
@@ -264,17 +276,31 @@ export class NewsScheduler {
       return this.fallbackCandidate(job);
     }
 
-    const fetchCount = Math.max(job.config.indexStrategy.poolSize * DEFAULT_FETCH_MULTIPLIER, DEFAULT_MIN_FETCH_COUNT);
+    // 获取当前RSS源（支持多源轮换）
+    const currentRssSource = this.getCurrentRssSource(job);
+
+    // 支持动态poolSize：如果poolSize=-1，则获取RSS源的全部条目
+    const configPoolSize = job.config.indexStrategy.poolSize;
+    const fetchCount = configPoolSize === -1
+      ? 100 // 动态模式：获取足够多的条目（最多100条）
+      : Math.max(configPoolSize * DEFAULT_FETCH_MULTIPLIER, DEFAULT_MIN_FETCH_COUNT);
+
     try {
       const rawItems: RawDataItem[] = await dataSourceModule.fetchRawData({
         category: job.config.category,
-        source: job.config.rssSource,
+        source: currentRssSource,
         startIndex: 0,
         count: fetchCount
       });
 
       if (!rawItems || rawItems.length === 0) {
         return this.fallbackCandidate(job);
+      }
+
+      // 动态poolSize模式：缓存实际获取到的条目数量
+      if (configPoolSize === -1) {
+        job.state.dynamicPoolSize = rawItems.length;
+        console.log(`📊 动态poolSize已更新: ${rawItems.length} (来源: ${currentRssSource})`);
       }
 
       const candidates = rawItems.map((item, idx) => {
@@ -315,19 +341,85 @@ export class NewsScheduler {
         };
       });
 
-      scored.sort((a, b) => {
+      // least-pushed-with-cooldown 策略：应用过滤逻辑
+      const strategy = job.config.indexStrategy;
+      let filtered = scored;
+
+      if (strategy.type === 'least-pushed-with-cooldown') {
+        const cooldownHours = strategy.cooldownHours ?? 6;
+        const maxPushCount = strategy.maxPushCount ?? 3;
+        const now = Date.now();
+        const cooldownMs = cooldownHours * 60 * 60 * 1000;
+
+        console.log(`🔍 应用冷却过滤: 冷却时间=${cooldownHours}小时, 最大推送次数=${maxPushCount}`);
+
+        // 过滤1: 时间冷却 + 推送次数上限
+        const strictFiltered = scored.filter(c => {
+          if (c.pushCount >= maxPushCount) return false;
+          if (!c.lastPushedAt) return true;
+          const timeSince = now - new Date(c.lastPushedAt).getTime();
+          return timeSince >= cooldownMs;
+        });
+
+        if (strictFiltered.length > 0) {
+          filtered = strictFiltered;
+          console.log(`✅ 严格过滤后剩余 ${filtered.length} 条候选新闻`);
+        } else {
+          // 降级1: 只使用时间冷却，忽略推送次数限制
+          const cooldownFiltered = scored.filter(c => {
+            if (!c.lastPushedAt) return true;
+            const timeSince = now - new Date(c.lastPushedAt).getTime();
+            return timeSince >= cooldownMs;
+          });
+
+          if (cooldownFiltered.length > 0) {
+            filtered = cooldownFiltered;
+            console.log(`⚠️ 降级过滤（忽略次数限制）: 剩余 ${filtered.length} 条候选`);
+          } else {
+            // 降级2: 减半冷却时间
+            const relaxedFiltered = scored.filter(c => {
+              if (!c.lastPushedAt) return true;
+              const timeSince = now - new Date(c.lastPushedAt).getTime();
+              return timeSince >= cooldownMs / 2;
+            });
+
+            if (relaxedFiltered.length > 0) {
+              filtered = relaxedFiltered;
+              console.log(`⚠️ 降级过滤（减半冷却时间）: 剩余 ${filtered.length} 条候选`);
+            } else {
+              // 降级3: 使用全部候选，但会在后面触发RSS源切换
+              console.log(`⚠️ 所有过滤失败，使用全部候选，建议切换RSS源`);
+            }
+          }
+        }
+      }
+
+      // 使用智能排序：推送次数少的优先，其次按时间新旧，最后按索引
+      filtered.sort((a, b) => {
         if (a.pushCount !== b.pushCount) {
           return a.pushCount - b.pushCount;
         }
         const timeA = a.publishTime ? new Date(a.publishTime).getTime() : 0;
         const timeB = b.publishTime ? new Date(b.publishTime).getTime() : 0;
         if (timeA !== timeB) {
-          return timeB - timeA; // 最新优先
+          return timeB - timeA;
         }
         return a.index - b.index;
       });
 
-      const chosen = scored[0];
+      // 选择最终候选
+      let chosen: CandidateArticle;
+
+      if (strategy.type === 'least-pushed' || strategy.type === 'least-pushed-with-cooldown') {
+        chosen = filtered[0];
+        const title = chosen.context.title?.substring(0, 30) || 'N/A';
+        console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}"`);
+      } else {
+        const targetIndex = this.getNextCandidateIndex(job);
+        const foundByIndex = filtered.find(c => c.index === targetIndex);
+        chosen = foundByIndex || filtered[0];
+      }
+
       if (!chosen.context.fingerprint) {
         chosen.context.fingerprint = chosen.fingerprint;
       }
@@ -372,21 +464,24 @@ export class NewsScheduler {
     const strategy = job.config.indexStrategy;
     const state = job.state;
 
+    // 获取有效的poolSize（支持动态poolSize）
+    const effectivePoolSize = this.getEffectivePoolSize(job);
+
     switch (strategy.type) {
       case 'random': {
-        const candidate = Math.floor(Math.random() * strategy.poolSize);
+        const candidate = Math.floor(Math.random() * effectivePoolSize);
         return candidate;
       }
       case 'shuffle': {
         if (state.shuffledOrder.length === 0 || state.shuffledPointer >= state.shuffledOrder.length) {
-          state.shuffledOrder = createShuffledIndices(strategy.poolSize);
+          state.shuffledOrder = createShuffledIndices(effectivePoolSize);
           state.shuffledPointer = 0;
         }
         return state.shuffledOrder[state.shuffledPointer];
       }
       case 'sequential':
       default: {
-        return state.nextIndex % strategy.poolSize;
+        return state.nextIndex % effectivePoolSize;
       }
     }
   }
@@ -397,6 +492,9 @@ export class NewsScheduler {
 
     state.lastIndex = index;
 
+    // 获取有效的poolSize（支持动态poolSize）
+    const effectivePoolSize = this.getEffectivePoolSize(job);
+
     switch (strategy.type) {
       case 'random':
         break;
@@ -405,7 +503,7 @@ export class NewsScheduler {
         break;
       case 'sequential':
       default:
-        state.nextIndex = (index + 1) % strategy.poolSize;
+        state.nextIndex = (index + 1) % effectivePoolSize;
         break;
     }
   }
@@ -418,9 +516,72 @@ export class NewsScheduler {
     job.state.shuffledPointer = 0;
     job.state.consecutiveFailures = 0;
   }
+
+  /**
+   * 获取当前使用的RSS源
+   * 支持单源模式（rssSource）和多源轮换模式（rssSources[]）
+   */
+  private getCurrentRssSource(job: SchedulerJobInstance): string {
+    // 多源轮换模式
+    if (job.config.rssSources && job.config.rssSources.length > 0) {
+      const index = job.state.currentSourceIndex % job.config.rssSources.length;
+      return job.config.rssSources[index];
+    }
+    // 单源模式（向后兼容）
+    return job.config.rssSource || 'solidot';
+  }
+
+  /**
+   * 轮换到下一个RSS源（仅多源模式）
+   * 支持持久化到数据库
+   */
+  private async rotateRssSource(job: SchedulerJobInstance): Promise<void> {
+    const strategy = job.config.indexStrategy;
+    const shouldRotate = strategy.type === 'least-pushed-with-cooldown'
+      ? (strategy.rotateAfterEachPush ?? true)
+      : false;
+
+    if (!shouldRotate) return;
+
+    if (job.config.rssSources && job.config.rssSources.length > 1) {
+      const oldIndex = job.state.currentSourceIndex;
+      const newIndex = (oldIndex + 1) % job.config.rssSources.length;
+      job.state.currentSourceIndex = newIndex;
+
+      console.log(`🔄 RSS源轮换: ${job.config.rssSources[oldIndex]} -> ${job.config.rssSources[newIndex]} (${newIndex + 1}/${job.config.rssSources.length})`);
+
+      // 持久化到数据库
+      try {
+        await this.postgres.updateJobSourceIndex(job.config.id, newIndex);
+        console.log(`💾 RSS源索引已持久化: ${newIndex}`);
+      } catch (error) {
+        console.warn(`⚠️ RSS源索引持久化失败: ${error}`);
+      }
+    }
+  }
+
+  /**
+   * 获取有效的poolSize（支持动态poolSize）
+   * poolSize=-1 表示动态获取RSS源的实际条目数
+   */
+  private getEffectivePoolSize(job: SchedulerJobInstance): number {
+    const configPoolSize = job.config.indexStrategy.poolSize;
+
+    // 如果配置为-1，使用动态缓存的poolSize
+    if (configPoolSize === -1) {
+      return job.state.dynamicPoolSize || 10; // fallback到10
+    }
+
+    return configPoolSize;
+  }
 }
 
 function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
+  // 从数据库记录中恢复currentSourceIndex
+  const currentSourceIndex = typeof (job as any).currentSourceIndex === 'number'
+    ? (job as any).currentSourceIndex
+    : 0;
+
   return {
     config: job,
     state: {
@@ -429,7 +590,9 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
       shuffledOrder: [],
       shuffledPointer: 0,
       running: false,
-      consecutiveFailures: 0
+      consecutiveFailures: 0,
+      currentSourceIndex, // 从数据库恢复或默认0
+      dynamicPoolSize: null
     },
     timer: null
   };
@@ -443,6 +606,8 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
     category: record.category,
     dataSource: record.dataSource,
     rssSource: record.rssSource,
+    rssSources: record.rssSources, // 多源轮换支持
+    currentSourceIndex: record.currentSourceIndex || 0, // RSS源轮换索引
     processor: record.processor,
     renderer: record.renderer,
     intervalMs: record.intervalMs,
@@ -456,17 +621,29 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
 }
 
 function normalizeIndexStrategy(strategy: RequiredSchedulerIndexStrategy): RequiredSchedulerIndexStrategy {
-  const poolSize = Math.max(1, strategy?.poolSize ?? 10);
+  // 支持poolSize=-1表示动态获取RSS源实际条目数 | Support poolSize=-1 for dynamic RSS feed item count
+  const poolSize = strategy?.poolSize === -1
+    ? -1
+    : Math.max(1, strategy?.poolSize ?? 10);
+
   const startIndexValue = strategy?.startIndex ?? 0;
-  const startIndex = ((startIndexValue % poolSize) + poolSize) % poolSize;
-  const type: SchedulerIndexType = ['sequential', 'shuffle', 'random'].includes(strategy?.type as SchedulerIndexType)
+  // 动态poolSize模式下，startIndex直接使用0
+  const startIndex = poolSize === -1
+    ? 0
+    : ((startIndexValue % poolSize) + poolSize) % poolSize;
+
+  const validTypes = ['sequential', 'shuffle', 'random', 'least-pushed', 'least-pushed-with-cooldown'];
+  const type: SchedulerIndexType = validTypes.includes(strategy?.type as SchedulerIndexType)
     ? (strategy.type as SchedulerIndexType)
     : 'shuffle';
 
   return {
     type,
     poolSize,
-    startIndex
+    startIndex,
+    cooldownHours: strategy?.cooldownHours ?? 6,
+    maxPushCount: strategy?.maxPushCount ?? 3,
+    rotateAfterEachPush: strategy?.rotateAfterEachPush ?? true
   };
 }
 
@@ -490,7 +667,8 @@ function normalizeInputConfig(config: NewsSchedulerJobConfig): NewsSchedulerJobR
     description: config.description,
     category: config.category || 'technology',
     dataSource: config.dataSource || 'rss',
-    rssSource: config.rssSource || 'solidot',
+    rssSource: config.rssSource, // 单源模式（可选，向后兼容）
+    rssSources: config.rssSources, // 多源轮换模式（可选）| Multiple sources rotation (optional)
     processor: config.processor || 'ax-optimized',
     renderer: config.renderer || 'device',
     intervalMs,
