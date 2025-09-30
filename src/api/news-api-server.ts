@@ -127,6 +127,12 @@ const RSS_SOURCES: Record<string, RSSSourceInfo> = {
     name: 'DEV Community',
     description: '开发者技术分享',
     category: 'programming'
+  },
+  'hackernews': {
+    id: 'hackernews',
+    name: 'Hacker News',
+    description: 'Hacker News首页热门文章',
+    category: 'technology'
   }
 };
 

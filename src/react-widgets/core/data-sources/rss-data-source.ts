@@ -97,6 +97,12 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
       url: 'https://dev.to/feed',
       category: 'programming',
       description: '开发者技术分享'
+    },
+    'hackernews': {
+      name: 'Hacker News',
+      url: 'https://hnrss.org/frontpage',
+      category: 'technology',
+      description: 'Hacker News首页热门文章'
     }
   };
   
