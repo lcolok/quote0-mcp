@@ -1054,7 +1054,20 @@ export class PostgresDatabase {
     const client = await this.pool.connect();
     try {
       const result = await client.query(
-        `SELECT id, job_id, fingerprint, pushed_at, result FROM news_push_log ORDER BY pushed_at DESC LIMIT $1`,
+        `SELECT log.id,
+                log.job_id,
+                log.fingerprint,
+                log.pushed_at,
+                log.result,
+                stats.title,
+                stats.link,
+                stats.source,
+                stats.category
+           FROM news_push_log AS log
+           LEFT JOIN news_push_stats AS stats
+             ON stats.fingerprint = log.fingerprint
+          ORDER BY log.pushed_at DESC
+          LIMIT $1`,
         [limit]
       );
 
@@ -1063,7 +1076,11 @@ export class PostgresDatabase {
         jobId: row.job_id,
         fingerprint: row.fingerprint,
         pushedAt: row.pushed_at?.toISOString?.() || row.pushed_at,
-        result: row.result || null
+        result: row.result || null,
+        title: row.title || undefined,
+        link: row.link || undefined,
+        source: row.source || undefined,
+        category: row.category || undefined
       }));
     } finally {
       client.release();

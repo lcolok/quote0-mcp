@@ -138,4 +138,8 @@ export interface NewsPushLogEntry {
   fingerprint: string;
   pushedAt: string;
   result?: Record<string, any>;
+  title?: string;
+  link?: string;
+  source?: string;
+  category?: string;
 }
