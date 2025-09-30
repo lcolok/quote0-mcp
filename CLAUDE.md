@@ -1,5 +1,22 @@
 # Claude 开发备忘录
 
+## 📚 文档导航
+
+### 配置和部署指南
+- **[智能调度系统和时区配置指南](docs/Scheduler-And-Timezone-Configuration-Guide.md)** - API动态配置、时区统一、调度策略选择
+- [天气组件使用指南](docs/WEATHER_WIDGET_GUIDE.md) - 天气小组件配置和使用
+- [MindReset图像API文档](docs/MINDRESET_IMAGE_API.md) - 设备推送接口说明
+
+### 架构和设计文档
+- [项目结构说明](docs/PROJECT_STRUCTURE.md) - 完整项目结构和模块说明
+- [架构重构计划](docs/ARCHITECTURE_REFACTORING_PLAN.md) - 系统架构演进路线
+- [动态城市服务架构](docs/DYNAMIC_CITY_SERVICE_ARCHITECTURE.md) - 城市数据动态化设计
+- [新闻处理架构演进](docs/News-Processing-Architecture-Evolution.md) - 新闻系统模块化重构
+
+### 高级特性
+- [AX框架深入指南](docs/AX-Framework-Deep-Dive.md) - AX优化器原理和使用
+- [AX快速参考](docs/AX-Quick-Reference.md) - AX常用命令和示例
+
 ## 🚀 快速开始
 
 ### 首次使用（全新机器）
