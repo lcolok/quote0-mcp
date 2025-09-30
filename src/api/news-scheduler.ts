@@ -221,6 +221,33 @@ export class NewsScheduler {
       const result = await processNews(request);
       console.log(`✅ 定时任务 ${job.config.id} 成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
 
+      // 提取原始RSS内容和AX优化后的内容
+      const rawContent = {
+        title: candidate.context.title,
+        link: candidate.context.link,
+        publishTime: candidate.context.publishTime,
+        source: candidate.context.source,
+        fingerprint: candidate.fingerprint
+      };
+
+      // 提取处理后的内容 (result.result可能是Buffer或对象)
+      let processedContent = null;
+      if (result.result) {
+        if (Buffer.isBuffer(result.result)) {
+          // 设备渲染器返回Buffer,不记录
+          processedContent = { note: 'Image buffer not stored' };
+        } else if (typeof result.result === 'object') {
+          processedContent = {
+            title: (result.result as any).title || candidate.context.title,
+            message: (result.result as any).message,
+            summary: (result.result as any).summary,
+            source: (result.result as any).source || candidate.context.source,
+            signature: (result.result as any).signature,
+            link: (result.result as any).link || candidate.context.link
+          };
+        }
+      }
+
       await this.postgres.recordPushResult({
         jobId: job.config.id,
         fingerprint: candidate.fingerprint,
@@ -236,7 +263,9 @@ export class NewsScheduler {
         result: {
           workflow: result.workflow,
           cache: result.cacheSource
-        }
+        },
+        rawContent,
+        processedContent
       });
 
       this.markIndexUsed(job, candidate.index);

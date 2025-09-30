@@ -356,7 +356,8 @@ app.patch('/api/news/scheduler/jobs/:id/enabled', async (c) => {
 
 app.get('/api/news/scheduler/history', async (c) => {
   const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '50', 10), 200));
-  const logs = await postgres.getRecentPushLogs(limit);
+  const includeContent = c.req.query('includeContent') === 'true';
+  const logs = await postgres.getRecentPushLogs(limit, includeContent);
 
   // 转换时间为中国标准时间
   const logsWithCST = logs.map(log => ({
@@ -367,7 +368,8 @@ app.get('/api/news/scheduler/history', async (c) => {
 
   return c.json({
     logs: logsWithCST,
-    timezone: 'Asia/Shanghai (CST)'
+    timezone: 'Asia/Shanghai (CST)',
+    includeContent
   });
 });
 

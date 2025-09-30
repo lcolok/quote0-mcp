@@ -1012,6 +1012,8 @@ export class PostgresDatabase {
     category?: string;
     metadata?: Record<string, any>;
     result?: Record<string, any>;
+    rawContent?: Record<string, any>; // 原始RSS内容
+    processedContent?: Record<string, any>; // AX优化后的内容
   }): Promise<void> {
     const client = await this.pool.connect();
     const transformedMetadata = entry.metadata || {};
@@ -1040,12 +1042,14 @@ export class PostgresDatabase {
       ]);
 
       await client.query(`
-        INSERT INTO news_push_log (job_id, fingerprint, result)
-        VALUES ($1, $2, $3)
+        INSERT INTO news_push_log (job_id, fingerprint, result, raw_content, processed_content)
+        VALUES ($1, $2, $3, $4, $5)
       `, [
         entry.jobId || null,
         entry.fingerprint,
-        entry.result || null
+        entry.result || null,
+        entry.rawContent || null,
+        entry.processedContent || null
       ]);
 
       await client.query('COMMIT');
@@ -1084,7 +1088,7 @@ export class PostgresDatabase {
     }
   }
 
-  async getRecentPushLogs(limit: number = 50): Promise<any[]> {
+  async getRecentPushLogs(limit: number = 50, includeContent: boolean = false): Promise<any[]> {
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -1093,10 +1097,14 @@ export class PostgresDatabase {
                 log.fingerprint,
                 log.pushed_at,
                 log.result,
+                log.raw_content,
+                log.processed_content,
                 stats.title,
                 stats.link,
                 stats.source,
-                stats.category
+                stats.category,
+                stats.push_count,
+                stats.metadata
            FROM news_push_log AS log
            LEFT JOIN news_push_stats AS stats
              ON stats.fingerprint = log.fingerprint
@@ -1105,17 +1113,32 @@ export class PostgresDatabase {
         [limit]
       );
 
-      return result.rows.map((row) => ({
-        id: row.id,
-        jobId: row.job_id,
-        fingerprint: row.fingerprint,
-        pushedAt: row.pushed_at?.toISOString?.() || row.pushed_at,
-        result: row.result || null,
-        title: row.title || undefined,
-        link: row.link || undefined,
-        source: row.source || undefined,
-        category: row.category || undefined
-      }));
+      return result.rows.map((row) => {
+        const base = {
+          id: row.id,
+          jobId: row.job_id,
+          fingerprint: row.fingerprint,
+          pushedAt: row.pushed_at?.toISOString?.() || row.pushed_at,
+          result: row.result || null,
+          title: row.title || undefined,
+          link: row.link || undefined,
+          source: row.source || undefined,
+          category: row.category || undefined,
+          pushCount: row.push_count || 0,
+          metadata: row.metadata || null
+        };
+
+        // 根据includeContent参数决定是否包含完整内容
+        if (includeContent) {
+          return {
+            ...base,
+            rawContent: row.raw_content || null,
+            processedContent: row.processed_content || null
+          };
+        }
+
+        return base;
+      });
     } finally {
       client.release();
     }
