@@ -441,6 +441,17 @@ export class NewsScheduler {
 
       if (strategy.type === 'least-pushed' || strategy.type === 'least-pushed-with-cooldown') {
         chosen = filtered[0];
+
+        // 保护机制: 如果选中的候选pushCount超过maxPushCount,强制切换RSS源
+        if (strategy.type === 'least-pushed-with-cooldown') {
+          const maxPushCount = strategy.maxPushCount ?? 3;
+          if (chosen.pushCount >= maxPushCount) {
+            console.log(`⛔ 所有候选pushCount都超过${maxPushCount},强制切换RSS源避免重复`);
+            await this.rotateRssSource(job);
+            throw new Error(`当前RSS源所有新闻已推送${maxPushCount}次以上,已切换到下一个源`);
+          }
+        }
+
         const title = chosen.context.title?.substring(0, 30) || 'N/A';
         console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}"`);
       } else {
