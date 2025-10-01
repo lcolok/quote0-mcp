@@ -14,6 +14,7 @@ import { processNews } from './news-processing-service.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { ensureSchedulerStarted, getSchedulerInstance } from './scheduler-registry.js';
 import type { NewsSchedulerJobConfig } from './news-types.js';
+import annotationApp from './annotation-api.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(date: Date | string): string {
@@ -47,11 +48,46 @@ const schedulerEnabledByConfig = (process.env.NEWS_SCHEDULER_ENABLED || 'true').
 app.use('*', cors({
   origin: '*',
   allowHeaders: ['Content-Type', 'Authorization'],
-  allowMethods: ['GET', 'POST', 'OPTIONS']
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
 }));
 
 app.use('*', logger());
 app.use('*', prettyJSON());
+
+// 静态文件服务 - 提供新闻预览图片
+app.get('/images/:filename', async (c) => {
+  try {
+    const filename = c.req.param('filename');
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const imagePath = path.join('./processed-images/widgets/news', filename);
+
+    // 检查文件是否存在
+    try {
+      await fs.access(imagePath);
+    } catch {
+      return c.text('Image not found', 404);
+    }
+
+    // 读取文件
+    const fileBuffer = await fs.readFile(imagePath);
+
+    // 设置正确的Content-Type
+    return new Response(fileBuffer, {
+      headers: {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=31536000'
+      }
+    });
+  } catch (error) {
+    console.error('❌ 获取图片失败:', error);
+    return c.text('Internal server error', 500);
+  }
+});
+
+// 集成标注API
+app.route('/', annotationApp);
 
 // RSS源数据配置
 const RSS_SOURCES: Record<string, RSSSourceInfo> = {
@@ -157,7 +193,19 @@ app.get('/', (c) => {
       'PATCH /api/news/scheduler/jobs/:id/enabled': '启用/禁用任务',
       'GET /api/news/scheduler/history': '查看推送历史',
       'GET /api/health': '健康检查',
-      'GET /api/health/modules': '模块健康状态'
+      'GET /api/health/modules': '模块健康状态',
+      '--- 标注系统 ---': '---',
+      'GET /api/annotation/news': '获取待标注新闻列表',
+      'GET /api/annotation/news/:id': '获取新闻详情',
+      'POST /api/annotation/news/:id/annotate': '提交标注',
+      'PUT /api/annotation/annotations/:id': '更新标注',
+      'DELETE /api/annotation/annotations/:id': '删除标注',
+      'GET /api/annotation/samples/export': '导出训练样本',
+      'POST /api/annotation/news/import/history': '从历史记录导入（推荐）',
+      'POST /api/annotation/news/import/rss': '从RSS导入新闻',
+      'GET /api/annotation/statistics': '获取标注统计',
+      'GET /api/annotation/history': '获取标注历史',
+      'POST /api/annotation/batch': '批量标注'
     }
   });
 });

@@ -109,6 +109,25 @@ services:
       retries: 3
       start_period: 60s
 
+  # 标注系统Web应用
+  annotation-web:
+    build:
+      context: ./annotation-web
+      dockerfile: Dockerfile
+    container_name: quote0-annotation-web
+    ports:
+      - "3002:80"
+    depends_on:
+      - news-api
+    networks:
+      - quote0-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # 应用程序服务（可选）
   app:
     build:
@@ -143,6 +162,8 @@ services:
     restart: unless-stopped
     networks:
       - quote0-network
+    profiles:
+      - dev
 
 volumes:
   postgres_data:

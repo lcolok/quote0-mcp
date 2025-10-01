@@ -104,39 +104,47 @@ export class PostgresDatabase {
   async initialize(): Promise<void> {
     try {
       const client = await this.pool.connect();
-      
+
       // 测试连接
       const result = await client.query('SELECT NOW() as current_time');
       console.log(`🐘 PostgreSQL数据库已连接: ${result.rows[0].current_time}`);
-      
+
       // 检查表是否存在
       const tablesResult = await client.query(`
-        SELECT table_name 
-        FROM information_schema.tables 
+        SELECT table_name
+        FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name IN (
           'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats',
           'news_scheduler_jobs', 'news_push_stats', 'news_push_log'
         )
       `);
-      
+
       const existingTables = tablesResult.rows.map(row => row.table_name);
       const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log'];
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
-      
+
       console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
-      
+
       // 如果有缺失的表，自动创建
       if (missingTables.length > 0) {
         console.log(`🔧 发现${missingTables.length}个缺失的表，开始自动初始化...`);
         await this.createTables(client);
         console.log(`✅ 数据库表结构初始化完成`);
       }
-      
+
       client.release();
     } catch (error) {
       console.error('❌ PostgreSQL初始化失败:', error);
       throw error;
     }
+  }
+
+  /**
+   * 获取数据库连接客户端
+   * 用于标注API等需要直接执行SQL的场景
+   */
+  async getClient(): Promise<PoolClient> {
+    return await this.pool.connect();
   }
 
   /**

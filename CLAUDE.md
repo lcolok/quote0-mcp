@@ -4,6 +4,7 @@
 
 ### 配置和部署指南
 - **[智能调度系统和时区配置指南](docs/Scheduler-And-Timezone-Configuration-Guide.md)** - API动态配置、时区统一、调度策略选择
+- **[新闻质量标注系统使用指南](docs/Annotation-System-Guide.md)** - 可视化标注界面、样本集构建、AX训练数据导出
 - [天气组件使用指南](docs/WEATHER_WIDGET_GUIDE.md) - 天气小组件配置和使用
 - [MindReset图像API文档](docs/MINDRESET_IMAGE_API.md) - 设备推送接口说明
 
@@ -16,6 +17,7 @@
 ### 高级特性
 - [AX框架深入指南](docs/AX-Framework-Deep-Dive.md) - AX优化器原理和使用
 - [AX快速参考](docs/AX-Quick-Reference.md) - AX常用命令和示例
+- [AX质量评估器改进方案](docs/AX-Quality-Evaluator-Proposal.md) - 基于人工标注的质量评估系统设计
 
 ## 🚀 快速开始
 
@@ -62,6 +64,31 @@ bun widget:modular-news technology rss ax-optimized 5 device
 # 传统新闻组件
 bun widget news technology
 bun widget news finance 0 mock
+```
+
+### 标注系统 - 构建AX训练样本
+```bash
+# 访问标注Web界面
+open http://localhost:3002
+
+# 1. 导入RSS新闻数据（通过API）
+curl -X POST http://localhost:3001/api/annotation/news/import/rss \
+  -H "Content-Type: application/json" \
+  -d '{
+    "category": "technology",
+    "rssSource": "solidot",
+    "count": 10,
+    "startIndex": 0
+  }'
+
+# 2. 通过Web界面进行人工标注
+# 访问 http://localhost:3002/annotate
+
+# 3. 导出训练样本
+curl -s http://localhost:3001/api/annotation/samples/export?minScore=0&maxScore=100
+
+# 4. 查看标注统计
+curl -s http://localhost:3001/api/annotation/statistics
 ```
 
 ### API方式 - HTTP接口调用（推荐）
@@ -178,9 +205,10 @@ curl -s http://localhost:3001/api/health/modules
 
 ### 服务端口
 - **新闻API服务**: 3001 (http://localhost:3001)
+- **标注Web应用**: 3002 (http://localhost:3002) - 可视化标注界面
 - PostgreSQL: 25432 (映射到容器内5432)
 - MinIO API: 29000 (映射到容器内9000)
-- MinIO Console: 29001 (映射到容器内9001)  
+- MinIO Console: 29001 (映射到容器内9001)
 - Redis: 26379 (映射到容器内6379)
 
 ## 开发规范
