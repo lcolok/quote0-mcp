@@ -228,7 +228,7 @@ export class NewsScheduler {
             renderer: 'json' as const,
             options: {
               ...request.options,
-              force: false  // 使用缓存加速
+              force: true  // 强制重新处理，避免缓存错配问题
             }
           };
           const jsonResult = await processNews(jsonRequest);
