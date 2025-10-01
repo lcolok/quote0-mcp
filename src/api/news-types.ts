@@ -110,6 +110,7 @@ export interface NewsSchedulerJobRecord {
   dataSource: string;
   rssSource?: string; // 单个RSS源（向后兼容）
   rssSources?: string[]; // 多个RSS源轮换 | Multiple RSS sources for rotation
+  currentSourceIndex?: number; // 当前使用的RSS源索引（多源轮换）
   processor: string;
   renderer: string;
   intervalMs: number;

@@ -218,10 +218,41 @@ export class NewsScheduler {
 
       console.log(`🕒 定时任务 ${job.config.id} 准备推送 source=${currentRssSource} fingerprint=${candidate.fingerprint} index=${candidate.index}`);
 
+      // 对于device渲染器，先获取AX优化后的文本内容
+      let processedContent: Record<string, any> | undefined = undefined;
+      if (request.renderer === 'device' && request.processor !== 'passthrough') {
+        try {
+          console.log('📝 先获取AX优化后的文本内容...');
+          const jsonRequest = {
+            ...request,
+            renderer: 'json' as const,
+            options: {
+              ...request.options,
+              force: false  // 使用缓存加速
+            }
+          };
+          const jsonResult = await processNews(jsonRequest);
+
+          if (jsonResult.result && typeof jsonResult.result === 'object') {
+            processedContent = {
+              title: (jsonResult.result as any).title || candidate.context.title,
+              message: (jsonResult.result as any).message,
+              summary: (jsonResult.result as any).summary,
+              source: (jsonResult.result as any).source || candidate.context.source,
+              signature: (jsonResult.result as any).signature,
+              link: (jsonResult.result as any).link || candidate.context.link
+            };
+            console.log('✅ AX优化内容已提取');
+          }
+        } catch (jsonError) {
+          console.warn('⚠️ 获取AX优化内容失败:', jsonError);
+        }
+      }
+
       const result = await processNews(request);
       console.log(`✅ 定时任务 ${job.config.id} 成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
 
-      // 提取原始RSS内容和AX优化后的内容
+      // 提取原始RSS内容
       const rawContent = {
         title: candidate.context.title,
         link: candidate.context.link,
@@ -230,9 +261,8 @@ export class NewsScheduler {
         fingerprint: candidate.fingerprint
       };
 
-      // 提取处理后的内容 (result.result可能是Buffer或对象)
-      let processedContent = null;
-      if (result.result) {
+      // 如果没有预先提取，尝试从result中提取
+      if (!processedContent && result.result) {
         if (Buffer.isBuffer(result.result)) {
           // 设备渲染器返回Buffer,不记录
           processedContent = { note: 'Image buffer not stored' };
@@ -265,7 +295,7 @@ export class NewsScheduler {
           cache: result.cacheSource
         },
         rawContent,
-        processedContent
+        processedContent: processedContent || undefined
       });
 
       this.markIndexUsed(job, candidate.index);
