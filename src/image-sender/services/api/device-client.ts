@@ -36,13 +36,14 @@ export class MindResetDeviceClient {
     try {
       const payload: ImagePayload = {
         deviceId: this.config.deviceId,
-        image: base64Image
+        image: base64Image,
+        refreshNow: true  // 立即显示新内容
       };
 
       if (options.border && options.border !== "0") {
         (payload as any).border = parseInt(options.border);
       }
-      
+
       if (options.link) {
         payload.link = options.link;
       }

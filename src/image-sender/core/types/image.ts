@@ -16,6 +16,7 @@ export interface ImageSendOptions {
 export interface ImagePayload {
   deviceId: string;
   image: string;
+  refreshNow?: boolean;  // 是否立即显示内容
   border?: "0" | "1";
   link?: string;
   // 官方抖动参数
