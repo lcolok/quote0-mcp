@@ -129,3 +129,6 @@ assets/fonts/fusion-pixel-*-ko.otf.woff2
 assets/fonts/fusion-pixel-*-latin.otf.woff2
 assets/fonts/fusion-pixel-*-zh_hant.otf.woff2
 assets/fonts/SmileySans-*
+
+# Quality evaluation tool - runtime generated reports
+tools/quality-evaluation/reports/*.md

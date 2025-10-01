@@ -1,0 +1,33 @@
+{
+  "name": "@quote0/quality-evaluation",
+  "version": "1.0.0",
+  "description": "灵活的新闻内容质量评估工具",
+  "type": "module",
+  "main": "src/cli.ts",
+  "bin": {
+    "news-eval": "./src/cli.ts"
+  },
+  "scripts": {
+    "eval:recent": "tsx src/cli.ts recent",
+    "eval:all": "tsx src/cli.ts all",
+    "eval:range": "tsx src/cli.ts range",
+    "eval:source": "tsx src/cli.ts source",
+    "eval:config": "tsx src/cli.ts config"
+  },
+  "keywords": [
+    "news",
+    "quality",
+    "evaluation",
+    "analysis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

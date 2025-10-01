@@ -355,9 +355,14 @@ app.patch('/api/news/scheduler/jobs/:id/enabled', async (c) => {
 });
 
 app.get('/api/news/scheduler/history', async (c) => {
-  const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '50', 10), 200));
+  // 从环境变量读取最大限制，默认5000
+  const MAX_HISTORY_LIMIT = parseInt(process.env.MAX_HISTORY_LIMIT || '5000', 10);
+
+  const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '50', 10), MAX_HISTORY_LIMIT));
+  const offset = Math.max(0, parseInt(c.req.query('offset') || '0', 10));
   const includeContent = c.req.query('includeContent') === 'true';
-  const logs = await postgres.getRecentPushLogs(limit, includeContent);
+  const deduplicate = c.req.query('deduplicate') === 'true'; // 是否去重
+  const logs = await postgres.getRecentPushLogs(limit, includeContent, offset, deduplicate);
 
   // 转换时间为中国标准时间
   const logsWithCST = logs.map(log => ({

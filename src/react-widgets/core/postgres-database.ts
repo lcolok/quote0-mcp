@@ -1088,30 +1088,53 @@ export class PostgresDatabase {
     }
   }
 
-  async getRecentPushLogs(limit: number = 50, includeContent: boolean = false): Promise<any[]> {
+  async getRecentPushLogs(limit: number = 50, includeContent: boolean = false, offset: number = 0, deduplicate: boolean = false): Promise<any[]> {
     const client = await this.pool.connect();
     try {
-      const result = await client.query(
-        `SELECT log.id,
-                log.job_id,
-                log.fingerprint,
-                log.pushed_at,
-                log.result,
-                log.raw_content,
-                log.processed_content,
-                stats.title,
-                stats.link,
-                stats.source,
-                stats.category,
-                stats.push_count,
-                stats.metadata
-           FROM news_push_log AS log
-           LEFT JOIN news_push_stats AS stats
-             ON stats.fingerprint = log.fingerprint
-          ORDER BY log.pushed_at DESC
-          LIMIT $1`,
-        [limit]
-      );
+      // 如果需要去重，使用DISTINCT ON (fingerprint)只保留每个fingerprint的最新记录
+      const query = deduplicate ? `
+        SELECT DISTINCT ON (log.fingerprint)
+               log.id,
+               log.job_id,
+               log.fingerprint,
+               log.pushed_at,
+               log.result,
+               log.raw_content,
+               log.processed_content,
+               stats.title,
+               stats.link,
+               stats.source,
+               stats.category,
+               stats.push_count,
+               stats.metadata
+          FROM news_push_log AS log
+          LEFT JOIN news_push_stats AS stats
+            ON stats.fingerprint = log.fingerprint
+         WHERE log.fingerprint IS NOT NULL
+         ORDER BY log.fingerprint, log.pushed_at DESC
+         LIMIT $1 OFFSET $2
+      ` : `
+        SELECT log.id,
+               log.job_id,
+               log.fingerprint,
+               log.pushed_at,
+               log.result,
+               log.raw_content,
+               log.processed_content,
+               stats.title,
+               stats.link,
+               stats.source,
+               stats.category,
+               stats.push_count,
+               stats.metadata
+          FROM news_push_log AS log
+          LEFT JOIN news_push_stats AS stats
+            ON stats.fingerprint = log.fingerprint
+         ORDER BY log.pushed_at DESC
+         LIMIT $1 OFFSET $2
+      `;
+
+      const result = await client.query(query, [limit, offset]);
 
       return result.rows.map((row) => {
         const base = {
