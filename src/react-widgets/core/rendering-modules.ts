@@ -498,6 +498,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
           
           return {
             imageUrl,
+            localImagePath: `/images/${filename}`, // 返回本地图片路径用于数据库记录
             deviceResult: '推送成功'
           };
         } catch (deviceError: any) {

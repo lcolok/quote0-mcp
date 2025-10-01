@@ -419,11 +419,12 @@ export class PostgresDatabase {
    * 保存新闻数据到缓存
    */
   async setCachedNews(
-    cacheKey: CacheKey, 
-    newsData: NewsData, 
+    cacheKey: CacheKey,
+    newsData: NewsData,
     options: {
       ttl?: number;
       processingTime?: number;
+      imagePath?: string;
     } = {}
   ): Promise<number | null> {
     const client = await this.pool.connect();
@@ -435,8 +436,8 @@ export class PostgresDatabase {
         INSERT INTO news_cache (
           cache_key, source, category, index_num, title, message, signature,
           source_name, publish_time, category_name, link, highlights,
-          processing_time, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          processing_time, image_path, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (cache_key) DO UPDATE SET
           title = EXCLUDED.title,
           message = EXCLUDED.message,
@@ -447,6 +448,7 @@ export class PostgresDatabase {
           link = EXCLUDED.link,
           highlights = EXCLUDED.highlights,
           processing_time = EXCLUDED.processing_time,
+          image_path = EXCLUDED.image_path,
           expires_at = EXCLUDED.expires_at,
           created_at = CURRENT_TIMESTAMP
         RETURNING id
@@ -464,6 +466,7 @@ export class PostgresDatabase {
         newsData.link,
         newsData.highlights ? JSON.stringify(newsData.highlights) : null,
         options.processingTime,
+        options.imagePath || null,
         expiresAt
       ]);
 

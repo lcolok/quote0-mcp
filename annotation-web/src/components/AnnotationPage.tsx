@@ -230,6 +230,58 @@ function AnnotationPage() {
                 )}
               </div>
             )}
+
+            {/* 调试信息面板 */}
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-medium text-gray-500 uppercase">
+                  调试信息
+                </label>
+                <button
+                  onClick={() => {
+                    const debugInfo = {
+                      id: currentNews.id,
+                      title: currentNews.title,
+                      source: currentNews.source,
+                      data_source: currentNews.data_source,
+                      category: currentNews.category,
+                      rss_index: currentNews.rss_index,
+                      image_path: currentNews.image_path,
+                      publish_time: currentNews.publish_time,
+                      link: currentNews.link,
+                      annotation_status: currentNews.annotation_status,
+                      created_at: currentNews.created_at
+                    };
+                    navigator.clipboard.writeText(JSON.stringify(debugInfo, null, 2));
+                    alert('调试信息已复制到剪贴板');
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
+                >
+                  📋 复制调试信息
+                </button>
+              </div>
+              <div className="bg-gray-100 rounded p-3 text-xs font-mono space-y-1">
+                <div><span className="text-gray-600">ID:</span> {currentNews.id}</div>
+                <div><span className="text-gray-600">来源字段:</span> {currentNews.source}</div>
+                <div><span className="text-gray-600">数据源字段:</span> {currentNews.data_source}</div>
+                <div><span className="text-gray-600">RSS索引:</span> {currentNews.rss_index ?? 'null'}</div>
+                <div><span className="text-gray-600">图片路径:</span> {currentNews.image_path || '无'}</div>
+                <div className="pt-2 border-t border-gray-300">
+                  <span className="text-gray-600">问题诊断:</span>
+                  <ul className="ml-4 mt-1 space-y-1">
+                    {!currentNews.image_path && (
+                      <li className="text-orange-600">⚠️ 无历史图片路径</li>
+                    )}
+                    {currentNews.data_source !== 'rss' && (
+                      <li className="text-blue-600">ℹ️ 数据源类型: {currentNews.data_source}</li>
+                    )}
+                    {currentNews.rss_index === null && (
+                      <li className="text-orange-600">⚠️ 缺少RSS索引</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* 导航按钮 */}

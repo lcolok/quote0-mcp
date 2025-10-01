@@ -21,9 +21,10 @@ CREATE TABLE IF NOT EXISTS news_cache (
     -- 缓存元数据
     processing_time INTEGER,
     metadata JSONB,
+    image_path TEXT,  -- 渲染后的图片路径
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NOT NULL,
-    
+
     -- 索引
     CONSTRAINT news_cache_expires_check CHECK (expires_at > created_at)
 );

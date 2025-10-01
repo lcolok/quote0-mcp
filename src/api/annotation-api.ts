@@ -491,7 +491,8 @@ app.post('/api/annotation/news/import/history', async (c) => {
             link,
             publish_time,
             category_name as category,
-            index_num as rss_index
+            index_num as rss_index,
+            image_path
           FROM news_cache
           WHERE 1=1
         `;
@@ -549,31 +550,10 @@ app.post('/api/annotation/news/import/history', async (c) => {
             }
           }
 
-          if (source === 'cache' && row.category && row.rss_index !== null) {
-            // 对于从cache导入的数据，尝试查找对应的图片文件
-            const fs = await import('fs/promises');
-            const path = await import('path');
-
-            // 构建可能的图片文件名模式（不包含时间戳）
-            const imageDir = './processed-images/widgets/news';
-            const prefix = `modular_rss_`;
-
-            try {
-              const files = await fs.readdir(imageDir);
-              // 查找匹配的图片文件（包含category和index信息）
-              const matchingFile = files.find(file =>
-                file.startsWith(prefix) &&
-                file.includes(`_${row.rss_index}_`) &&
-                file.endsWith('.png')
-              );
-
-              if (matchingFile) {
-                imagePath = `/images/${matchingFile}`;
-                console.log(`✅ 找到历史图片: ${matchingFile}`);
-              }
-            } catch (err) {
-              // 忽略文件查找错误
-            }
+          // 直接从 news_cache 读取 image_path（推送时已保存）
+          if (source === 'cache' && row.image_path) {
+            imagePath = row.image_path;
+            console.log(`✅ 从数据库读取历史图片: ${imagePath}`);
           }
 
           const insertResult = await client.query<{ id: number }>(`
@@ -624,6 +604,35 @@ app.post('/api/annotation/news/import/history', async (c) => {
     }
   } catch (error) {
     console.error('❌ 从历史记录导入失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误'
+    }, 500);
+  }
+});
+
+/**
+ * 清空所有待标注新闻数据（保留已标注的）
+ */
+app.delete('/api/annotation/news/pending', async (c) => {
+  try {
+    const client = await postgres.getClient();
+    try {
+      const result = await client.query(
+        `DELETE FROM news_raw_data WHERE annotation_status = 'pending' RETURNING id`
+      );
+
+      return c.json({
+        success: true,
+        data: {
+          deletedCount: result.rowCount || 0
+        }
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('❌ 清空待标注数据失败:', error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '未知错误'
@@ -929,15 +938,15 @@ app.post('/api/annotation/news/:id/render-preview', async (c) => {
       const imagePath = path.join(dirPath, filename);
       await fs.writeFile(imagePath, imageBuffer);
 
-      // 更新数据库中的image_path
-      await client.query(`
-        UPDATE news_raw_data SET image_path = $1 WHERE id = $2
-      `, [imagePath, newsId]);
-
-      console.log(`✅ 新闻预览图已生成: ${imagePath}`);
-
       // 返回相对路径（用于前端访问）
       const relativePath = `/images/${filename}`;
+
+      // 更新数据库中的image_path（使用Web访问路径）
+      await client.query(`
+        UPDATE news_raw_data SET image_path = $1 WHERE id = $2
+      `, [relativePath, newsId]);
+
+      console.log(`✅ 新闻预览图已生成: ${imagePath} -> ${relativePath}`);
 
       return c.json({
         success: true,
