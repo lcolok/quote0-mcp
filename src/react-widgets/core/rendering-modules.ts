@@ -467,38 +467,40 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       
       const uploadResult = await imageStorage.uploadImage(localImagePath, metadata);
       const imageUrl = uploadResult.url;
+      const objectKey = uploadResult.objectKey;
       console.log(`✅ 新闻组件已保存到MinIO: ${imageUrl}`);
-      
+      console.log(`📦 MinIO对象键: ${objectKey}`);
+
       // 推送到设备
       console.log('📤 推送到MindReset设备...');
-      
+
       // 设备健康检查API已移除，直接进行推送
       console.log('📤 准备推送到MindReset设备...');
-      
+
       const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${localImagePath}" "0" "${data.link || ''}" "ORDERED"`;
-      
+
       // 实现自动重试机制处理429错误
       let retryCount = 0;
       const maxRetries = 2;
       const baseDelay = 30000; // 30秒基础延迟
-      
+
       while (retryCount <= maxRetries) {
         try {
-          const { stdout, stderr } = await execAsync(deviceCommand, { 
+          const { stdout, stderr } = await execAsync(deviceCommand, {
             cwd: process.cwd(),
             env: process.env
           });
-          
+
           if (stdout) {
             console.log(stdout);
           }
           if (stderr) {
             console.error(stderr);
           }
-          
+
           return {
             imageUrl,
-            localImagePath: `/images/${filename}`, // 返回本地图片路径用于数据库记录
+            localImagePath: `/${objectKey}`, // 使用MinIO objectKey作为数据库路径
             deviceResult: '推送成功'
           };
         } catch (deviceError: any) {

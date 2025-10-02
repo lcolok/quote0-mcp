@@ -38,10 +38,15 @@ function AnnotationPage() {
   });
 
   // 获取预览图路径（优先使用历史图片）
-  const previewImagePath = currentNews?.image_path ||
+  const rawImagePath = currentNews?.image_path ||
     (renderMutation.isSuccess && renderMutation.data?.success
       ? renderMutation.data.data.imagePath
       : null);
+
+  // 转换为完整的MinIO URL
+  const previewImagePath = rawImagePath
+    ? `http://localhost:29000/quote0-images${rawImagePath}`
+    : null;
 
   // 提交标注mutation
   const submitMutation = useMutation({
