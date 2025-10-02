@@ -1,5 +1,6 @@
 /**
  * 标注系统API - 为AX质量评估器提供人工标注功能
+ * 优化版：直接使用news_push_log作为单一数据源
  */
 
 import { Hono } from 'hono';
@@ -8,21 +9,19 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import type { Client } from 'pg';
 
 // 类型定义
-interface NewsRawData {
+interface NewsItem {
   id: number;
   title: string;
   source: string;
   description?: string;
   link?: string;
   publish_time?: string;
-  data_source: string;
   category?: string;
-  rss_index?: number;
+  image_path?: string;
   annotation_status: 'pending' | 'annotating' | 'completed' | 'skipped';
-  created_at: string;
-  updated_at: string;
-  raw_content?: any;  // 原始RSS数据
-  processed_content?: any;  // 处理后的数据
+  fingerprint?: string;
+  raw_content?: any;
+  processed_content?: any;
 }
 
 interface QualityAnnotation {
@@ -43,19 +42,12 @@ interface QualityAnnotation {
   confidence?: number;
 }
 
-interface ImportRSSRequest {
-  category: string;
-  rssSource: string;
-  count?: number;  // 导入多少条
-  startIndex?: number;
-}
-
 // 创建Hono应用
 const app = new Hono();
 const postgres = getPostgresDatabase();
 
 /**
- * 获取待标注新闻列表
+ * 获取待标注新闻列表（直接从push_log）
  */
 app.get('/api/annotation/news', async (c) => {
   try {
@@ -66,89 +58,59 @@ app.get('/api/annotation/news', async (c) => {
 
     const client = await postgres.getClient();
     try {
-      // 🔄 自动同步：从 news_push_log 导入所有未在 news_raw_data 中的新闻
-      const syncResult = await client.query(`
-        INSERT INTO news_raw_data (
-          title, source, description, link, publish_time,
-          data_source, category, rss_index, image_path,
-          annotation_status, created_at, updated_at
-        )
-        SELECT DISTINCT ON (npl.raw_content->>'link')
-          COALESCE(npl.raw_content->>'title', nps.title, '无标题') as title,
-          COALESCE(npl.raw_content->>'source', nps.source, '未知来源') as source,
+      // 直接查询news_push_log
+      let query = `
+        SELECT
+          npl.id,
+          npl.raw_content->>'title' as title,
+          npl.raw_content->>'source' as source,
           npl.processed_content->>'message' as description,
           npl.raw_content->>'link' as link,
           COALESCE(
             (npl.raw_content->>'publishTime')::timestamp,
             npl.pushed_at
           ) as publish_time,
-          'push_log' as data_source,
           COALESCE(nps.category, 'technology') as category,
-          NULL as rss_index,
-          npl.image_path as image_path,
-          'pending' as annotation_status,
-          npl.pushed_at as created_at,
-          npl.pushed_at as updated_at
+          npl.image_path,
+          npl.annotation_status,
+          npl.raw_content->>'fingerprint' as fingerprint,
+          npl.raw_content,
+          npl.processed_content
         FROM news_push_log npl
         LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
-        WHERE npl.raw_content->>'link' IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM news_raw_data nr
-            WHERE nr.link = npl.raw_content->>'link'
-          )
-        ON CONFLICT (title, source, publish_time) DO NOTHING
-      `);
-
-      if (syncResult.rowCount && syncResult.rowCount > 0) {
-        console.log(`✅ 自动同步了 ${syncResult.rowCount} 条新闻到标注系统`);
-      }
-
-      // 🔄 更新已存在记录的image_path（如果push_log中有新的图片路径）
-      const updateResult = await client.query(`
-        UPDATE news_raw_data nr
-        SET image_path = npl.image_path
-        FROM news_push_log npl
-        WHERE nr.link = npl.raw_content->>'link'
-          AND nr.data_source = 'push_log'
-          AND npl.image_path IS NOT NULL
-          AND (nr.image_path IS NULL OR nr.image_path != npl.image_path)
-      `);
-
-      if (updateResult.rowCount && updateResult.rowCount > 0) {
-        console.log(`✅ 更新了 ${updateResult.rowCount} 条记录的图片路径`);
-      }
-
-      // 查询待标注新闻
-      let query = `
-        SELECT
-          nr.id, nr.title, nr.source, nr.description, nr.link, nr.publish_time,
-          nr.data_source, nr.category, nr.rss_index, nr.image_path,
-          nr.annotation_status, nr.created_at, nr.updated_at,
-          npl.raw_content, npl.processed_content
-        FROM news_raw_data nr
-        LEFT JOIN news_push_log npl ON npl.raw_content->>'link' = nr.link
-        WHERE nr.annotation_status = $1
+        WHERE npl.annotation_status = $1
+          AND npl.raw_content->>'title' IS NOT NULL
+          AND npl.raw_content->>'title' != ''
       `;
 
       const params: any[] = [status];
 
       if (category) {
-        query += ` AND nr.category = $${params.length + 1}`;
+        query += ` AND nps.category = $${params.length + 1}`;
         params.push(category);
       }
 
-      query += ` ORDER BY nr.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      query += ` ORDER BY npl.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
       params.push(limit, offset);
 
-      const result = await client.query<NewsRawData>(query, params);
+      const result = await client.query<NewsItem>(query, params);
 
       // 获取总数
-      let countQuery = 'SELECT COUNT(*) FROM news_raw_data nr WHERE nr.annotation_status = $1';
+      let countQuery = `
+        SELECT COUNT(*)
+        FROM news_push_log npl
+        LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
+        WHERE npl.annotation_status = $1
+          AND npl.raw_content->>'title' IS NOT NULL
+          AND npl.raw_content->>'title' != ''
+      `;
       const countParams: any[] = [status];
+
       if (category) {
-        countQuery += ' AND nr.category = $2';
+        countQuery += ' AND nps.category = $2';
         countParams.push(category);
       }
+
       const countResult = await client.query(countQuery, countParams);
       const total = parseInt(countResult.rows[0].count, 10);
 
@@ -183,11 +145,28 @@ app.get('/api/annotation/news/:id', async (c) => {
 
     const client = await postgres.getClient();
     try {
-      // 获取新闻数据
-      const newsResult = await client.query<NewsRawData>(
-        'SELECT * FROM news_raw_data WHERE id = $1',
-        [id]
-      );
+      // 查询news_push_log
+      const newsResult = await client.query<NewsItem>(`
+        SELECT
+          npl.id,
+          npl.raw_content->>'title' as title,
+          npl.raw_content->>'source' as source,
+          npl.processed_content->>'message' as description,
+          npl.raw_content->>'link' as link,
+          COALESCE(
+            (npl.raw_content->>'publishTime')::timestamp,
+            npl.pushed_at
+          ) as publish_time,
+          COALESCE(nps.category, 'technology') as category,
+          npl.image_path,
+          npl.annotation_status,
+          npl.raw_content->>'fingerprint' as fingerprint,
+          npl.raw_content,
+          npl.processed_content
+        FROM news_push_log npl
+        LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
+        WHERE npl.id = $1
+      `, [id]);
 
       if (newsResult.rows.length === 0) {
         return c.json({
@@ -230,7 +209,6 @@ app.post('/api/annotation/news/:id/annotate',
   validator('json', (value, c) => {
     const body = value as QualityAnnotation;
 
-    // 基本参数验证
     if (typeof body.overall_score !== 'number' || body.overall_score < 0 || body.overall_score > 100) {
       return c.json({
         success: false,
@@ -287,6 +265,12 @@ app.post('/api/annotation/news/:id/annotate',
           annotation.difficulty,
           annotation.confidence
         ]);
+
+        // 更新push_log状态为completed
+        await client.query(
+          'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
+          ['completed', newsId]
+        );
 
         await client.query('COMMIT');
 
@@ -448,9 +432,9 @@ app.delete('/api/annotation/annotations/:id', async (c) => {
       // 删除标注
       await client.query('DELETE FROM quality_annotations WHERE id = $1', [annotationId]);
 
-      // 重置新闻状态为pending
+      // 重置push_log状态为pending
       await client.query(
-        'UPDATE news_raw_data SET annotation_status = $1 WHERE id = $2',
+        'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
         ['pending', newsId]
       );
 
@@ -486,14 +470,37 @@ app.get('/api/annotation/samples/export', async (c) => {
 
     const client = await postgres.getClient();
     try {
-      const result = await client.query(
-        'SELECT export_training_samples($1, $2, $3)',
-        [minScore, maxScore, limit]
-      );
+      // 直接查询导出样本
+      let query = `
+        SELECT
+          npl.raw_content->>'title' as title,
+          npl.raw_content->>'link' as link,
+          npl.processed_content->>'message' as description,
+          qa.overall_score,
+          qa.category as quality_level,
+          qa.should_filter,
+          qa.reason,
+          qa.tags,
+          qa.annotator,
+          qa.created_at
+        FROM quality_annotations qa
+        INNER JOIN news_push_log npl ON qa.news_id = npl.id
+        WHERE qa.is_latest = true
+          AND qa.overall_score >= $1
+          AND qa.overall_score <= $2
+        ORDER BY qa.created_at DESC
+      `;
 
-      const samples = result.rows[0].export_training_samples;
+      const params: any[] = [minScore, maxScore];
 
-      return c.json(samples);
+      if (limit) {
+        query += ` LIMIT $${params.length + 1}`;
+        params.push(limit);
+      }
+
+      const result = await client.query(query, params);
+
+      return c.json(result.rows);
     } finally {
       client.release();
     }
@@ -507,280 +514,28 @@ app.get('/api/annotation/samples/export', async (c) => {
 });
 
 /**
- * 从历史记录导入新闻数据（推荐）
- */
-app.post('/api/annotation/news/import/history', async (c) => {
-  try {
-    const body = await c.req.json() as {
-      source?: 'cache' | 'push_log';
-      category?: string;
-      limit?: number;
-      minDate?: string;
-    };
-
-    const {
-      source = 'cache',
-      category,
-      limit = 50,
-      minDate
-    } = body;
-
-    const client = await postgres.getClient();
-    try {
-      await client.query('BEGIN');
-
-      let importedCount = 0;
-      let skippedCount = 0;
-      const errors: string[] = [];
-
-      // 根据来源选择查询
-      let query = '';
-      const params: any[] = [];
-      let paramIndex = 1;
-
-      if (source === 'cache') {
-        query = `
-          SELECT DISTINCT ON (title, source_name)
-            title,
-            source_name as source,
-            source as original_source,
-            message as description,
-            link,
-            publish_time,
-            category_name as category,
-            index_num as rss_index,
-            image_path
-          FROM news_cache
-          WHERE 1=1
-        `;
-      } else {
-        query = `
-          SELECT DISTINCT ON (nps.title, nps.source)
-            nps.title as title,
-            nps.source as source,
-            'push_log' as original_source,
-            npl.result->>'message' as description,
-            nps.link as link,
-            npl.pushed_at as publish_time,
-            nps.category as category,
-            NULL::integer as rss_index
-          FROM news_push_log npl
-          JOIN news_push_stats nps ON npl.fingerprint = nps.fingerprint
-          WHERE 1=1
-        `;
-      }
-
-      // 添加过滤条件
-      if (category) {
-        if (source === 'cache') {
-          query += ` AND category_name = $${paramIndex++}`;
-        } else {
-          query += ` AND nps.category = $${paramIndex++}`;
-        }
-        params.push(category);
-      }
-
-      if (minDate) {
-        if (source === 'cache') {
-          query += ` AND publish_time >= $${paramIndex++}`;
-        } else {
-          query += ` AND npl.pushed_at >= $${paramIndex++}`;
-        }
-        params.push(minDate);
-      }
-
-      if (source === 'cache') {
-        query += ` ORDER BY title, source_name, publish_time DESC`;
-      } else {
-        query += ` ORDER BY nps.title, nps.source, npl.pushed_at DESC`;
-      }
-      query += ` LIMIT $${paramIndex}`;
-      params.push(limit);
-
-      const result = await client.query(query, params);
-
-      console.log(`📥 从${source}获取到${result.rows.length}条历史新闻`);
-
-      // 导入到news_raw_data
-      for (const row of result.rows) {
-        try {
-          // 尝试查找已有的推送图片
-          let imagePath: string | null = null;
-
-          // 提取真实的 data_source
-          let dataSource = 'unknown';
-          if (row.original_source) {
-            // 从 original_source 提取类型，例如 "rss_solidot" -> "rss"
-            if (row.original_source.startsWith('rss_')) {
-              dataSource = 'rss';
-            } else if (row.original_source === 'push_log') {
-              dataSource = 'push_log';
-            } else {
-              dataSource = row.original_source.split('_')[0] || 'unknown';
-            }
-          }
-
-          // 直接从 news_cache 读取 image_path（推送时已保存）
-          if (source === 'cache' && row.image_path) {
-            imagePath = row.image_path;
-            console.log(`✅ 从数据库读取历史图片: ${imagePath}`);
-          }
-
-          const insertResult = await client.query<{ id: number }>(`
-            INSERT INTO news_raw_data (
-              title, source, description, link, publish_time,
-              data_source, category, rss_index, image_path
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (title, source, publish_time) DO UPDATE SET
-              image_path = COALESCE(EXCLUDED.image_path, news_raw_data.image_path),
-              rss_index = COALESCE(EXCLUDED.rss_index, news_raw_data.rss_index),
-              data_source = COALESCE(EXCLUDED.data_source, news_raw_data.data_source)
-            RETURNING id
-          `, [
-            row.title,
-            row.source,
-            row.description,
-            row.link,
-            row.publish_time,
-            dataSource, // 使用提取的真实数据源
-            row.category,
-            row.rss_index,
-            imagePath
-          ]);
-
-          if (insertResult.rows.length > 0) {
-            importedCount++;
-          } else {
-            skippedCount++;
-          }
-        } catch (error) {
-          errors.push(`${row.title}: ${error instanceof Error ? error.message : '未知错误'}`);
-        }
-      }
-
-      await client.query('COMMIT');
-
-      return c.json({
-        success: true,
-        data: {
-          importedCount,
-          skippedCount,
-          totalProcessed: result.rows.length,
-          errors: errors.length > 0 ? errors : undefined
-        }
-      });
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error('❌ 从历史记录导入失败:', error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误'
-    }, 500);
-  }
-});
-
-/**
- * 清空所有待标注新闻数据（保留已标注的）
+ * 清空所有待标注新闻数据（将状态重置为pending）
  */
 app.delete('/api/annotation/news/pending', async (c) => {
   try {
     const client = await postgres.getClient();
     try {
+      // 不删除数据，只重置状态
       const result = await client.query(
-        `DELETE FROM news_raw_data WHERE annotation_status = 'pending' RETURNING id`
+        `UPDATE news_push_log SET annotation_status = 'pending' WHERE annotation_status != 'completed' RETURNING id`
       );
 
       return c.json({
         success: true,
         data: {
-          deletedCount: result.rowCount || 0
+          resetCount: result.rowCount || 0
         }
       });
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error('❌ 清空待标注数据失败:', error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误'
-    }, 500);
-  }
-});
-
-/**
- * 从RSS导入新闻数据
- */
-app.post('/api/annotation/news/import/rss', async (c) => {
-  try {
-    const body = await c.req.json() as ImportRSSRequest;
-    const { category, rssSource, count = 10, startIndex = 0 } = body;
-
-    // 使用现有的RSS数据源模块
-    const { RSSDataSource } = await import('../react-widgets/modules/data-sources/rss-source.js');
-    const rssDataSource = new RSSDataSource();
-
-    const client = await postgres.getClient();
-    try {
-      await client.query('BEGIN');
-
-      let importedCount = 0;
-      const errors: string[] = [];
-
-      for (let i = startIndex; i < startIndex + count; i++) {
-        try {
-          const newsData = await rssDataSource.fetchNews({
-            category,
-            index: i,
-            rssSource
-          });
-
-          // 导入到数据库
-          const result = await client.query<{ id: number }>(`
-            SELECT import_rss_news($1, $2, $3, $4, $5, $6, $7, $8)
-          `, [
-            newsData.title,
-            newsData.signature || rssSource,
-            newsData.message || null,
-            newsData.link || null,
-            newsData.publishTime || new Date(),
-            category,
-            i,
-            JSON.stringify(newsData)
-          ]);
-
-          const newId = result.rows[0].import_rss_news;
-          if (newId > 0) {
-            importedCount++;
-          }
-        } catch (error) {
-          errors.push(`索引${i}: ${error instanceof Error ? error.message : '未知错误'}`);
-        }
-      }
-
-      await client.query('COMMIT');
-
-      return c.json({
-        success: true,
-        data: {
-          importedCount,
-          requestedCount: count,
-          errors: errors.length > 0 ? errors : undefined
-        }
-      });
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error('❌ 导入RSS新闻失败:', error);
+    console.error('❌ 重置待标注数据失败:', error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '未知错误'
@@ -795,27 +550,45 @@ app.get('/api/annotation/statistics', async (c) => {
   try {
     const client = await postgres.getClient();
     try {
-      // 获取进度统计
-      const progressResult = await client.query(
-        'SELECT * FROM get_annotation_progress()'
-      );
+      // 进度统计
+      const progressResult = await client.query(`
+        SELECT
+          COUNT(*) as total_count,
+          COUNT(*) FILTER (WHERE annotation_status = 'pending') as pending_count,
+          COUNT(*) FILTER (WHERE annotation_status = 'completed') as completed_count,
+          ROUND(
+            100.0 * COUNT(*) FILTER (WHERE annotation_status = 'completed') / NULLIF(COUNT(*), 0),
+            1
+          ) as completion_rate
+        FROM news_push_log
+        WHERE raw_content->>'title' IS NOT NULL
+          AND raw_content->>'title' != ''
+      `);
 
-      // 获取质量分布
-      const distributionResult = await client.query(
-        'SELECT * FROM quality_distribution'
-      );
-
-      // 获取按分类统计
-      const categoryResult = await client.query(
-        'SELECT * FROM annotation_statistics'
-      );
+      // 质量分布
+      const distributionResult = await client.query(`
+        SELECT
+          qa.category as quality_level,
+          COUNT(*) as count,
+          ROUND(AVG(qa.overall_score), 1) as avg_score,
+          MIN(qa.overall_score) as min_score,
+          MAX(qa.overall_score) as max_score
+        FROM quality_annotations qa
+        WHERE qa.is_latest = true
+        GROUP BY qa.category
+        ORDER BY
+          CASE qa.category
+            WHEN 'high' THEN 1
+            WHEN 'medium' THEN 2
+            WHEN 'low' THEN 3
+          END
+      `);
 
       return c.json({
         success: true,
         data: {
           progress: progressResult.rows[0],
-          qualityDistribution: distributionResult.rows,
-          categoryStatistics: categoryResult.rows
+          qualityDistribution: distributionResult.rows
         }
       });
     } finally {
@@ -841,20 +614,20 @@ app.get('/api/annotation/history', async (c) => {
 
     let query = `
       SELECT
-        h.*,
-        n.title as news_title
-      FROM annotation_history h
-      INNER JOIN news_raw_data n ON h.news_id = n.id
+        qa.*,
+        npl.raw_content->>'title' as news_title
+      FROM quality_annotations qa
+      INNER JOIN news_push_log npl ON qa.news_id = npl.id
     `;
 
     const params: any[] = [];
 
     if (newsId) {
-      query += ' WHERE h.news_id = $1';
+      query += ' WHERE qa.news_id = $1';
       params.push(parseInt(newsId, 10));
     }
 
-    query += ` ORDER BY h.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    query += ` ORDER BY qa.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
 
     const client = await postgres.getClient();
@@ -920,6 +693,12 @@ app.post('/api/annotation/batch', async (c) => {
           annotation.confidence
         ]);
 
+        // 更新状态
+        await client.query(
+          'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
+          ['completed', annotation.news_id]
+        );
+
         results.push(result.rows[0]);
       }
 
@@ -938,101 +717,6 @@ app.post('/api/annotation/batch', async (c) => {
     }
   } catch (error) {
     console.error('❌ 批量标注失败:', error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误'
-    }, 500);
-  }
-});
-
-/**
- * 渲染新闻预览图（实时渲染）
- */
-app.post('/api/annotation/news/:id/render-preview', async (c) => {
-  try {
-    const newsId = parseInt(c.req.param('id'), 10);
-
-    const client = await postgres.getClient();
-    try {
-      // 获取新闻数据
-      const newsResult = await client.query<NewsRawData>(`
-        SELECT * FROM news_raw_data WHERE id = $1
-      `, [newsId]);
-
-      if (newsResult.rows.length === 0) {
-        return c.json({
-          success: false,
-          error: '新闻不存在'
-        }, 404);
-      }
-
-      const news = newsResult.rows[0];
-
-      // 动态导入渲染模块
-      const { NewsWidget } = await import('../react-widgets/components/NewsWidget.js');
-      const { minioWidgetRenderer } = await import('../react-widgets/core/minio-widget-renderer.js');
-      const React = await import('react');
-      const fs = await import('fs/promises');
-      const path = await import('path');
-
-      // 初始化渲染器
-      await minioWidgetRenderer.initialize();
-
-      // 准备新闻数据
-      const newsData = {
-        title: news.title,
-        message: news.description || news.title,
-        signature: `${news.source}`,
-        source: news.data_source,
-        publishTime: news.publish_time?.toString() || new Date().toISOString(),
-        category: news.category || 'news',
-        link: news.link
-      };
-
-      // 渲染组件为图片
-      const imageBuffer = await minioWidgetRenderer.renderToImage(
-        React.createElement(NewsWidget, {
-          data: newsData,
-          border: '#ffffff'
-        }),
-        {
-          format: 'png',
-          quality: 100,
-          backgroundColor: '#ffffff'
-        }
-      );
-
-      // 保存到本地
-      const timestamp = Date.now();
-      const filename = `preview_${newsId}_${timestamp}.png`;
-      const dirPath = './processed-images/widgets/news';
-      await fs.mkdir(dirPath, { recursive: true });
-
-      const imagePath = path.join(dirPath, filename);
-      await fs.writeFile(imagePath, imageBuffer);
-
-      // 返回相对路径（用于前端访问）
-      const relativePath = `/images/${filename}`;
-
-      // 更新数据库中的image_path（使用Web访问路径）
-      await client.query(`
-        UPDATE news_raw_data SET image_path = $1 WHERE id = $2
-      `, [relativePath, newsId]);
-
-      console.log(`✅ 新闻预览图已生成: ${imagePath} -> ${relativePath}`);
-
-      return c.json({
-        success: true,
-        data: {
-          imagePath: relativePath,
-          localPath: imagePath
-        }
-      });
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error('❌ 渲染预览图失败:', error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '未知错误'
