@@ -62,12 +62,14 @@ export class NewsScheduler {
   private jobs: Map<string, SchedulerJobInstance> = new Map();
   private started = false;
   private readonly postgres = getPostgresDatabase();
+  private heartbeatTimer: NodeJS.Timeout | null = null;
 
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
     await this.postgres.initialize();
     await this.reloadJobs();
+    this.startHeartbeat();
   }
 
   async stop(): Promise<void> {
@@ -78,7 +80,24 @@ export class NewsScheduler {
       }
       job.state.running = false;
     }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     this.started = false;
+  }
+
+  private startHeartbeat(): void {
+    // 每5分钟输出一次调度器状态
+    this.heartbeatTimer = setInterval(() => {
+      const status = Array.from(this.jobs.values()).map(job => ({
+        id: job.config.id,
+        running: job.state.running,
+        failures: job.state.consecutiveFailures,
+        nextIndex: job.state.nextIndex
+      }));
+      console.log(`💓 调度器心跳 - 活跃任务: ${status.length}, 状态:`, JSON.stringify(status));
+    }, 5 * 60 * 1000);
   }
 
   async reloadJobs(): Promise<void> {
@@ -182,9 +201,17 @@ export class NewsScheduler {
     if (!this.started) return;
 
     const actualDelay = Math.max(0, delayMs);
-    job.timer = setTimeout(async () => {
-      await this.runJob(job);
-      this.queueJob(job, job.config.intervalMs);
+    job.timer = setTimeout(() => {
+      // 使用Promise链确保即使失败也能继续调度
+      this.runJob(job)
+        .catch((error) => {
+          console.error(`❌ 调度任务执行异常: ${job.config.id}`, error);
+          // 记录错误但不中断调度链
+        })
+        .finally(() => {
+          // 无论成功失败，都继续下一次调度
+          this.queueJob(job, job.config.intervalMs);
+        });
     }, actualDelay);
   }
 
