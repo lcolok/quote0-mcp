@@ -13,6 +13,8 @@ export interface NewsRawData {
   annotation_status: 'pending' | 'annotating' | 'completed' | 'skipped';
   created_at: string;
   updated_at: string;
+  raw_content?: any; // 原始RSS数据
+  processed_content?: any; // AX优化后的数据
 }
 
 // 质量维度

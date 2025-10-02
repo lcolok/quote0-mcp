@@ -21,6 +21,8 @@ interface NewsRawData {
   annotation_status: 'pending' | 'annotating' | 'completed' | 'skipped';
   created_at: string;
   updated_at: string;
+  raw_content?: any;  // 原始RSS数据
+  processed_content?: any;  // 处理后的数据
 }
 
 interface QualityAnnotation {
@@ -62,34 +64,73 @@ app.get('/api/annotation/news', async (c) => {
     const offset = parseInt(c.req.query('offset') || '0', 10);
     const category = c.req.query('category');
 
-    let query = `
-      SELECT
-        id, title, source, description, link, publish_time,
-        data_source, category, rss_index, image_path,
-        annotation_status, created_at, updated_at
-      FROM news_raw_data
-      WHERE annotation_status = $1
-    `;
-
-    const params: any[] = [status];
-
-    if (category) {
-      query += ` AND category = $${params.length + 1}`;
-      params.push(category);
-    }
-
-    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(limit, offset);
-
     const client = await postgres.getClient();
     try {
+      // 🔄 自动同步：从 news_push_log 导入所有未在 news_raw_data 中的新闻
+      const syncResult = await client.query(`
+        INSERT INTO news_raw_data (
+          title, source, description, link, publish_time,
+          data_source, category, rss_index,
+          annotation_status, created_at, updated_at
+        )
+        SELECT DISTINCT ON (npl.raw_content->>'link')
+          COALESCE(npl.raw_content->>'title', nps.title, '无标题') as title,
+          COALESCE(npl.raw_content->>'source', nps.source, '未知来源') as source,
+          npl.processed_content->>'message' as description,
+          npl.raw_content->>'link' as link,
+          COALESCE(
+            (npl.raw_content->>'publishTime')::timestamp,
+            npl.pushed_at
+          ) as publish_time,
+          'push_log' as data_source,
+          COALESCE(nps.category, 'technology') as category,
+          NULL as rss_index,
+          'pending' as annotation_status,
+          npl.pushed_at as created_at,
+          npl.pushed_at as updated_at
+        FROM news_push_log npl
+        LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
+        WHERE npl.raw_content->>'link' IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM news_raw_data nr
+            WHERE nr.link = npl.raw_content->>'link'
+          )
+        ON CONFLICT (title, source, publish_time) DO NOTHING
+      `);
+
+      if (syncResult.rowCount && syncResult.rowCount > 0) {
+        console.log(`✅ 自动同步了 ${syncResult.rowCount} 条新闻到标注系统`);
+      }
+
+      // 查询待标注新闻
+      let query = `
+        SELECT
+          nr.id, nr.title, nr.source, nr.description, nr.link, nr.publish_time,
+          nr.data_source, nr.category, nr.rss_index, nr.image_path,
+          nr.annotation_status, nr.created_at, nr.updated_at,
+          npl.raw_content, npl.processed_content
+        FROM news_raw_data nr
+        LEFT JOIN news_push_log npl ON npl.raw_content->>'link' = nr.link
+        WHERE nr.annotation_status = $1
+      `;
+
+      const params: any[] = [status];
+
+      if (category) {
+        query += ` AND nr.category = $${params.length + 1}`;
+        params.push(category);
+      }
+
+      query += ` ORDER BY nr.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      params.push(limit, offset);
+
       const result = await client.query<NewsRawData>(query, params);
 
       // 获取总数
-      let countQuery = 'SELECT COUNT(*) FROM news_raw_data WHERE annotation_status = $1';
+      let countQuery = 'SELECT COUNT(*) FROM news_raw_data nr WHERE nr.annotation_status = $1';
       const countParams: any[] = [status];
       if (category) {
-        countQuery += ' AND category = $2';
+        countQuery += ' AND nr.category = $2';
         countParams.push(category);
       }
       const countResult = await client.query(countQuery, countParams);

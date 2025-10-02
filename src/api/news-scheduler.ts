@@ -322,13 +322,15 @@ export class NewsScheduler {
       const result = await processNews(request);
       console.log(`✅ 定时任务 ${job.config.id} 成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
 
-      // 提取原始RSS内容
+      // 提取原始RSS内容（包含完整正文）
       const rawContent = {
         title: candidate.context.title,
         link: candidate.context.link,
         publishTime: candidate.context.publishTime,
         source: candidate.context.source,
-        fingerprint: candidate.fingerprint
+        fingerprint: candidate.fingerprint,
+        content: candidate.context.content,  // 原始RSS正文内容
+        description: candidate.context.description  // RSS的description字段
       };
 
       // 如果没有预先提取，尝试从result中提取
@@ -462,7 +464,9 @@ export class NewsScheduler {
           source: item.source,
           category: item.category,
           fingerprint,
-          rawIndex: originalIndex
+          rawIndex: originalIndex,
+          content: item.content,  // 保存原始RSS正文内容
+          description: item.metadata?.description  // 保存RSS的description字段（如果有）
         };
         return { index: originalIndex, fingerprint, publishTime: item.publishTime, context };
       });

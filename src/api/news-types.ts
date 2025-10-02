@@ -100,6 +100,8 @@ export interface NewsPushContext {
   source?: string;
   category?: string;
   rawIndex?: number;
+  content?: string;  // 原始RSS正文内容
+  description?: string;  // RSS的description字段
 }
 
 export interface NewsSchedulerJobRecord {

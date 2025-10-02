@@ -4,7 +4,6 @@ import {
   FileEdit,
   BarChart3,
   Download,
-  Upload,
 } from 'lucide-react';
 
 function Layout() {
@@ -13,7 +12,6 @@ function Layout() {
     { to: '/annotate', icon: FileEdit, label: '开始标注' },
     { to: '/statistics', icon: BarChart3, label: '统计分析' },
     { to: '/export', icon: Download, label: '导出样本' },
-    { to: '/import', icon: Upload, label: '导入历史' },
   ];
 
   return (

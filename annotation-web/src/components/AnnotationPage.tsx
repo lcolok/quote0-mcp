@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
@@ -16,7 +16,7 @@ function AnnotationPage() {
     queryFn: () =>
       apiClient.getNews({
         status: 'pending',
-        limit: 50,
+        limit: 1000, // 加载全量待标注数据
       }),
   });
 
@@ -85,6 +85,32 @@ function AnnotationPage() {
       renderMutation.mutate(currentNews.id);
     }
   };
+
+  // 键盘快捷键：左右箭头翻页
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 检查是否在输入框中，避免干扰正常输入
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (currentIndex > 0) {
+          setCurrentIndex(currentIndex - 1);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (currentIndex < newsList.length - 1) {
+          setCurrentIndex(currentIndex + 1);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentIndex, newsList.length]);
 
   if (isLoading) {
     return (
@@ -162,7 +188,7 @@ function AnnotationPage() {
               <p className="mt-1 text-sm text-gray-700">{currentNews.source}</p>
             </div>
 
-            {currentNews.description && (
+            {currentNews.description && !currentNews.raw_content && !currentNews.processed_content && (
               <div>
                 <label className="text-xs font-medium text-gray-500 uppercase">
                   摘要
@@ -170,6 +196,74 @@ function AnnotationPage() {
                 <p className="mt-1 text-sm text-gray-700">
                   {currentNews.description}
                 </p>
+              </div>
+            )}
+
+            {/* 原始RSS数据区域 */}
+            {currentNews.raw_content && (
+              <div className="mt-2">
+                <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
+                  📋 原始RSS数据
+                </label>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2">
+                  <div>
+                    <span className="text-xs font-semibold text-yellow-800">原始标题：</span>
+                    <p className="text-sm text-yellow-900 mt-1">{currentNews.raw_content.title}</p>
+                  </div>
+                  {/* 显示原始正文：优先使用 raw_content.content，回退到 news.description */}
+                  {(currentNews.raw_content.content || currentNews.description) && (
+                    <div>
+                      <span className="text-xs font-semibold text-yellow-800">
+                        原始摘要/正文：
+                        {currentNews.raw_content.content
+                          ? `（${currentNews.raw_content.content.length} 字符）`
+                          : '（RSS摘要）'}
+                      </span>
+                      <p className="text-sm text-yellow-900 mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                        {currentNews.raw_content.content || currentNews.description}
+                      </p>
+                    </div>
+                  )}
+                  {currentNews.raw_content.description && (
+                    <div>
+                      <span className="text-xs font-semibold text-yellow-800">RSS Description：</span>
+                      <p className="text-sm text-yellow-900 mt-1 line-clamp-2">
+                        {currentNews.raw_content.description}
+                      </p>
+                    </div>
+                  )}
+                  <div className="text-xs text-yellow-600">
+                    来源: {currentNews.raw_content.source} | 发布: {currentNews.raw_content.publishTime || '未知'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 处理后的数据区域 */}
+            {currentNews.processed_content && (
+              <div className="mt-2">
+                <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
+                  ✨ AX优化后的数据
+                </label>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 space-y-2">
+                  <div>
+                    <span className="text-xs font-semibold text-green-800">优化标题：</span>
+                    <p className="text-sm text-green-900 mt-1 font-medium">{currentNews.processed_content.title}</p>
+                  </div>
+                  {currentNews.processed_content.message && (
+                    <div>
+                      <span className="text-xs font-semibold text-green-800">优化内容：</span>
+                      <p className="text-sm text-green-900 mt-1">
+                        {currentNews.processed_content.message}
+                      </p>
+                    </div>
+                  )}
+                  {currentNews.processed_content.signature && (
+                    <div className="text-xs text-green-600">
+                      处理器: {currentNews.processed_content.signature}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -241,8 +335,10 @@ function AnnotationPage() {
                 <button
                   onClick={() => {
                     const debugInfo = {
+                      // 基础信息
                       id: currentNews.id,
                       title: currentNews.title,
+                      description: currentNews.description,
                       source: currentNews.source,
                       data_source: currentNews.data_source,
                       category: currentNews.category,
@@ -251,14 +347,31 @@ function AnnotationPage() {
                       publish_time: currentNews.publish_time,
                       link: currentNews.link,
                       annotation_status: currentNews.annotation_status,
-                      created_at: currentNews.created_at
+                      created_at: currentNews.created_at,
+                      updated_at: currentNews.updated_at,
+
+                      // 原始RSS数据
+                      raw_content: currentNews.raw_content || null,
+
+                      // AX优化后的数据
+                      processed_content: currentNews.processed_content || null,
+
+                      // 数据对比分析
+                      data_analysis: {
+                        has_raw_data: !!currentNews.raw_content,
+                        has_processed_data: !!currentNews.processed_content,
+                        has_description: !!currentNews.description,
+                        data_source_type: currentNews.data_source,
+                        is_from_push_log: currentNews.data_source === 'push_log',
+                        has_image: !!currentNews.image_path
+                      }
                     };
                     navigator.clipboard.writeText(JSON.stringify(debugInfo, null, 2));
-                    toast.success('调试信息已复制到剪贴板');
+                    toast.success('完整调试信息已复制到剪贴板');
                   }}
                   className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
                 >
-                  📋 复制调试信息
+                  📋 复制完整调试信息
                 </button>
               </div>
               <div className="bg-gray-100 rounded p-3 text-xs font-mono space-y-1">
@@ -267,6 +380,25 @@ function AnnotationPage() {
                 <div><span className="text-gray-600">数据源字段:</span> {currentNews.data_source}</div>
                 <div><span className="text-gray-600">RSS索引:</span> {currentNews.rss_index ?? 'null'}</div>
                 <div><span className="text-gray-600">图片路径:</span> {currentNews.image_path || '无'}</div>
+
+                <div className="pt-2 border-t border-gray-300">
+                  <span className="text-gray-600">数据完整性:</span>
+                  <ul className="ml-4 mt-1 space-y-1">
+                    <li className={currentNews.raw_content ? "text-green-600" : "text-gray-500"}>
+                      {currentNews.raw_content ? "✓" : "○"} 原始RSS数据
+                    </li>
+                    <li className={currentNews.processed_content ? "text-green-600" : "text-gray-500"}>
+                      {currentNews.processed_content ? "✓" : "○"} AX优化数据
+                    </li>
+                    <li className={currentNews.description ? "text-green-600" : "text-gray-500"}>
+                      {currentNews.description ? "✓" : "○"} 描述信息
+                    </li>
+                    <li className={currentNews.image_path ? "text-green-600" : "text-gray-500"}>
+                      {currentNews.image_path ? "✓" : "○"} 历史图片
+                    </li>
+                  </ul>
+                </div>
+
                 <div className="pt-2 border-t border-gray-300">
                   <span className="text-gray-600">问题诊断:</span>
                   <ul className="ml-4 mt-1 space-y-1">
@@ -279,6 +411,9 @@ function AnnotationPage() {
                     {currentNews.rss_index === null && (
                       <li className="text-orange-600">⚠️ 缺少RSS索引</li>
                     )}
+                    {!currentNews.raw_content && !currentNews.processed_content && (
+                      <li className="text-orange-600">⚠️ 无原始/优化数据（可能是直接导入）</li>
+                    )}
                   </ul>
                 </div>
               </div>
@@ -286,31 +421,38 @@ function AnnotationPage() {
           </div>
 
           {/* 导航按钮 */}
-          <div className="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
-            <button
-              onClick={handlePrevious}
-              disabled={currentIndex === 0}
-              className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft className="w-4 h-4 mr-1" />
-              上一条
-            </button>
+          <div className="mt-6 pt-6 border-t border-gray-200">
+            <div className="flex items-center justify-center mb-3">
+              <span className="text-xs text-gray-500">
+                💡 提示：使用键盘 ← → 方向键快速翻页
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <button
+                onClick={handlePrevious}
+                disabled={currentIndex === 0}
+                className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-4 h-4 mr-1" />
+                上一条
+              </button>
 
-            <button
-              onClick={handleSkip}
-              className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
-            >
-              跳过
-            </button>
+              <button
+                onClick={handleSkip}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+              >
+                跳过
+              </button>
 
-            <button
-              onClick={handleNext}
-              disabled={currentIndex === newsList.length - 1}
-              className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              下一条
-              <ChevronRight className="w-4 h-4 ml-1" />
-            </button>
+              <button
+                onClick={handleNext}
+                disabled={currentIndex === newsList.length - 1}
+                className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                下一条
+                <ChevronRight className="w-4 h-4 ml-1" />
+              </button>
+            </div>
           </div>
         </div>
 
