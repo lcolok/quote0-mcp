@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
-import type { QualityAnnotation } from '../types';
-import AnnotationForm from './AnnotationForm';
 import { ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon } from 'lucide-react';
 
 function AnnotationPage() {
@@ -50,21 +48,6 @@ function AnnotationPage() {
     ? `/api/minio-proxy${rawImagePath}`
     : null;
 
-  // 提交标注mutation
-  const submitMutation = useMutation({
-    mutationFn: (annotation: Omit<QualityAnnotation, 'id' | 'news_id'>) =>
-      apiClient.submitAnnotation(currentNews.id, annotation),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pending-news'] });
-      queryClient.invalidateQueries({ queryKey: ['statistics'] });
-
-      // 自动跳转到下一条
-      if (currentIndex < newsList.length - 1) {
-        setCurrentIndex(currentIndex + 1);
-      }
-    },
-  });
-
   // 快速标注mutation（点赞/点踩）
   const quickAnnotateMutation = useMutation({
     mutationFn: (action: 'like' | 'dislike') =>
@@ -83,10 +66,6 @@ function AnnotationPage() {
       toast.error('标注失败，请重试');
     },
   });
-
-  const handleSubmit = (annotation: Omit<QualityAnnotation, 'id' | 'news_id'>) => {
-    submitMutation.mutate(annotation);
-  };
 
   const handlePrevious = () => {
     if (currentIndex > 0) {
@@ -527,15 +506,6 @@ function AnnotationPage() {
               </button>
             </div>
           </div>
-        </div>
-
-        {/* 标注表单 */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">质量评估</h3>
-          <AnnotationForm
-            onSubmit={handleSubmit}
-            isSubmitting={submitMutation.isPending}
-          />
         </div>
       </div>
     </div>
