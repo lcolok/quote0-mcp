@@ -76,6 +76,20 @@ class AnnotationApiClient {
   }
 
   /**
+   * 快速标注（点赞/点踩）
+   */
+  async quickAnnotate(
+    newsId: number,
+    action: 'like' | 'dislike'
+  ): Promise<ApiResponse<QualityAnnotation>> {
+    const response = await this.client.post<ApiResponse<QualityAnnotation>>(
+      `/api/annotation/news/${newsId}/quick`,
+      { action }
+    );
+    return response.data;
+  }
+
+  /**
    * 更新标注
    */
   async updateAnnotation(

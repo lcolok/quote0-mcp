@@ -295,6 +295,79 @@ app.post('/api/annotation/news/:id/annotate',
 );
 
 /**
+ * 快速标注（点赞/点踩）
+ */
+app.post('/api/annotation/news/:id/quick', async (c) => {
+  try {
+    const newsId = parseInt(c.req.param('id'), 10);
+    const { action } = await c.req.json() as { action: 'like' | 'dislike' };
+
+    // 快速标注映射
+    const mapping = {
+      like: {
+        overall_score: 80,
+        category: 'high' as const,
+        should_filter: false,
+        reason: '快速标注：高质量内容'
+      },
+      dislike: {
+        overall_score: 20,
+        category: 'low' as const,
+        should_filter: true,
+        reason: '快速标注：低质量内容'
+      }
+    };
+
+    const annotationData = mapping[action];
+
+    const client = await postgres.getClient();
+    try {
+      await client.query('BEGIN');
+
+      // 插入标注
+      const result = await client.query<QualityAnnotation>(`
+        INSERT INTO quality_annotations (
+          news_id, overall_score, category, should_filter,
+          reason, annotator
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [
+        newsId,
+        annotationData.overall_score,
+        annotationData.category,
+        annotationData.should_filter,
+        annotationData.reason,
+        'quick-annotator'
+      ]);
+
+      // 更新push_log状态为completed
+      await client.query(
+        'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
+        ['completed', newsId]
+      );
+
+      await client.query('COMMIT');
+
+      return c.json({
+        success: true,
+        data: result.rows[0]
+      }, 201);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('❌ 快速标注失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误'
+    }, 500);
+  }
+});
+
+/**
  * 更新标注
  */
 app.put('/api/annotation/annotations/:id', async (c) => {

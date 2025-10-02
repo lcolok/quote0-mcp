@@ -65,6 +65,25 @@ function AnnotationPage() {
     },
   });
 
+  // 快速标注mutation（点赞/点踩）
+  const quickAnnotateMutation = useMutation({
+    mutationFn: (action: 'like' | 'dislike') =>
+      apiClient.quickAnnotate(currentNews.id, action),
+    onSuccess: (_, action) => {
+      toast.success(action === 'like' ? '👍 已标记为高质量' : '👎 已标记为低质量');
+      queryClient.invalidateQueries({ queryKey: ['pending-news'] });
+      queryClient.invalidateQueries({ queryKey: ['statistics'] });
+
+      // 自动跳转到下一条
+      if (currentIndex < newsList.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+      }
+    },
+    onError: () => {
+      toast.error('标注失败，请重试');
+    },
+  });
+
   const handleSubmit = (annotation: Omit<QualityAnnotation, 'id' | 'news_id'>) => {
     submitMutation.mutate(annotation);
   };
@@ -87,13 +106,19 @@ function AnnotationPage() {
     }
   };
 
+  const handleQuickAnnotate = (action: 'like' | 'dislike') => {
+    if (currentNews && !quickAnnotateMutation.isPending) {
+      quickAnnotateMutation.mutate(action);
+    }
+  };
+
   const handleRenderPreview = () => {
     if (currentNews) {
       renderMutation.mutate(currentNews.id);
     }
   };
 
-  // 键盘快捷键：左右箭头翻页
+  // 键盘快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // 检查是否在输入框中，避免干扰正常输入
@@ -102,22 +127,40 @@ function AnnotationPage() {
         return;
       }
 
-      if (e.key === 'ArrowLeft') {
+      // F键或→键或↑键：点赞（高质量）
+      if (e.key === 'f' || e.key === 'F' ||
+          (e.key === 'ArrowRight' && !e.shiftKey) ||
+          (e.key === 'ArrowUp' && !e.shiftKey)) {
         e.preventDefault();
-        if (currentIndex > 0) {
-          setCurrentIndex(currentIndex - 1);
-        }
-      } else if (e.key === 'ArrowRight') {
+        handleQuickAnnotate('like');
+      }
+      // D键或←键或↓键：点踩（低质量）
+      else if (e.key === 'd' || e.key === 'D' ||
+               (e.key === 'ArrowLeft' && !e.shiftKey) ||
+               (e.key === 'ArrowDown' && !e.shiftKey)) {
         e.preventDefault();
-        if (currentIndex < newsList.length - 1) {
-          setCurrentIndex(currentIndex + 1);
-        }
+        handleQuickAnnotate('dislike');
+      }
+      // S键或Space：跳过
+      else if (e.key === 's' || e.key === 'S' || e.key === ' ') {
+        e.preventDefault();
+        handleSkip();
+      }
+      // Shift+→：下一条（不标注）
+      else if (e.key === 'ArrowRight' && e.shiftKey) {
+        e.preventDefault();
+        handleNext();
+      }
+      // Shift+←：上一条
+      else if (e.key === 'ArrowLeft' && e.shiftKey) {
+        e.preventDefault();
+        handlePrevious();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentIndex, newsList.length]);
+  }, [currentIndex, newsList.length, currentNews]);
 
   if (isLoading) {
     return (
@@ -427,11 +470,38 @@ function AnnotationPage() {
             </div>
           </div>
 
-          {/* 导航按钮 */}
+          {/* 快速标注按钮 */}
           <div className="mt-6 pt-6 border-t border-gray-200">
+            <div className="flex items-center justify-center mb-4">
+              <span className="text-sm font-medium text-gray-700 mr-3">快速标注：</span>
+              <button
+                onClick={() => handleQuickAnnotate('dislike')}
+                disabled={quickAnnotateMutation.isPending}
+                className="flex items-center px-6 py-3 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed mr-3"
+                title="点踩 / 低质量 (快捷键: D, ←, ↓)"
+              >
+                <span className="text-2xl mr-2">👎</span>
+                <span className="font-medium">低质量</span>
+                <span className="text-xs opacity-75 ml-2">(D/←/↓)</span>
+              </button>
+              <button
+                onClick={() => handleQuickAnnotate('like')}
+                disabled={quickAnnotateMutation.isPending}
+                className="flex items-center px-6 py-3 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="点赞 / 高质量 (快捷键: F, →, ↑)"
+              >
+                <span className="text-2xl mr-2">👍</span>
+                <span className="font-medium">高质量</span>
+                <span className="text-xs opacity-75 ml-2">(F/→/↑)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 导航按钮 */}
+          <div className="mt-4 pt-4 border-t border-gray-200">
             <div className="flex items-center justify-center mb-3">
               <span className="text-xs text-gray-500">
-                💡 提示：使用键盘 ← → 方向键快速翻页
+                💡 提示：Shift+← → 翻页 | Space/S 跳过
               </span>
             </div>
             <div className="flex items-center justify-between">
