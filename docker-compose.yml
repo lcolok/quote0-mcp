@@ -117,6 +117,8 @@ services:
     container_name: quote0-annotation-web
     ports:
       - "3002:80"
+    volumes:
+      - ./processed-images/widgets/news:/usr/share/nginx/html/images:ro
     depends_on:
       - news-api
     networks:

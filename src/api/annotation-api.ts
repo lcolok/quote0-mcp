@@ -498,32 +498,45 @@ app.post('/api/annotation/news/import/history', async (c) => {
         `;
       } else {
         query = `
-          SELECT DISTINCT ON (title, source)
-            title,
-            source,
+          SELECT DISTINCT ON (nps.title, nps.source)
+            nps.title as title,
+            nps.source as source,
             'push_log' as original_source,
-            content->>'message' as description,
-            content->>'link' as link,
-            pushed_at as publish_time,
-            category,
+            npl.result->>'message' as description,
+            nps.link as link,
+            npl.pushed_at as publish_time,
+            nps.category as category,
             NULL::integer as rss_index
-          FROM news_push_log
+          FROM news_push_log npl
+          JOIN news_push_stats nps ON npl.fingerprint = nps.fingerprint
           WHERE 1=1
         `;
       }
 
       // 添加过滤条件
       if (category) {
-        query += ` AND category${source === 'cache' ? '_name' : ''} = $${paramIndex++}`;
+        if (source === 'cache') {
+          query += ` AND category_name = $${paramIndex++}`;
+        } else {
+          query += ` AND nps.category = $${paramIndex++}`;
+        }
         params.push(category);
       }
 
       if (minDate) {
-        query += ` AND ${source === 'cache' ? 'publish_time' : 'pushed_at'} >= $${paramIndex++}`;
+        if (source === 'cache') {
+          query += ` AND publish_time >= $${paramIndex++}`;
+        } else {
+          query += ` AND npl.pushed_at >= $${paramIndex++}`;
+        }
         params.push(minDate);
       }
 
-      query += ` ORDER BY ${source === 'cache' ? 'title, source_name, publish_time' : 'title, source, pushed_at'} DESC`;
+      if (source === 'cache') {
+        query += ` ORDER BY title, source_name, publish_time DESC`;
+      } else {
+        query += ` ORDER BY nps.title, nps.source, npl.pushed_at DESC`;
+      }
       query += ` LIMIT $${paramIndex}`;
       params.push(limit);
 
@@ -561,7 +574,10 @@ app.post('/api/annotation/news/import/history', async (c) => {
               title, source, description, link, publish_time,
               data_source, category, rss_index, image_path
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (title, source, publish_time) DO NOTHING
+            ON CONFLICT (title, source, publish_time) DO UPDATE SET
+              image_path = COALESCE(EXCLUDED.image_path, news_raw_data.image_path),
+              rss_index = COALESCE(EXCLUDED.rss_index, news_raw_data.rss_index),
+              data_source = COALESCE(EXCLUDED.data_source, news_raw_data.data_source)
             RETURNING id
           `, [
             row.title,

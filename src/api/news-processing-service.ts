@@ -320,6 +320,40 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     result = await modularNewsPlugin.getData(params);
     cacheHit = false;
     cacheSource = params.force ? 'forced' : 'no_cache';
+
+    // 对于设备推送，更新 news_cache 表的 image_path 字段
+    if (params.renderer === 'device' && typeof result === 'object' && result?.localImagePath) {
+      try {
+        const { getPostgresDatabase } = await import('../react-widgets/core/postgres-database.js');
+        const postgres = getPostgresDatabase();
+        const client = await postgres.getClient();
+
+        try {
+          const updateResult = await client.query(
+            `UPDATE news_cache
+             SET image_path = $1
+             WHERE source = $2 AND category_name = $3 AND index_num = $4
+             RETURNING id`,
+            [
+              result.localImagePath,
+              `${params.dataSource}_${params.rssSource}`,
+              params.category,
+              params.index
+            ]
+          );
+
+          if (updateResult.rowCount && updateResult.rowCount > 0) {
+            console.log(`💾 已更新 news_cache.image_path: ${result.localImagePath} (影响${updateResult.rowCount}行)`);
+          } else {
+            console.warn(`⚠️ 未找到匹配的 news_cache 记录 (source: ${params.dataSource}_${params.rssSource}, category: ${params.category}, index: ${params.index})`);
+          }
+        } finally {
+          client.release();
+        }
+      } catch (updateError) {
+        console.error('❌ 更新 news_cache.image_path 失败:', updateError);
+      }
+    }
   }
 
   const processingTime = Date.now() - startTime;
