@@ -626,13 +626,13 @@ app.get('/api/annotation/statistics', async (c) => {
       // 进度统计
       const progressResult = await client.query(`
         SELECT
-          COUNT(*) as total_count,
-          COUNT(*) FILTER (WHERE annotation_status = 'pending') as pending_count,
-          COUNT(*) FILTER (WHERE annotation_status = 'completed') as completed_count,
+          COUNT(*)::INTEGER as total_count,
+          COUNT(*) FILTER (WHERE annotation_status = 'pending')::INTEGER as pending_count,
+          COUNT(*) FILTER (WHERE annotation_status = 'completed')::INTEGER as completed_count,
           ROUND(
             100.0 * COUNT(*) FILTER (WHERE annotation_status = 'completed') / NULLIF(COUNT(*), 0),
             1
-          ) as completion_rate
+          )::FLOAT as completion_rate
         FROM news_push_log
         WHERE raw_content->>'title' IS NOT NULL
           AND raw_content->>'title' != ''
@@ -642,10 +642,10 @@ app.get('/api/annotation/statistics', async (c) => {
       const distributionResult = await client.query(`
         SELECT
           qa.category as quality_level,
-          COUNT(*) as count,
-          ROUND(AVG(qa.overall_score), 1) as avg_score,
-          MIN(qa.overall_score) as min_score,
-          MAX(qa.overall_score) as max_score
+          COUNT(*)::INTEGER as count,
+          ROUND(AVG(qa.overall_score)::numeric, 1)::FLOAT as avg_score,
+          MIN(qa.overall_score)::INTEGER as min_score,
+          MAX(qa.overall_score)::INTEGER as max_score
         FROM quality_annotations qa
         WHERE qa.is_latest = true
         GROUP BY qa.category

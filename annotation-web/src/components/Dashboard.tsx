@@ -76,7 +76,7 @@ function Dashboard() {
                 </span>
               </div>
               <div className="text-xs text-gray-500 space-y-1">
-                <div>平均分: {dist.avg_score?.toFixed(1)}</div>
+                <div>平均分: {dist.avg_score != null ? Number(dist.avg_score).toFixed(1) : 'N/A'}</div>
                 <div>
                   范围: {dist.min_score} - {dist.max_score}
                 </div>
