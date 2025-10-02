@@ -864,7 +864,10 @@ export class PostgresDatabase {
         indexStrategy: row.index_strategy || {},
         enabled: row.enabled,
         createdAt: row.created_at?.toISOString?.() || row.created_at,
-        updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+        updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
+        lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
+        nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
+        state: row.state || {}
       }));
     } finally {
       client.release();
@@ -894,7 +897,10 @@ export class PostgresDatabase {
         indexStrategy: row.index_strategy || {},
         enabled: row.enabled,
         createdAt: row.created_at?.toISOString?.() || row.created_at,
-        updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+        updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
+        lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
+        nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
+        state: row.state || {}
       };
     } finally {
       client.release();
@@ -982,6 +988,50 @@ export class PostgresDatabase {
         SET current_source_index = $2, updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
       `, [id, currentSourceIndex]);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 保存调度器运行时状态（持久化支持）
+   */
+  async saveSchedulerState(id: string, state: {
+    nextIndex: number;
+    lastIndex: number | null;
+    shuffledOrder: number[];
+    shuffledPointer: number;
+    consecutiveFailures: number;
+    currentSourceIndex: number;
+    dynamicPoolSize: number | null;
+  }, nextRunAt?: Date): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        UPDATE news_scheduler_jobs
+        SET state = $2::jsonb,
+            last_run_at = CURRENT_TIMESTAMP,
+            next_run_at = $3,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `, [id, JSON.stringify(state), nextRunAt || null]);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 更新调度器下次运行时间
+   */
+  async updateSchedulerNextRun(id: string, nextRunAt: Date): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        UPDATE news_scheduler_jobs
+        SET next_run_at = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `, [id, nextRunAt]);
     } finally {
       client.release();
     }

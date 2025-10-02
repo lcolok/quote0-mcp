@@ -100,6 +100,46 @@ export class NewsScheduler {
     }, 5 * 60 * 1000);
   }
 
+  /**
+   * 计算任务的延迟时间（支持持久化恢复）
+   */
+  private calculateDelayForJob(record: any, config: NormalizedSchedulerJob): number {
+    const now = Date.now();
+
+    // 如果有 nextRunAt，根据它计算延迟
+    if (record.nextRunAt) {
+      const nextRunTime = new Date(record.nextRunAt).getTime();
+      const delay = nextRunTime - now;
+
+      if (delay > 0) {
+        console.log(`📅 从数据库恢复任务 ${config.id} 的下次运行时间: ${new Date(nextRunTime).toISOString()}`);
+        return delay;
+      } else {
+        console.log(`⏰ 任务 ${config.id} 已超时 ${Math.abs(Math.round(delay / 1000))}秒，立即执行`);
+        return 0;  // 超时了，立即执行
+      }
+    }
+
+    // 如果有 lastRunAt，根据它和 intervalMs 计算下次运行时间
+    if (record.lastRunAt) {
+      const lastRunTime = new Date(record.lastRunAt).getTime();
+      const nextRunTime = lastRunTime + config.intervalMs;
+      const delay = nextRunTime - now;
+
+      if (delay > 0) {
+        console.log(`📅 根据上次运行时间计算任务 ${config.id}: 上次 ${new Date(lastRunTime).toISOString()}, 下次 ${new Date(nextRunTime).toISOString()}`);
+        return delay;
+      } else {
+        console.log(`⏰ 任务 ${config.id} 根据上次运行时间已超时，立即执行`);
+        return 0;
+      }
+    }
+
+    // 没有保存的时间信息，使用初始延迟
+    console.log(`🆕 任务 ${config.id} 首次运行，使用初始延迟 ${config.initialDelayMs}ms`);
+    return config.initialDelayMs;
+  }
+
   async reloadJobs(): Promise<void> {
     const jobRecords = await this.postgres.getSchedulerJobs();
     if (jobRecords.length === 0) {
@@ -134,7 +174,10 @@ export class NewsScheduler {
         const instance = createJobInstance(normalized);
         this.jobs.set(normalized.id, instance);
         if (this.started) {
-          this.queueJob(instance, normalized.initialDelayMs);
+          // 计算延迟时间（持久化恢复支持）
+          const delay = this.calculateDelayForJob(record, normalized);
+          console.log(`⏰ 任务 ${normalized.id} 将在 ${Math.round(delay / 1000)}秒 后执行`);
+          this.queueJob(instance, delay);
         }
       }
     }
@@ -331,6 +374,19 @@ export class NewsScheduler {
       await this.rotateRssSource(job);
 
       job.state.consecutiveFailures = 0;
+
+      // 保存状态到数据库（持久化支持）
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.postgres.saveSchedulerState(job.config.id, {
+        nextIndex: job.state.nextIndex,
+        lastIndex: job.state.lastIndex,
+        shuffledOrder: job.state.shuffledOrder,
+        shuffledPointer: job.state.shuffledPointer,
+        consecutiveFailures: job.state.consecutiveFailures,
+        currentSourceIndex: job.state.currentSourceIndex,
+        dynamicPoolSize: job.state.dynamicPoolSize
+      }, nextRunAt);
+      console.log(`💾 已保存调度器状态: ${job.config.id}, 下次运行: ${nextRunAt.toISOString()}`);
     } catch (error) {
       job.state.consecutiveFailures += 1;
       console.error(`❌ 定时任务 ${job.config.id} 执行失败 (连续失败 ${job.state.consecutiveFailures} 次):`, error);
@@ -674,22 +730,30 @@ export class NewsScheduler {
 }
 
 function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
-  // 从数据库记录中恢复currentSourceIndex
+  // 从数据库记录中恢复完整状态（持久化支持）
+  const savedState = (job as any).state || {};
   const currentSourceIndex = typeof (job as any).currentSourceIndex === 'number'
     ? (job as any).currentSourceIndex
     : 0;
 
+  // 如果有保存的状态，优先使用；否则使用默认值
+  const defaultState = {
+    nextIndex: job.indexStrategy.startIndex,
+    lastIndex: null,
+    shuffledOrder: [],
+    shuffledPointer: 0,
+    running: false,
+    consecutiveFailures: 0,
+    currentSourceIndex,
+    dynamicPoolSize: null
+  };
+
   return {
     config: job,
     state: {
-      nextIndex: job.indexStrategy.startIndex,
-      lastIndex: null,
-      shuffledOrder: [],
-      shuffledPointer: 0,
-      running: false,
-      consecutiveFailures: 0,
-      currentSourceIndex, // 从数据库恢复或默认0
-      dynamicPoolSize: null
+      ...defaultState,
+      ...savedState,  // 从数据库恢复的状态会覆盖默认值
+      running: false  // 重启后总是设为未运行
     },
     timer: null
   };
@@ -713,7 +777,10 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
     indexStrategy: normalizeIndexStrategy(record.indexStrategy as RequiredSchedulerIndexStrategy),
     enabled: record.enabled !== false,
     createdAt: record.createdAt,
-    updatedAt: record.updatedAt
+    updatedAt: record.updatedAt,
+    lastRunAt: record.lastRunAt,  // 持久化字段
+    nextRunAt: record.nextRunAt,  // 持久化字段
+    state: record.state || {}     // 持久化字段
   };
 }
 
