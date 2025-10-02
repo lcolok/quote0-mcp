@@ -288,36 +288,8 @@ export class NewsScheduler {
 
       console.log(`🕒 定时任务 ${job.config.id} 准备推送 source=${currentRssSource} fingerprint=${candidate.fingerprint} index=${candidate.index}`);
 
-      // 对于device渲染器，先获取AX优化后的文本内容
+      // 直接处理新闻（device renderer 现在会返回文本数据）
       let processedContent: Record<string, any> | undefined = undefined;
-      if (request.renderer === 'device' && request.processor !== 'passthrough') {
-        try {
-          console.log('📝 先获取AX优化后的文本内容...');
-          const jsonRequest = {
-            ...request,
-            renderer: 'json' as const,
-            options: {
-              ...request.options,
-              force: true  // 强制重新处理，避免缓存错配问题
-            }
-          };
-          const jsonResult = await processNews(jsonRequest);
-
-          if (jsonResult.result && typeof jsonResult.result === 'object') {
-            processedContent = {
-              title: (jsonResult.result as any).title || candidate.context.title,
-              message: (jsonResult.result as any).message,
-              summary: (jsonResult.result as any).summary,
-              source: (jsonResult.result as any).source || candidate.context.source,
-              signature: (jsonResult.result as any).signature,
-              link: (jsonResult.result as any).link || candidate.context.link
-            };
-            console.log('✅ AX优化内容已提取');
-          }
-        } catch (jsonError) {
-          console.warn('⚠️ 获取AX优化内容失败:', jsonError);
-        }
-      }
 
       const result = await processNews(request);
       console.log(`✅ 定时任务 ${job.config.id} 成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
@@ -333,21 +305,18 @@ export class NewsScheduler {
         description: candidate.context.description  // RSS的description字段
       };
 
-      // 如果没有预先提取，尝试从result中提取
-      if (!processedContent && result.result) {
-        if (Buffer.isBuffer(result.result)) {
-          // 设备渲染器返回Buffer,不记录
-          processedContent = { note: 'Image buffer not stored' };
-        } else if (typeof result.result === 'object') {
-          processedContent = {
-            title: (result.result as any).title || candidate.context.title,
-            message: (result.result as any).message,
-            summary: (result.result as any).summary,
-            source: (result.result as any).source || candidate.context.source,
-            signature: (result.result as any).signature,
-            link: (result.result as any).link || candidate.context.link
-          };
-        }
+      // 从device renderer的返回结果中提取文本数据
+      // device renderer现在会同时返回图片和文本数据，确保一致性
+      if (result.result && typeof result.result === 'object' && !Buffer.isBuffer(result.result)) {
+        processedContent = {
+          title: (result.result as any).title || candidate.context.title,
+          message: (result.result as any).message,
+          summary: (result.result as any).summary || (result.result as any).message,
+          source: (result.result as any).source || candidate.context.source,
+          signature: (result.result as any).signature,
+          link: (result.result as any).link || candidate.context.link
+        };
+        console.log('✅ 从渲染结果中提取文本数据，确保与图片内容一致');
       }
 
       // 提取图片路径（如果是设备推送）

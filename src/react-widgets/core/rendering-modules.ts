@@ -501,7 +501,14 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
           return {
             imageUrl,
             localImagePath: `/${objectKey}`, // 使用MinIO objectKey作为数据库路径
-            deviceResult: '推送成功'
+            deviceResult: '推送成功',
+            // 添加文本数据，确保与图片内容一致
+            title: data.title,
+            message: data.message,
+            summary: data.message, // 使用 message 作为 summary
+            source: data.source,
+            signature: data.signature,
+            link: data.link
           };
         } catch (deviceError: any) {
           // 检查是否是429错误且还有重试次数
@@ -588,7 +595,14 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
         
           return {
             imageUrl,
-            deviceResult: enhancedErrorMessage
+            deviceResult: enhancedErrorMessage,
+            // 即使推送失败，也返回文本数据
+            title: data.title,
+            message: data.message,
+            summary: data.message,
+            source: data.source,
+            signature: data.signature,
+            link: data.link
           };
         }
       }
@@ -596,7 +610,14 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       // 如果到达这里，说明所有重试都失败了
       return {
         imageUrl,
-        deviceResult: '推送失败: 超过最大重试次数'
+        deviceResult: '推送失败: 超过最大重试次数',
+        // 即使推送失败，也返回文本数据
+        title: data.title,
+        message: data.message,
+        summary: data.message,
+        source: data.source,
+        signature: data.signature,
+        link: data.link
       };
       
     } catch (error) {

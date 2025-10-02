@@ -149,6 +149,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             console.log(`🔍 搜索模式: ${searchPattern}`);
 
             let existsResult: { url: string; objectKey?: string } | null = null;
+            let cachedTextData: any = null; // 用于保存缓存的文本数据
 
             try {
               const postgres = cacheInternals.postgres;
@@ -159,6 +160,11 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                   if (existsResult) {
                     // 保存localImagePath用于数据库记录
                     localImagePath = `/${cachedImageInfo.objectKey}`;
+                    // 提取缓存的文本数据
+                    if (cachedImageInfo.renderConfig && (cachedImageInfo.renderConfig as any).textData) {
+                      cachedTextData = (cachedImageInfo.renderConfig as any).textData;
+                      console.log('✅ 从缓存中恢复文本数据');
+                    }
                   }
                 }
               }
@@ -258,7 +264,18 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                     contentType: 'image/png',
                     etag: 'unknown',
                     widgetType: 'news',
-                    renderConfig: { ...config } as Record<string, unknown>,
+                    renderConfig: {
+                      ...config,
+                      // 保存文本数据，确保缓存命中时的一致性
+                      textData: {
+                        title: (deviceResult as any).title,
+                        message: (deviceResult as any).message,
+                        summary: (deviceResult as any).summary || (deviceResult as any).message,
+                        source: (deviceResult as any).source,
+                        signature: (deviceResult as any).signature,
+                        link: (deviceResult as any).link
+                      }
+                    } as Record<string, unknown>,
                     ttl: cacheConfig.imageCacheTTL
                   });
                 }
@@ -313,6 +330,13 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           imageUrl,
           localImagePath,  // 添加localImagePath字段
           deviceResult: devicePushResult,
+          // 从deviceResult或缓存中提取文本数据，确保与图片一致
+          title: cachedTextData?.title || (deviceResult as any).title,
+          message: cachedTextData?.message || (deviceResult as any).message,
+          summary: cachedTextData?.summary || (deviceResult as any).summary || (deviceResult as any).message,
+          source: cachedTextData?.source || (deviceResult as any).source,
+          signature: cachedTextData?.signature || (deviceResult as any).signature,
+          link: cachedTextData?.link || (deviceResult as any).link,
           cacheInfo: {
             hit: localCacheHit,
             source: localCacheHit ? 'minio_cache' : 'original',
