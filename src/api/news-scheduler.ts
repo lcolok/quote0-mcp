@@ -350,6 +350,16 @@ export class NewsScheduler {
         }
       }
 
+      // 提取图片路径（如果是设备推送）
+      let imagePath: string | undefined = undefined;
+      if (result.result && typeof result.result === 'object' && 'localImagePath' in result.result) {
+        imagePath = (result.result as any).localImagePath;
+        console.log(`✅ 提取图片路径: ${imagePath}`);
+      } else {
+        console.log(`⚠️ 未找到localImagePath，result结构:`, JSON.stringify(result.result, null, 2));
+        console.log(`result对象keys:`, result.result ? Object.keys(result.result) : 'null');
+      }
+
       await this.postgres.recordPushResult({
         jobId: job.config.id,
         fingerprint: candidate.fingerprint,
@@ -367,7 +377,8 @@ export class NewsScheduler {
           cache: result.cacheSource
         },
         rawContent,
-        processedContent: processedContent || undefined
+        processedContent: processedContent || undefined,
+        imagePath
       });
 
       this.markIndexUsed(job, candidate.index);

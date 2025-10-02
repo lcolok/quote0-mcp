@@ -116,6 +116,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         console.log(`🔑 生成缓存键: ${cacheKeyString}`);
 
         let imageUrl = '';
+        let localImagePath: string | undefined = undefined;
         let localCacheHit = false;
         let devicePushResult = '推送成功';
 
@@ -129,7 +130,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             const searchPattern = `modular_${params.rssSource}_${params.index}_`;
             console.log(`🔍 搜索模式: ${searchPattern}`);
 
-            let existsResult: { url: string } | null = null;
+            let existsResult: { url: string; objectKey?: string } | null = null;
 
             try {
               const postgres = cacheInternals.postgres;
@@ -137,6 +138,10 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                 const cachedImageInfo = await postgres.getCachedImage(cacheKeyString);
                 if (cachedImageInfo) {
                   existsResult = await imageStorage.imageExistsByObjectKey(cachedImageInfo.objectKey);
+                  if (existsResult) {
+                    // 保存localImagePath用于数据库记录
+                    localImagePath = `/${cachedImageInfo.objectKey}`;
+                  }
                 }
               }
             } catch (searchError) {
@@ -213,6 +218,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
           if (typeof deviceResult === 'object' && deviceResult?.imageUrl) {
             imageUrl = deviceResult.imageUrl;
+            localImagePath = deviceResult.localImagePath;  // 保存localImagePath
             devicePushResult = deviceResult.deviceResult || '推送完成';
 
             try {
@@ -287,6 +293,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         result = {
           imageUrl,
+          localImagePath,  // 添加localImagePath字段
           deviceResult: devicePushResult,
           cacheInfo: {
             hit: localCacheHit,

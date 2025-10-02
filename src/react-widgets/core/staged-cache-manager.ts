@@ -180,8 +180,15 @@ export class StagedCacheManager {
           
           if (imageResult) {
             console.log(`🖼️ 图片完全缓存命中: ${imageCacheKey} → ${imageResult.url}`);
+            // 提取localImagePath用于数据库记录
+            const localImagePath = imageResult.objectKey ? `/${imageResult.objectKey}` : null;
+
             return {
-              data: imageResult.url,
+              data: {
+                imageUrl: imageResult.url,
+                localImagePath,  // 添加localImagePath字段
+                deviceResult: '缓存图片推送成功'
+              },
               source: 'storage',
               cacheKey: imageCacheKey,
               metadata: {

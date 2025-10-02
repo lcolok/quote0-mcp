@@ -266,7 +266,8 @@ export class PostgresDatabase {
           job_id VARCHAR(64),
           fingerprint VARCHAR(64) NOT NULL REFERENCES news_push_stats(fingerprint) ON DELETE CASCADE,
           pushed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          result JSONB
+          result JSONB,
+          image_path TEXT
       );
 
       -- 创建索引
@@ -1075,6 +1076,7 @@ export class PostgresDatabase {
     result?: Record<string, any>;
     rawContent?: Record<string, any>; // 原始RSS内容
     processedContent?: Record<string, any>; // AX优化后的内容
+    imagePath?: string; // MinIO图片路径
   }): Promise<void> {
     const client = await this.pool.connect();
     const transformedMetadata = entry.metadata || {};
@@ -1103,14 +1105,15 @@ export class PostgresDatabase {
       ]);
 
       await client.query(`
-        INSERT INTO news_push_log (job_id, fingerprint, result, raw_content, processed_content)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO news_push_log (job_id, fingerprint, result, raw_content, processed_content, image_path)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `, [
         entry.jobId || null,
         entry.fingerprint,
         entry.result || null,
         entry.rawContent || null,
-        entry.processedContent || null
+        entry.processedContent || null,
+        entry.imagePath || null
       ]);
 
       await client.query('COMMIT');

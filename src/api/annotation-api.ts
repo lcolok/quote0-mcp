@@ -70,7 +70,7 @@ app.get('/api/annotation/news', async (c) => {
       const syncResult = await client.query(`
         INSERT INTO news_raw_data (
           title, source, description, link, publish_time,
-          data_source, category, rss_index,
+          data_source, category, rss_index, image_path,
           annotation_status, created_at, updated_at
         )
         SELECT DISTINCT ON (npl.raw_content->>'link')
@@ -85,6 +85,7 @@ app.get('/api/annotation/news', async (c) => {
           'push_log' as data_source,
           COALESCE(nps.category, 'technology') as category,
           NULL as rss_index,
+          npl.image_path as image_path,
           'pending' as annotation_status,
           npl.pushed_at as created_at,
           npl.pushed_at as updated_at
@@ -100,6 +101,21 @@ app.get('/api/annotation/news', async (c) => {
 
       if (syncResult.rowCount && syncResult.rowCount > 0) {
         console.log(`✅ 自动同步了 ${syncResult.rowCount} 条新闻到标注系统`);
+      }
+
+      // 🔄 更新已存在记录的image_path（如果push_log中有新的图片路径）
+      const updateResult = await client.query(`
+        UPDATE news_raw_data nr
+        SET image_path = npl.image_path
+        FROM news_push_log npl
+        WHERE nr.link = npl.raw_content->>'link'
+          AND nr.data_source = 'push_log'
+          AND npl.image_path IS NOT NULL
+          AND (nr.image_path IS NULL OR nr.image_path != npl.image_path)
+      `);
+
+      if (updateResult.rowCount && updateResult.rowCount > 0) {
+        console.log(`✅ 更新了 ${updateResult.rowCount} 条记录的图片路径`);
       }
 
       // 查询待标注新闻

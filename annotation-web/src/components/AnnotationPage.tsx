@@ -43,9 +43,9 @@ function AnnotationPage() {
       ? renderMutation.data.data.imagePath
       : null);
 
-  // 转换为完整的MinIO URL
+  // 通过API代理访问MinIO图片（使用相对路径，nginx会转发到news-api）
   const previewImagePath = rawImagePath
-    ? `http://localhost:29000/quote0-images${rawImagePath}`
+    ? `/api/minio-proxy${rawImagePath}`
     : null;
 
   // 提交标注mutation
