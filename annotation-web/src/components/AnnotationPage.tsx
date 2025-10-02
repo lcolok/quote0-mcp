@@ -197,21 +197,49 @@ function AnnotationPage() {
           </div>
 
           <div className="space-y-4">
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">
-                标题
-              </label>
-              <p className="mt-1 text-base font-medium text-gray-900">
-                {currentNews.title}
-              </p>
-            </div>
+            {/* 图片预览区域 - 顶置显示 */}
+            {previewImagePath && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-xs font-medium text-gray-500 uppercase">
+                    推送预览图（历史图片）
+                  </label>
+                  <button
+                    onClick={handleRenderPreview}
+                    disabled={renderMutation.isPending}
+                    className="flex items-center px-3 py-1.5 text-xs font-medium text-gray-600 hover:text-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ImageIcon className="w-3 h-3 mr-1.5" />
+                    重新渲染
+                  </button>
+                </div>
 
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">
-                来源
-              </label>
-              <p className="mt-1 text-sm text-gray-700">{currentNews.source}</p>
-            </div>
+                {renderMutation.isPending ? (
+                  <div className="border border-gray-200 rounded-lg p-8 bg-gray-50 text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mb-2"></div>
+                    <p className="text-sm text-gray-500">正在渲染图片...</p>
+                  </div>
+                ) : (
+                  <div className="border border-gray-200 rounded-lg p-2 bg-gray-50">
+                    <img
+                      src={previewImagePath}
+                      alt="新闻预览图"
+                      className="w-full h-auto"
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                    <p className="text-xs text-gray-500 mt-2 text-center">
+                      296×152 像素 - 实际推送到设备的样式
+                    </p>
+                  </div>
+                )}
+
+                {renderMutation.isError && (
+                  <div className="mt-2 text-xs text-red-600">
+                    渲染失败: {(renderMutation.error as Error).message}
+                  </div>
+                )}
+              </div>
+            )}
 
             {currentNews.description && !currentNews.raw_content && !currentNews.processed_content && (
               <div>
@@ -307,52 +335,72 @@ function AnnotationPage() {
               )}
             </div>
 
-            {/* 图片预览区域 - 仅在有历史图片时显示 */}
-            {previewImagePath && (
-              <div className="mt-4 pt-4 border-t border-gray-200">
-                <div className="flex items-center justify-between mb-3">
-                  <label className="text-xs font-medium text-gray-500 uppercase">
-                    推送预览图（历史图片）
-                  </label>
-                  <button
-                    onClick={handleRenderPreview}
-                    disabled={renderMutation.isPending}
-                    className="flex items-center px-3 py-1.5 text-xs font-medium text-gray-600 hover:text-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <ImageIcon className="w-3 h-3 mr-1.5" />
-                    重新渲染
-                  </button>
-                </div>
+          </div>
+        </div>
 
-                {renderMutation.isPending ? (
-                  <div className="border border-gray-200 rounded-lg p-8 bg-gray-50 text-center">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mb-2"></div>
-                    <p className="text-sm text-gray-500">正在渲染图片...</p>
-                  </div>
-                ) : (
-                  <div className="border border-gray-200 rounded-lg p-2 bg-gray-50">
-                    <img
-                      src={previewImagePath}
-                      alt="新闻预览图"
-                      className="w-full h-auto"
-                      style={{ imageRendering: 'pixelated' }}
-                    />
-                    <p className="text-xs text-gray-500 mt-2 text-center">
-                      296×152 像素 - 实际推送到设备的样式
-                    </p>
-                  </div>
-                )}
+        {/* 右侧：调试信息和快速标注 */}
+        <div className="space-y-6">
+          {/* 快速标注按钮 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">快速标注</h3>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => handleQuickAnnotate('like')}
+                disabled={quickAnnotateMutation.isPending}
+                className="flex items-center justify-center px-6 py-4 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="点赞 / 高质量 (快捷键: W)"
+              >
+                <span className="text-3xl mr-3">👍</span>
+                <span className="font-medium text-lg">好 / 高质量</span>
+                <span className="text-sm opacity-75 ml-2">(W)</span>
+              </button>
+              <button
+                onClick={() => handleQuickAnnotate('dislike')}
+                disabled={quickAnnotateMutation.isPending}
+                className="flex items-center justify-center px-6 py-4 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="点踩 / 低质量 (快捷键: S)"
+              >
+                <span className="text-3xl mr-3">👎</span>
+                <span className="font-medium text-lg">差 / 低质量</span>
+                <span className="text-sm opacity-75 ml-2">(S)</span>
+              </button>
+              <button
+                onClick={handleSkip}
+                className="px-6 py-3 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                跳过 (Space)
+              </button>
+            </div>
 
-                {renderMutation.isError && (
-                  <div className="mt-2 text-xs text-red-600">
-                    渲染失败: {(renderMutation.error as Error).message}
-                  </div>
-                )}
+            {/* 导航按钮 */}
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="text-xs text-gray-500 text-center mb-3">
+                💡 A 上一条 | D 下一条 | Space 跳过
               </div>
-            )}
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={handlePrevious}
+                  disabled={currentIndex === 0}
+                  className="flex-1 flex items-center justify-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  上一条
+                </button>
+                <button
+                  onClick={handleNext}
+                  disabled={currentIndex === newsList.length - 1}
+                  className="flex-1 flex items-center justify-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  下一条
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </button>
+              </div>
+            </div>
+          </div>
 
-            {/* 调试信息面板 */}
-            <div className="mt-4 pt-4 border-t border-gray-200">
+          {/* 调试信息面板 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="mt-0 pt-0">
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-medium text-gray-500 uppercase">
                   调试信息
@@ -442,68 +490,6 @@ function AnnotationPage() {
                   </ul>
                 </div>
               </div>
-            </div>
-          </div>
-
-          {/* 快速标注按钮 */}
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <div className="flex items-center justify-center mb-4">
-              <span className="text-sm font-medium text-gray-700 mr-3">快速标注：</span>
-              <button
-                onClick={() => handleQuickAnnotate('dislike')}
-                disabled={quickAnnotateMutation.isPending}
-                className="flex items-center px-6 py-3 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed mr-3"
-                title="点踩 / 低质量 (快捷键: S)"
-              >
-                <span className="text-2xl mr-2">👎</span>
-                <span className="font-medium">差 / 低质量</span>
-                <span className="text-xs opacity-75 ml-2">(S)</span>
-              </button>
-              <button
-                onClick={() => handleQuickAnnotate('like')}
-                disabled={quickAnnotateMutation.isPending}
-                className="flex items-center px-6 py-3 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="点赞 / 高质量 (快捷键: W)"
-              >
-                <span className="text-2xl mr-2">👍</span>
-                <span className="font-medium">好 / 高质量</span>
-                <span className="text-xs opacity-75 ml-2">(W)</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 导航按钮 */}
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <div className="flex items-center justify-center mb-3">
-              <span className="text-xs text-gray-500">
-                💡 提示：A 上一条 | D 下一条 | Space 跳过
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <button
-                onClick={handlePrevious}
-                disabled={currentIndex === 0}
-                className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft className="w-4 h-4 mr-1" />
-                上一条
-              </button>
-
-              <button
-                onClick={handleSkip}
-                className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
-              >
-                跳过
-              </button>
-
-              <button
-                onClick={handleNext}
-                disabled={currentIndex === newsList.length - 1}
-                className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                下一条
-                <ChevronRight className="w-4 h-4 ml-1" />
-              </button>
             </div>
           </div>
         </div>
