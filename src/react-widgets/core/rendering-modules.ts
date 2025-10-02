@@ -272,7 +272,7 @@ export class JSONRenderingModule extends BaseRenderingModule<object> {
       id: processedData.id,
       title: processedData.optimizedTitle,
       message: processedData.processedContent,
-      signature: `${processedData.processingMetadata?.processor || 'unknown'} v${processedData.processingMetadata?.model || '1.0'}`,
+      signature: `${processedData.processingMetadata?.processor || 'unknown'} · ${processedData.processingMetadata?.model || '1.0'}`,
       source: processedData.rawData?.source || 'unknown',
       publishTime: processedData.rawData?.publishTime || new Date().toISOString(),
       category: processedData.rawData?.category || 'default',
