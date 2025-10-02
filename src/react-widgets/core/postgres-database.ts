@@ -204,7 +204,7 @@ export class PostgresDatabase {
       -- 创建图片缓存表
       CREATE TABLE IF NOT EXISTS image_cache (
           id SERIAL PRIMARY KEY,
-          cache_key VARCHAR(64) UNIQUE NOT NULL,
+          cache_key VARCHAR(128) UNIQUE NOT NULL,
           news_cache_id INTEGER REFERENCES news_cache(id) ON DELETE CASCADE,
           bucket_name VARCHAR(100) NOT NULL,
           object_key VARCHAR(500) NOT NULL,

@@ -112,8 +112,26 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
       } else if (params.renderer === 'device') {
         console.log('📱 设备推送渲染器 - 启用MinIO直接缓存...');
 
-        const cacheKeyString = `${params.dataSource}_${params.rssSource}_${params.processor}_${params.category}_${params.index}`;
-        console.log(`🔑 生成缓存键: ${cacheKeyString}`);
+        // 🔑 先获取原始RSS数据以获得稳定的fingerprint（使用passthrough避免LLM非确定性）
+        console.log('📝 先获取原始新闻数据以计算fingerprint...');
+        const jsonParams = { ...params, processor: 'passthrough' as const, renderer: 'json' as const };
+        const jsonResult = await modularNewsPlugin.getData(jsonParams);
+        const jsonData = jsonResult as any;
+
+        // 从结果中提取fingerprint
+        const newsFingerprint = jsonData?.fingerprint ||
+                                jsonData?.metadata?.fingerprint ||
+                                computeNewsFingerprint({
+                                  title: jsonData?.title || '',
+                                  link: jsonData?.link || '',
+                                  publishTime: jsonData?.publishTime || '',
+                                  source: jsonData?.source || '',
+                                  category: jsonData?.category || params.category,
+                                  fallback: `${params.dataSource}:${params.rssSource}:${params.index}`
+                                });
+
+        const cacheKeyString = `${params.dataSource}_${params.rssSource}_${params.processor}_${params.category}_${newsFingerprint}`;
+        console.log(`🔑 生成缓存键（含fingerprint）: ${cacheKeyString}`);
 
         let imageUrl = '';
         let localImagePath: string | undefined = undefined;
