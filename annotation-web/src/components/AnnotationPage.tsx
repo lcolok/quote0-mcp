@@ -118,7 +118,7 @@ function AnnotationPage() {
     }
   };
 
-  // 键盘快捷键
+  // 键盘快捷键（WASD布局）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // 检查是否在输入框中，避免干扰正常输入
@@ -127,34 +127,30 @@ function AnnotationPage() {
         return;
       }
 
-      // F键或→键或↑键：点赞（高质量）
-      if (e.key === 'f' || e.key === 'F' ||
-          (e.key === 'ArrowRight' && !e.shiftKey) ||
-          (e.key === 'ArrowUp' && !e.shiftKey)) {
+      // W键：点赞（高质量/好）
+      if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
         handleQuickAnnotate('like');
       }
-      // D键或←键或↓键：点踩（低质量）
-      else if (e.key === 'd' || e.key === 'D' ||
-               (e.key === 'ArrowLeft' && !e.shiftKey) ||
-               (e.key === 'ArrowDown' && !e.shiftKey)) {
+      // S键：点踩（低质量/差）
+      else if (e.key === 's' || e.key === 'S') {
         e.preventDefault();
         handleQuickAnnotate('dislike');
       }
-      // S键或Space：跳过
-      else if (e.key === 's' || e.key === 'S' || e.key === ' ') {
+      // A键：上一条
+      else if (e.key === 'a' || e.key === 'A') {
         e.preventDefault();
-        handleSkip();
+        handlePrevious();
       }
-      // Shift+→：下一条（不标注）
-      else if (e.key === 'ArrowRight' && e.shiftKey) {
+      // D键：下一条
+      else if (e.key === 'd' || e.key === 'D') {
         e.preventDefault();
         handleNext();
       }
-      // Shift+←：上一条
-      else if (e.key === 'ArrowLeft' && e.shiftKey) {
+      // Space：跳过
+      else if (e.key === ' ') {
         e.preventDefault();
-        handlePrevious();
+        handleSkip();
       }
     };
 
@@ -478,21 +474,21 @@ function AnnotationPage() {
                 onClick={() => handleQuickAnnotate('dislike')}
                 disabled={quickAnnotateMutation.isPending}
                 className="flex items-center px-6 py-3 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed mr-3"
-                title="点踩 / 低质量 (快捷键: D, ←, ↓)"
+                title="点踩 / 低质量 (快捷键: S)"
               >
                 <span className="text-2xl mr-2">👎</span>
-                <span className="font-medium">低质量</span>
-                <span className="text-xs opacity-75 ml-2">(D/←/↓)</span>
+                <span className="font-medium">差 / 低质量</span>
+                <span className="text-xs opacity-75 ml-2">(S)</span>
               </button>
               <button
                 onClick={() => handleQuickAnnotate('like')}
                 disabled={quickAnnotateMutation.isPending}
                 className="flex items-center px-6 py-3 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="点赞 / 高质量 (快捷键: F, →, ↑)"
+                title="点赞 / 高质量 (快捷键: W)"
               >
                 <span className="text-2xl mr-2">👍</span>
-                <span className="font-medium">高质量</span>
-                <span className="text-xs opacity-75 ml-2">(F/→/↑)</span>
+                <span className="font-medium">好 / 高质量</span>
+                <span className="text-xs opacity-75 ml-2">(W)</span>
               </button>
             </div>
           </div>
@@ -501,7 +497,7 @@ function AnnotationPage() {
           <div className="mt-4 pt-4 border-t border-gray-200">
             <div className="flex items-center justify-center mb-3">
               <span className="text-xs text-gray-500">
-                💡 提示：Shift+← → 翻页 | Space/S 跳过
+                💡 提示：A 上一条 | D 下一条 | Space 跳过
               </span>
             </div>
             <div className="flex items-center justify-between">
