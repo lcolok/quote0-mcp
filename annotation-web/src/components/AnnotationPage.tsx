@@ -10,7 +10,7 @@ function AnnotationPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const queryClient = useQueryClient();
 
-  // 获取待标注新闻列表
+  // 获取待标注新闻列表（自动刷新）
   const { data: newsData, isLoading } = useQuery({
     queryKey: ['pending-news'],
     queryFn: () =>
@@ -18,6 +18,8 @@ function AnnotationPage() {
         status: 'pending',
         limit: 1000, // 加载全量待标注数据
       }),
+    refetchInterval: 30000, // 每30秒自动刷新一次
+    staleTime: 0, // 数据立即过期，确保每次都是最新的
   });
 
   const newsList = newsData?.data || [];

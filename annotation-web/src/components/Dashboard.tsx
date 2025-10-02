@@ -6,6 +6,8 @@ function Dashboard() {
   const { data: stats, isLoading } = useQuery({
     queryKey: ['statistics'],
     queryFn: () => apiClient.getStatistics(),
+    refetchInterval: 30000, // 每30秒自动刷新一次
+    staleTime: 0, // 数据立即过期，确保每次都是最新的
   });
 
   if (isLoading) {
