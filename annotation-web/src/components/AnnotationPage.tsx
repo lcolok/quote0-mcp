@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { apiClient } from '../api/client';
 import type { QualityAnnotation } from '../types';
 import AnnotationForm from './AnnotationForm';
@@ -253,7 +254,7 @@ function AnnotationPage() {
                       created_at: currentNews.created_at
                     };
                     navigator.clipboard.writeText(JSON.stringify(debugInfo, null, 2));
-                    alert('调试信息已复制到剪贴板');
+                    toast.success('调试信息已复制到剪贴板');
                   }}
                   className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
                 >
