@@ -3,7 +3,6 @@ import { Outlet, NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   FileEdit,
-  BarChart3,
   Download,
   Pin,
   PinOff,
@@ -25,7 +24,6 @@ function Layout() {
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: '仪表板' },
     { to: '/annotate', icon: FileEdit, label: '开始标注' },
-    { to: '/statistics', icon: BarChart3, label: '统计分析' },
     { to: '/export', icon: Download, label: '导出样本' },
     { to: '/training', icon: Zap, label: 'AX训练' },
   ];
