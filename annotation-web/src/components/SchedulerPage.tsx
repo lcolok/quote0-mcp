@@ -2,341 +2,369 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import {
-  Play,
-  Pause,
-  RefreshCw,
+  Search,
+  Send,
   Clock,
-  CheckCircle2,
-  AlertCircle,
-  Settings,
-  Activity,
+  Image as ImageIcon,
+  ExternalLink,
+  Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-interface SchedulerJob {
-  id: string;
-  name: string | null;
-  description: string | null;
-  nextIndex: number;
-  intervalMs: number;
-  lastIndex: number | null;
-  consecutiveFailures: number;
-  indexStrategy: {
-    type: string;
-    poolSize: number;
-    startIndex: number;
-    cooldownHours?: number;
-    maxPushCount?: number;
-    rotateAfterEachPush?: boolean;
-  };
-  enabled: boolean;
+interface PushRecord {
+  id: number;
+  title: string;
+  originalTitle: string;
+  summary: string;
+  imagePath: string | null;
+  publishTime: string;
+  pushedAt: string;
+  category: string;
+  dataSource: string;
+  rawContent: any;
+  processedContent: any;
 }
 
 function SchedulerPage() {
   const queryClient = useQueryClient();
-  const [triggerIndex, setTriggerIndex] = useState<{ [key: string]: string }>({});
+  const [search, setSearch] = useState('');
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [page, setPage] = useState(0);
+  const limit = 50;
 
-  // 查询调度任务
-  const { data: jobsData, isLoading } = useQuery({
-    queryKey: ['scheduler-jobs'],
-    queryFn: () => apiClient.getSchedulerJobs(),
-    refetchInterval: 5000, // 每5秒自动刷新
+  // 查询推送历史
+  const { data: historyData, isLoading } = useQuery({
+    queryKey: ['push-history', search, page],
+    queryFn: () =>
+      apiClient.getPushHistory({
+        search,
+        limit,
+        offset: page * limit,
+      }),
+    refetchInterval: 10000, // 每10秒刷新
   });
 
-  // 触发任务
-  const triggerMutation = useMutation({
-    mutationFn: (params: { jobId: string; index?: number }) =>
-      apiClient.triggerSchedulerJob(params.jobId, params.index),
-    onSuccess: (_, variables) => {
-      toast.success(`任务已触发执行`);
-      queryClient.invalidateQueries({ queryKey: ['scheduler-jobs'] });
-      setTriggerIndex(prev => ({ ...prev, [variables.jobId]: '' }));
-    },
-    onError: (error: Error) => {
-      toast.error(`触发失败: ${error.message}`);
-    },
+  // 查询选中记录的详情（保留用于未来扩展）
+  useQuery({
+    queryKey: ['push-detail', selectedId],
+    queryFn: () => apiClient.getPushDetail(selectedId!),
+    enabled: !!selectedId,
   });
 
-  // 启用/禁用任务
-  const toggleMutation = useMutation({
-    mutationFn: (params: { jobId: string; enabled: boolean }) =>
-      apiClient.toggleSchedulerJob(params.jobId, params.enabled),
+  // 重新推送
+  const resendMutation = useMutation({
+    mutationFn: (id: number) => apiClient.resendPush(id),
     onSuccess: () => {
-      toast.success('状态已更新');
-      queryClient.invalidateQueries({ queryKey: ['scheduler-jobs'] });
+      toast.success('推送成功');
+      queryClient.invalidateQueries({ queryKey: ['push-history'] });
     },
     onError: (error: Error) => {
-      toast.error(`更新失败: ${error.message}`);
+      toast.error(`推送失败: ${error.message}`);
     },
   });
 
-  // 重新加载任务
-  const reloadMutation = useMutation({
-    mutationFn: () => apiClient.reloadScheduler(),
-    onSuccess: () => {
-      toast.success('已重新加载调度任务');
-      queryClient.invalidateQueries({ queryKey: ['scheduler-jobs'] });
-    },
-    onError: (error: Error) => {
-      toast.error(`重新加载失败: ${error.message}`);
-    },
-  });
+  const records: PushRecord[] = historyData?.data || [];
+  const pagination = historyData?.pagination;
+  const selectedRecord = records.find(r => r.id === selectedId);
 
-  const jobs: SchedulerJob[] = jobsData?.data || [];
+  const formatTime = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
 
-  const formatInterval = (ms: number) => {
-    const minutes = Math.floor(ms / 60000);
-    if (minutes < 60) return `${minutes}分钟`;
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return remainingMinutes > 0 ? `${hours}小时${remainingMinutes}分钟` : `${hours}小时`;
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes}分钟前`;
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+    return date.toLocaleDateString('zh-CN');
   };
 
-  const getStrategyLabel = (type: string) => {
-    const labels: { [key: string]: string } = {
-      'sequential': '顺序索引',
-      'random-with-cooldown': '随机冷却',
-      'least-pushed-with-cooldown': '最少推送优先',
-    };
-    return labels[type] || type;
+  const isRecent = (dateStr: string) => {
+    const diff = new Date().getTime() - new Date(dateStr).getTime();
+    return diff < 3600000; // 1小时内
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
 
   return (
-    <div className="space-y-6">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">调度器管理</h2>
-          <p className="text-gray-600 mt-1">
-            查看和管理RSS新闻自动推送调度任务
-          </p>
-        </div>
-        <button
-          onClick={() => reloadMutation.mutate()}
-          disabled={reloadMutation.isPending}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${reloadMutation.isPending ? 'animate-spin' : ''}`} />
-          重新加载配置
-        </button>
-      </div>
-
-      {/* 概览卡片 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-blue-100 rounded-lg">
-              <Activity className="w-6 h-6 text-blue-600" />
-            </div>
-            <div>
-              <div className="text-sm text-gray-600">总任务数</div>
-              <div className="text-2xl font-bold text-gray-900">{jobs.length}</div>
-            </div>
+    <div className="flex h-[calc(100vh-4rem)] gap-6">
+      {/* 左侧：推送列表 */}
+      <div className="w-2/5 flex flex-col bg-white rounded-lg shadow overflow-hidden">
+        {/* 搜索栏 */}
+        <div className="p-4 border-b border-gray-200 flex-shrink-0">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="搜索标题或摘要..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(0);
+              }}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            />
           </div>
+          {pagination && (
+            <div className="mt-2 text-xs text-gray-600">
+              共 {pagination.total} 条推送记录
+            </div>
+          )}
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-green-100 rounded-lg">
-              <CheckCircle2 className="w-6 h-6 text-green-600" />
+        {/* 列表 */}
+        <div className="flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
             </div>
-            <div>
-              <div className="text-sm text-gray-600">运行中</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {jobs.filter(j => j.enabled).length}
-              </div>
+          ) : records.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              <Search className="w-12 h-12 mb-2 opacity-50" />
+              <p>暂无推送记录</p>
             </div>
-          </div>
-        </div>
+          ) : (
+            <div className="divide-y divide-gray-200">
+              {records.map((record) => {
+                const isSelected = record.id === selectedId;
+                const recent = isRecent(record.pushedAt);
 
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-red-100 rounded-lg">
-              <AlertCircle className="w-6 h-6 text-red-600" />
-            </div>
-            <div>
-              <div className="text-sm text-gray-600">连续失败</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {jobs.reduce((sum, j) => sum + j.consecutiveFailures, 0)}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 任务列表 */}
-      <div className="space-y-4">
-        {jobs.map((job) => (
-          <div key={job.id} className="bg-white rounded-lg shadow overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-lg font-semibold text-gray-900">
-                      {job.name || job.id}
-                    </h3>
-                    <span
-                      className={`px-2 py-1 text-xs font-medium rounded-full ${
-                        job.enabled
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      {job.enabled ? '运行中' : '已暂停'}
-                    </span>
-                    {job.consecutiveFailures > 0 && (
-                      <span className="px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-700">
-                        失败 {job.consecutiveFailures} 次
-                      </span>
-                    )}
-                  </div>
-                  {job.description && (
-                    <p className="text-sm text-gray-600 mt-1">{job.description}</p>
-                  )}
-                  <div className="text-xs text-gray-500 mt-2">ID: {job.id}</div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() =>
-                      toggleMutation.mutate({ jobId: job.id, enabled: !job.enabled })
-                    }
-                    disabled={toggleMutation.isPending}
-                    className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                    title={job.enabled ? '暂停' : '启动'}
+                return (
+                  <div
+                    key={record.id}
+                    onClick={() => setSelectedId(record.id)}
+                    className={`p-4 cursor-pointer transition-colors hover:bg-gray-50 ${
+                      isSelected ? 'bg-primary-50 border-l-4 border-primary-600' : ''
+                    }`}
                   >
-                    {job.enabled ? (
-                      <Pause className="w-5 h-5" />
-                    ) : (
-                      <Play className="w-5 h-5" />
+                    <div className="flex items-start gap-3">
+                      {/* 缩略图 */}
+                      <div className="flex-shrink-0 w-16 h-16 bg-gray-100 rounded overflow-hidden">
+                        {record.imagePath ? (
+                          <img
+                            src={`http://localhost:3001${record.imagePath}`}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.src = '';
+                              e.currentTarget.style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <ImageIcon className="w-6 h-6 text-gray-400" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 内容 */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <h3
+                            className={`text-sm font-medium line-clamp-2 ${
+                              isSelected ? 'text-primary-900' : 'text-gray-900'
+                            }`}
+                          >
+                            {record.title}
+                          </h3>
+                          {recent && (
+                            <span className="flex-shrink-0 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+                              最新
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-600 line-clamp-2 mb-2">
+                          {record.summary}
+                        </p>
+                        <div className="flex items-center gap-3 text-xs text-gray-500">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {formatTime(record.pushedAt)}
+                          </span>
+                          <span className="px-1.5 py-0.5 bg-gray-100 rounded">
+                            {record.category}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 分页 */}
+        {pagination && pagination.total > limit && (
+          <div className="p-4 border-t border-gray-200 flex items-center justify-between flex-shrink-0">
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              上一页
+            </button>
+            <span className="text-sm text-gray-600">
+              第 {page + 1} / {Math.ceil(pagination.total / limit)} 页
+            </span>
+            <button
+              onClick={() => setPage(p => p + 1)}
+              disabled={!pagination.hasMore}
+              className="px-3 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              下一页
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 右侧：详情预览 */}
+      <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
+        {selectedRecord ? (
+          <>
+            {/* 头部操作栏 */}
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">推送详情</h2>
+                <p className="text-sm text-gray-600 mt-0.5">
+                  ID: {selectedRecord.id} · {formatTime(selectedRecord.pushedAt)}
+                </p>
+              </div>
+              <button
+                onClick={() => resendMutation.mutate(selectedRecord.id)}
+                disabled={resendMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+              >
+                <Send className="w-4 h-4" />
+                {resendMutation.isPending ? '推送中...' : '重新推送'}
+              </button>
+            </div>
+
+            {/* 内容区域 */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* 图片预览 */}
+              {selectedRecord.imagePath && (
+                <div className="bg-gray-50 rounded-lg overflow-hidden">
+                  <img
+                    src={`http://localhost:3001${selectedRecord.imagePath}`}
+                    alt={selectedRecord.title}
+                    className="w-full h-auto"
+                    onError={(e) => {
+                      e.currentTarget.parentElement!.style.display = 'none';
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* 处理后的内容 */}
+              {selectedRecord.processedContent && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                    <Sparkles className="w-4 h-4 text-primary-600" />
+                    优化后的内容
+                  </div>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                    <div>
+                      <div className="text-xs text-blue-700 mb-1">标题</div>
+                      <div className="text-sm font-medium text-blue-900">
+                        {selectedRecord.processedContent.title || selectedRecord.title}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-blue-700 mb-1">摘要</div>
+                      <div className="text-sm text-blue-900 whitespace-pre-wrap">
+                        {selectedRecord.processedContent.message || selectedRecord.summary}
+                      </div>
+                    </div>
+                    {selectedRecord.processedContent.signature && (
+                      <div className="text-xs text-blue-600 pt-2 border-t border-blue-200">
+                        处理器: {selectedRecord.processedContent.signature}
+                      </div>
                     )}
-                  </button>
-                </div>
-              </div>
-
-              {/* 配置信息 */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
-                    <Clock className="w-4 h-4" />
-                    执行间隔
-                  </div>
-                  <div className="text-sm font-semibold text-gray-900">
-                    {formatInterval(job.intervalMs)}
                   </div>
                 </div>
+              )}
 
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
-                    <Settings className="w-4 h-4" />
-                    索引策略
-                  </div>
-                  <div className="text-sm font-semibold text-gray-900">
-                    {getStrategyLabel(job.indexStrategy.type)}
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xs text-gray-600 mb-1">当前索引</div>
-                  <div className="text-sm font-semibold text-gray-900">
-                    {job.nextIndex}
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xs text-gray-600 mb-1">上次索引</div>
-                  <div className="text-sm font-semibold text-gray-900">
-                    {job.lastIndex !== null ? job.lastIndex : '-'}
-                  </div>
-                </div>
-              </div>
-
-              {/* 策略详情 */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                <h4 className="text-sm font-semibold text-blue-900 mb-2">策略配置</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                  <div>
-                    <span className="text-blue-700">池大小:</span>
-                    <span className="ml-1 font-medium text-blue-900">
-                      {job.indexStrategy.poolSize === -1 ? '动态' : job.indexStrategy.poolSize}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-blue-700">起始索引:</span>
-                    <span className="ml-1 font-medium text-blue-900">
-                      {job.indexStrategy.startIndex}
-                    </span>
-                  </div>
-                  {job.indexStrategy.cooldownHours !== undefined && (
+              {/* 原始内容 */}
+              {selectedRecord.rawContent && (
+                <div className="space-y-3">
+                  <div className="text-sm font-medium text-gray-700">原始内容</div>
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
                     <div>
-                      <span className="text-blue-700">冷却时间:</span>
-                      <span className="ml-1 font-medium text-blue-900">
-                        {job.indexStrategy.cooldownHours}小时
-                      </span>
+                      <div className="text-xs text-gray-600 mb-1">标题</div>
+                      <div className="text-sm text-gray-900">
+                        {selectedRecord.rawContent.title}
+                      </div>
                     </div>
-                  )}
-                  {job.indexStrategy.maxPushCount !== undefined && (
-                    <div>
-                      <span className="text-blue-700">最大推送:</span>
-                      <span className="ml-1 font-medium text-blue-900">
-                        {job.indexStrategy.maxPushCount}次
-                      </span>
+                    {selectedRecord.rawContent.description && (
+                      <div>
+                        <div className="text-xs text-gray-600 mb-1">描述</div>
+                        <div className="text-sm text-gray-700 whitespace-pre-wrap">
+                          {selectedRecord.rawContent.description}
+                        </div>
+                      </div>
+                    )}
+                    {selectedRecord.rawContent.content && (
+                      <div>
+                        <div className="text-xs text-gray-600 mb-1">正文</div>
+                        <div className="text-sm text-gray-700 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                          {selectedRecord.rawContent.content}
+                        </div>
+                      </div>
+                    )}
+                    {selectedRecord.rawContent.link && (
+                      <div>
+                        <a
+                          href={selectedRecord.rawContent.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          访问原文
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 元数据 */}
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-gray-700">元数据</div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="text-xs text-gray-600 mb-1">分类</div>
+                    <div className="font-medium text-gray-900">{selectedRecord.category}</div>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="text-xs text-gray-600 mb-1">数据源</div>
+                    <div className="font-medium text-gray-900">{selectedRecord.dataSource}</div>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="text-xs text-gray-600 mb-1">推送时间</div>
+                    <div className="font-medium text-gray-900">
+                      {new Date(selectedRecord.pushedAt).toLocaleString('zh-CN')}
                     </div>
-                  )}
-                  {job.indexStrategy.rotateAfterEachPush !== undefined && (
-                    <div>
-                      <span className="text-blue-700">源轮换:</span>
-                      <span className="ml-1 font-medium text-blue-900">
-                        {job.indexStrategy.rotateAfterEachPush ? '是' : '否'}
-                      </span>
+                  </div>
+                  {selectedRecord.publishTime && (
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-600 mb-1">发布时间</div>
+                      <div className="font-medium text-gray-900">
+                        {new Date(selectedRecord.publishTime).toLocaleString('zh-CN')}
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
-
-              {/* 手动触发 */}
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  placeholder="指定索引（可选）"
-                  value={triggerIndex[job.id] || ''}
-                  onChange={(e) =>
-                    setTriggerIndex(prev => ({ ...prev, [job.id]: e.target.value }))
-                  }
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm"
-                />
-                <button
-                  onClick={() => {
-                    const index = triggerIndex[job.id]
-                      ? parseInt(triggerIndex[job.id])
-                      : undefined;
-                    triggerMutation.mutate({ jobId: job.id, index });
-                  }}
-                  disabled={triggerMutation.isPending}
-                  className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50 text-sm font-medium"
-                >
-                  立即执行
-                </button>
               </div>
             </div>
-          </div>
-        ))}
-
-        {jobs.length === 0 && (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
-            <Activity className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">暂无调度任务</h3>
-            <p className="text-gray-600">
-              请检查数据库中的 news_scheduler_jobs 表配置
-            </p>
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-gray-500">
+            <ImageIcon className="w-16 h-16 mb-4 opacity-50" />
+            <p className="text-lg font-medium">选择一条推送记录查看详情</p>
+            <p className="text-sm mt-1">点击左侧列表中的任意记录</p>
           </div>
         )}
       </div>

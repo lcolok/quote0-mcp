@@ -729,6 +729,186 @@ app.get('/api/rss/list', async (c) => {
 
 // ==================== 调度器管理API ====================
 
+// 获取推送历史记录
+app.get('/api/scheduler/push-history', async (c) => {
+  try {
+    await postgres.initialize();
+    const client = await postgres.getClient();
+
+    const limit = parseInt(c.req.query('limit') || '50');
+    const offset = parseInt(c.req.query('offset') || '0');
+    const search = c.req.query('search') || '';
+
+    let query = `
+      SELECT
+        id,
+        raw_content,
+        processed_content,
+        image_path,
+        pushed_at,
+        job_id
+      FROM news_push_log
+      WHERE 1=1
+    `;
+
+    const params: any[] = [];
+    let paramCount = 0;
+
+    if (search) {
+      paramCount++;
+      query += ` AND (
+        raw_content->>'title' ILIKE $${paramCount}
+        OR processed_content->>'title' ILIKE $${paramCount}
+        OR processed_content->>'message' ILIKE $${paramCount}
+      )`;
+      params.push(`%${search}%`);
+    }
+
+    query += ` ORDER BY pushed_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+    params.push(limit, offset);
+
+    const result = await client.query(query, params);
+
+    // 获取总数
+    let countQuery = 'SELECT COUNT(*) FROM news_push_log WHERE 1=1';
+    const countParams: any[] = [];
+    if (search) {
+      countQuery += ` AND (
+        raw_content->>'title' ILIKE $1
+        OR processed_content->>'title' ILIKE $1
+        OR processed_content->>'message' ILIKE $1
+      )`;
+      countParams.push(`%${search}%`);
+    }
+    const countResult = await client.query(countQuery, countParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    client.release();
+
+    const records = result.rows.map(row => ({
+      id: row.id,
+      title: row.processed_content?.title || row.raw_content?.title || '未知标题',
+      originalTitle: row.raw_content?.title,
+      summary: row.processed_content?.message || row.raw_content?.description,
+      imagePath: row.image_path,
+      publishTime: row.raw_content?.publishTime,
+      pushedAt: row.pushed_at,
+      category: row.raw_content?.category || 'unknown',
+      dataSource: row.raw_content?.source || row.job_id || 'unknown',
+      rawContent: row.raw_content,
+      processedContent: row.processed_content,
+    }));
+
+    return c.json({
+      success: true,
+      data: records,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total
+      }
+    });
+  } catch (error) {
+    console.error('获取推送历史失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取推送历史失败'
+    }, 500);
+  }
+});
+
+// 获取指定推送记录的详细信息
+app.get('/api/scheduler/push-history/:id', async (c) => {
+  try {
+    await postgres.initialize();
+    const client = await postgres.getClient();
+    const id = parseInt(c.req.param('id'));
+
+    const result = await client.query(
+      'SELECT * FROM news_push_log WHERE id = $1',
+      [id]
+    );
+
+    client.release();
+
+    if (result.rows.length === 0) {
+      return c.json({
+        success: false,
+        error: '推送记录不存在'
+      }, 404);
+    }
+
+    return c.json({
+      success: true,
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('获取推送详情失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取推送详情失败'
+    }, 500);
+  }
+});
+
+// 手动推送指定记录
+app.post('/api/scheduler/push-history/:id/resend', async (c) => {
+  try {
+    await postgres.initialize();
+    const client = await postgres.getClient();
+    const id = parseInt(c.req.param('id'));
+
+    // 获取原始记录
+    const result = await client.query(
+      'SELECT * FROM news_push_log WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      client.release();
+      return c.json({
+        success: false,
+        error: '推送记录不存在'
+      }, 404);
+    }
+
+    const record = result.rows[0];
+
+    // 使用现有的processNews函数重新推送
+    const response = await processNews({
+      category: record.category || 'technology',
+      dataSource: record.data_source || 'rss',
+      processor: 'passthrough', // 使用原有数据，不重新处理
+      index: 0,
+      renderer: 'device',
+      options: {
+        // 传递原有的处理结果
+        preProcessedData: {
+          title: record.processed_content?.title || record.raw_content?.title,
+          description: record.processed_content?.message || record.raw_content?.description,
+          link: record.raw_content?.link,
+          imagePath: record.image_path,
+        }
+      }
+    });
+
+    client.release();
+
+    return c.json({
+      success: true,
+      message: '重新推送成功',
+      data: response
+    });
+  } catch (error) {
+    console.error('重新推送失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '重新推送失败'
+    }, 500);
+  }
+});
+
 // 获取所有调度任务状态
 app.get('/api/scheduler/jobs', async (c) => {
   try {

@@ -154,6 +154,41 @@ class AnnotationApiClient {
   }
 
   /**
+   * 获取推送历史
+   */
+  async getPushHistory(params?: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+  }): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get<ApiResponse<any[]>>(
+      '/api/scheduler/push-history',
+      { params }
+    );
+    return response.data;
+  }
+
+  /**
+   * 获取推送详情
+   */
+  async getPushDetail(id: number): Promise<ApiResponse<any>> {
+    const response = await this.client.get<ApiResponse<any>>(
+      `/api/scheduler/push-history/${id}`
+    );
+    return response.data;
+  }
+
+  /**
+   * 重新推送
+   */
+  async resendPush(id: number): Promise<ApiResponse<void>> {
+    const response = await this.client.post<ApiResponse<void>>(
+      `/api/scheduler/push-history/${id}/resend`
+    );
+    return response.data;
+  }
+
+  /**
    * 获取调度器任务列表
    */
   async getSchedulerJobs(): Promise<ApiResponse<any[]>> {
