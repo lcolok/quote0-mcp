@@ -7,6 +7,7 @@ import {
   Pin,
   PinOff,
   Zap,
+  Calendar,
 } from 'lucide-react';
 
 function Layout() {
@@ -26,6 +27,7 @@ function Layout() {
     { to: '/annotate', icon: FileEdit, label: '开始标注' },
     { to: '/export', icon: Download, label: '导出样本' },
     { to: '/training', icon: Zap, label: 'AX训练' },
+    { to: '/scheduler', icon: Calendar, label: '调度器' },
   ];
 
   // 保存状态到localStorage

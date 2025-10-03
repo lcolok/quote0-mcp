@@ -727,6 +727,133 @@ app.get('/api/rss/list', async (c) => {
   }
 });
 
+// ==================== 调度器管理API ====================
+
+// 获取所有调度任务状态
+app.get('/api/scheduler/jobs', async (c) => {
+  try {
+    const scheduler = await getSchedulerInstance();
+
+    if (!scheduler) {
+      return c.json({
+        success: false,
+        error: '调度器未启动',
+        data: []
+      });
+    }
+
+    const summaries = scheduler.getSummaries();
+
+    return c.json({
+      success: true,
+      data: summaries,
+      count: summaries.length
+    });
+  } catch (error) {
+    console.error('获取调度器状态失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取调度器状态失败'
+    }, 500);
+  }
+});
+
+// 手动触发调度任务
+app.post('/api/scheduler/jobs/:jobId/trigger', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const body = await c.req.json().catch(() => ({}));
+    const overrideIndex = body.index;
+
+    const scheduler = await getSchedulerInstance();
+
+    if (!scheduler) {
+      return c.json({
+        success: false,
+        error: '调度器未启动'
+      }, 400);
+    }
+
+    await scheduler.triggerJob(jobId, overrideIndex);
+
+    return c.json({
+      success: true,
+      message: `任务 ${jobId} 已触发执行`
+    });
+  } catch (error) {
+    console.error('触发调度任务失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '触发调度任务失败'
+    }, 500);
+  }
+});
+
+// 启用/禁用调度任务
+app.patch('/api/scheduler/jobs/:jobId/enabled', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const body = await c.req.json();
+    const enabled = body.enabled;
+
+    if (typeof enabled !== 'boolean') {
+      return c.json({
+        success: false,
+        error: 'enabled参数必须是布尔值'
+      }, 400);
+    }
+
+    const scheduler = await getSchedulerInstance();
+
+    if (!scheduler) {
+      return c.json({
+        success: false,
+        error: '调度器未启动'
+      }, 400);
+    }
+
+    await scheduler.setJobEnabled(jobId, enabled);
+
+    return c.json({
+      success: true,
+      message: `任务 ${jobId} 已${enabled ? '启用' : '禁用'}`
+    });
+  } catch (error) {
+    console.error('更新调度任务状态失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '更新调度任务状态失败'
+    }, 500);
+  }
+});
+
+// 重新加载所有调度任务
+app.post('/api/scheduler/reload', async (c) => {
+  try {
+    const scheduler = await getSchedulerInstance();
+
+    if (!scheduler) {
+      return c.json({
+        success: false,
+        error: '调度器未启动'
+      }, 400);
+    }
+
+    await scheduler.reloadJobs();
+
+    return c.json({
+      success: true,
+      message: '调度任务已重新加载'
+    });
+  } catch (error) {
+    console.error('重新加载调度任务失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '重新加载调度任务失败'
+    }, 500);
+  }
+});
+
 // 错误处理
 app.onError((error, c) => {
   console.error('API服务器错误:', error);

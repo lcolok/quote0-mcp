@@ -154,6 +154,44 @@ class AnnotationApiClient {
   }
 
   /**
+   * 获取调度器任务列表
+   */
+  async getSchedulerJobs(): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get<ApiResponse<any[]>>('/api/scheduler/jobs');
+    return response.data;
+  }
+
+  /**
+   * 触发调度任务
+   */
+  async triggerSchedulerJob(jobId: string, index?: number): Promise<ApiResponse<void>> {
+    const response = await this.client.post<ApiResponse<void>>(
+      `/api/scheduler/jobs/${jobId}/trigger`,
+      index !== undefined ? { index } : {}
+    );
+    return response.data;
+  }
+
+  /**
+   * 启用/禁用调度任务
+   */
+  async toggleSchedulerJob(jobId: string, enabled: boolean): Promise<ApiResponse<void>> {
+    const response = await this.client.patch<ApiResponse<void>>(
+      `/api/scheduler/jobs/${jobId}/enabled`,
+      { enabled }
+    );
+    return response.data;
+  }
+
+  /**
+   * 重新加载调度器配置
+   */
+  async reloadScheduler(): Promise<ApiResponse<void>> {
+    const response = await this.client.post<ApiResponse<void>>('/api/scheduler/reload');
+    return response.data;
+  }
+
+  /**
    * 批量标注
    */
   async batchAnnotate(
