@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import { Download, CheckCircle, Eye, EyeOff } from 'lucide-react';
+import { Download, CheckCircle, Copy } from 'lucide-react';
 
 function ExportPage() {
   const [minScore, setMinScore] = useState(0);
   const [maxScore, setMaxScore] = useState(100);
   const [limit, setLimit] = useState<number | undefined>(undefined);
-  const [showPreview, setShowPreview] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // 预览查询
+  // 实时预览查询 - 始终启用
   const previewQuery = useQuery({
     queryKey: ['export-preview', minScore, maxScore, limit],
     queryFn: () =>
@@ -18,8 +18,8 @@ function ExportPage() {
         maxScore,
         limit: limit || 10, // 预览时最多显示10条
       }),
-    enabled: showPreview,
-    staleTime: 30000, // 30秒内不重新获取
+    enabled: true, // 始终启用实时预览
+    staleTime: 5000, // 5秒内不重新获取
   });
 
   const exportMutation = useMutation({
@@ -49,18 +49,24 @@ function ExportPage() {
     exportMutation.mutate();
   };
 
-  const togglePreview = () => {
-    setShowPreview(!showPreview);
+  const handleCopy = () => {
+    if (previewQuery.data) {
+      navigator.clipboard.writeText(JSON.stringify(previewQuery.data, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900">导出训练样本</h2>
-        <p className="text-gray-600 mt-1">
-          导出标注数据为AX框架训练样本格式
-        </p>
-      </div>
+    <div className="flex h-[calc(100vh-4rem)] gap-6">
+      {/* 左侧：控制面板 */}
+      <div className="w-1/3 space-y-6 overflow-y-auto pr-4">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">导出训练样本</h2>
+          <p className="text-gray-600 mt-1">
+            导出标注数据为AX框架训练样本格式
+          </p>
+        </div>
 
       <div className="bg-white rounded-lg shadow p-6 space-y-6">
         {/* 评分范围 */}
@@ -111,45 +117,24 @@ function ExportPage() {
           />
         </div>
 
-        {/* 按钮组 */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* 预览按钮 */}
-          <button
-            onClick={togglePreview}
-            className="flex items-center justify-center px-6 py-3 bg-gray-100 text-gray-700 font-medium rounded-md hover:bg-gray-200"
-          >
-            {showPreview ? (
-              <>
-                <EyeOff className="w-5 h-5 mr-2" />
-                隐藏预览
-              </>
-            ) : (
-              <>
-                <Eye className="w-5 h-5 mr-2" />
-                预览JSON
-              </>
-            )}
-          </button>
-
-          {/* 导出按钮 */}
-          <button
-            onClick={handleExport}
-            disabled={exportMutation.isPending}
-            className="flex items-center justify-center px-6 py-3 bg-primary-600 text-white font-medium rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {exportMutation.isPending ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                导出中...
-              </>
-            ) : (
-              <>
-                <Download className="w-5 h-5 mr-2" />
-                导出为JSON
-              </>
-            )}
-          </button>
-        </div>
+        {/* 导出按钮 */}
+        <button
+          onClick={handleExport}
+          disabled={exportMutation.isPending}
+          className="w-full flex items-center justify-center px-6 py-3 bg-primary-600 text-white font-medium rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {exportMutation.isPending ? (
+            <>
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+              导出中...
+            </>
+          ) : (
+            <>
+              <Download className="w-5 h-5 mr-2" />
+              导出为JSON
+            </>
+          )}
+        </button>
 
         {/* 成功提示 */}
         {exportMutation.isSuccess && (
@@ -167,85 +152,85 @@ function ExportPage() {
         )}
       </div>
 
-      {/* JSON预览区域 */}
-      {showPreview && (
-        <div className="bg-white rounded-lg shadow">
-          <div className="border-b border-gray-200 px-6 py-4">
-            <h3 className="text-lg font-semibold text-gray-900">JSON预览</h3>
-            <p className="text-sm text-gray-600 mt-1">
-              {previewQuery.isLoading && '正在加载...'}
-              {previewQuery.data && `显示前 ${Math.min(previewQuery.data.length, 10)} 条样本`}
-            </p>
+        {/* 说明 */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-blue-900 mb-2">导出格式说明</h3>
+          <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+            <li>✨ <strong>三层数据结构</strong>: original (原始) → processed (LLM) → optimized (人工)</li>
+            <li>📊 <strong>训练优先级</strong>: 人工优化 &gt; LLM处理 &gt; 原始内容</li>
+            <li>🎯 <strong>输入输出分离</strong>: 输入使用original，输出优先使用optimized</li>
+            <li>💾 建议定期备份导出的样本集</li>
+          </ul>
+        </div>
+      </div>
+
+      {/* 右侧：实时JSON预览 */}
+      <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
+        <div className="border-b border-gray-200 px-6 py-4 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">实时预览</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                {previewQuery.isLoading && '正在加载...'}
+                {previewQuery.data && `显示前 ${Math.min(previewQuery.data.length, 10)} 条样本`}
+              </p>
+            </div>
+            <button
+              onClick={handleCopy}
+              disabled={!previewQuery.data}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+              <Copy className="w-4 h-4" />
+              {copied ? '已复制' : '复制JSON'}
+            </button>
           </div>
 
-          <div className="p-6">
-            {previewQuery.isLoading && (
-              <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+          {/* 数据统计 */}
+          {previewQuery.data && (
+            <div className="mt-4 grid grid-cols-3 gap-4 text-sm">
+              <div className="bg-gray-50 rounded-lg px-3 py-2">
+                <span className="text-gray-600">总样本数:</span>
+                <span className="ml-2 font-semibold text-gray-900">
+                  {previewQuery.data.length}
+                </span>
               </div>
-            )}
+              <div className="bg-green-50 rounded-lg px-3 py-2">
+                <span className="text-gray-600">含人工优化:</span>
+                <span className="ml-2 font-semibold text-green-600">
+                  {previewQuery.data.filter((s: any) => s.optimized_title || s.optimized_summary).length}
+                </span>
+              </div>
+              <div className="bg-blue-50 rounded-lg px-3 py-2">
+                <span className="text-gray-600">含LLM处理:</span>
+                <span className="ml-2 font-semibold text-blue-600">
+                  {previewQuery.data.filter((s: any) => s.processed_title || s.processed_summary).length}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
 
-            {previewQuery.isError && (
-              <div className="text-red-600 text-sm text-center py-12">
+        <div className="flex-1 overflow-y-auto p-6">
+          {previewQuery.isLoading && (
+            <div className="flex items-center justify-center h-full">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+            </div>
+          )}
+
+          {previewQuery.isError && (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-red-600 text-sm text-center">
                 预览失败: {(previewQuery.error as Error).message}
               </div>
-            )}
+            </div>
+          )}
 
-            {previewQuery.data && (
-              <div className="space-y-4">
-                {/* 数据统计 */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-600">总样本数:</span>
-                      <span className="ml-2 font-semibold text-gray-900">
-                        {previewQuery.data.length}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">含人工优化:</span>
-                      <span className="ml-2 font-semibold text-green-600">
-                        {previewQuery.data.filter((s: any) => s.optimized_title || s.optimized_summary).length}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">含LLM处理:</span>
-                      <span className="ml-2 font-semibold text-blue-600">
-                        {previewQuery.data.filter((s: any) => s.processed_title || s.processed_summary).length}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* JSON代码 */}
-                <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-xs max-h-[600px] overflow-y-auto">
-                  {JSON.stringify(previewQuery.data, null, 2)}
-                </pre>
-
-                {/* 复制按钮 */}
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(JSON.stringify(previewQuery.data, null, 2));
-                  }}
-                  className="w-full px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium"
-                >
-                  复制到剪贴板
-                </button>
-              </div>
-            )}
-          </div>
+          {previewQuery.data && (
+            <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-x-auto h-full">
+              {JSON.stringify(previewQuery.data, null, 2)}
+            </pre>
+          )}
         </div>
-      )}
-
-      {/* 说明 */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-blue-900 mb-2">导出格式说明</h3>
-        <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
-          <li>✨ <strong>三层数据结构</strong>: original (原始) → processed (LLM) → optimized (人工)</li>
-          <li>📊 <strong>训练优先级</strong>: 人工优化 &gt; LLM处理 &gt; 原始内容</li>
-          <li>🎯 <strong>输入输出分离</strong>: 输入使用original，输出优先使用optimized</li>
-          <li>💾 建议定期备份导出的样本集</li>
-        </ul>
       </div>
     </div>
   );
