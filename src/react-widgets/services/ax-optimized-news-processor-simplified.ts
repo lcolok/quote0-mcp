@@ -42,6 +42,7 @@ export interface OptimizationArtifacts {
 
 export class AxOptimizedNewsProcessorSimplified {
   private optimizedProgram: OptimizationArtifacts['programs'] | null = null;
+  private currentVersion: string = 'unknown';
 
   constructor(private options: {
     apiKey: string;
@@ -55,20 +56,46 @@ export class AxOptimizedNewsProcessorSimplified {
   async loadOptimizationArtifacts(filename: string): Promise<boolean> {
     const fs = await import('fs/promises');
     const path = `${process.cwd()}/${filename}`;
-    
+
     try {
       const data = await fs.readFile(path, 'utf-8');
       const artifacts: OptimizationArtifacts = JSON.parse(data);
-      
+
       this.optimizedProgram = artifacts.programs;
-      
+      this.currentVersion = artifacts.metadata?.version || 'unknown';
+
       console.log(`✅ 已加载优化产物: ${filename}`);
+      console.log(`📦 版本: ${this.currentVersion}`);
       console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);
       return true;
     } catch (error) {
       console.error(`❌ 加载优化产物失败: ${error}`);
       return false;
     }
+  }
+
+  /**
+   * 从模型数据对象加载（用于热重载）
+   */
+  loadFromModelData(artifacts: OptimizationArtifacts): boolean {
+    try {
+      this.optimizedProgram = artifacts.programs;
+      this.currentVersion = artifacts.metadata?.version || 'unknown';
+
+      console.log(`🔥 热重载成功: 版本 ${this.currentVersion}`);
+      console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ 热重载失败: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * 获取当前加载的模型版本
+   */
+  getCurrentVersion(): string {
+    return this.currentVersion;
   }
 
   /**

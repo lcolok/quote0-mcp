@@ -324,9 +324,10 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
   name = 'AX优化处理器';
   version = '1.0.0';
   description = '使用AX框架进行高级内容优化，支持预训练模型和few-shot学习';
-  
+
   private processorInstance: any = null;
-  
+  private hotReloadManager: any = null;
+
   constructor(private config: { apiKey: string; baseURL: string; model: string }) {
     super();
   }
@@ -360,21 +361,21 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       // 尝试加载预训练模型
       console.log('📚 尝试加载AX预训练模型...');
       const loadSuccess = await this.processorInstance.loadOptimizationArtifacts('ax-framework/models/production/latest.json');
-      
+
       if (!loadSuccess) {
         console.log('⚡ 预训练模型未找到，使用基础数据进行快速训练...');
-        
+
         try {
           // 导入训练数据并进行快速训练
           const { trainingData } = await import('../../../ax-framework/compiled/ax-training-data.js');
-          
+
           if (!trainingData || !Array.isArray(trainingData) || trainingData.length === 0) {
             throw new Error('训练数据为空或格式不正确');
           }
-          
+
           const sampleData = trainingData.slice(0, 3);
           console.log(`📊 使用 ${sampleData.length} 条样本数据进行快速训练...`);
-          
+
           await this.processorInstance.quickTrain(sampleData);
           console.log('✅ 快速训练完成');
         } catch (trainingError) {
@@ -382,8 +383,11 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
         }
       } else {
         console.log('✅ 预训练模型加载成功');
+
+        // 启动热重载监控
+        await this.startHotReload();
       }
-      
+
       return this.processorInstance;
       
     } catch (error) {
@@ -476,6 +480,55 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
     }
   }
   
+  /**
+   * 启动热重载监控
+   */
+  private async startHotReload() {
+    try {
+      const { ModelHotReloadManager } = await import('../services/model-hot-reload-manager.js');
+      const modelPath = `${process.cwd()}/ax-framework/models/production/latest.json`;
+
+      this.hotReloadManager = new ModelHotReloadManager(
+        modelPath,
+        async (modelData) => {
+          // 热重载回调：将新模型加载到处理器中
+          return this.processorInstance.loadFromModelData(modelData);
+        }
+      );
+
+      // 监听热重载事件
+      this.hotReloadManager.on('reloaded', (event: any) => {
+        console.log(`🔥 模型已热重载: 版本 ${event.version} at ${event.timestamp}`);
+      });
+
+      this.hotReloadManager.on('reload-failed', (event: any) => {
+        console.error(`❌ 模型热重载失败: ${event.error}`);
+      });
+
+      await this.hotReloadManager.start();
+      console.log('🔥 AX模型热重载已启用 - 模型更新将自动生效，无需重启服务');
+    } catch (error) {
+      console.warn('⚠️  热重载功能启动失败，将使用手动重载模式:', error);
+    }
+  }
+
+  /**
+   * 停止热重载
+   */
+  stopHotReload() {
+    if (this.hotReloadManager) {
+      this.hotReloadManager.stop();
+      this.hotReloadManager = null;
+    }
+  }
+
+  /**
+   * 获取当前加载的模型版本
+   */
+  getCurrentModelVersion(): string {
+    return this.processorInstance?.getCurrentVersion() || 'unknown';
+  }
+
   getSupportedParams(): ProcessingParamDefinition[] {
     return [
       {

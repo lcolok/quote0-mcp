@@ -31,6 +31,11 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     height: body.options?.height || 384
   };
 
+  // 如果提供了mockData，注入到环境中
+  if (body.mockData) {
+    (global as any).__PLAYGROUND_MOCK_DATA__ = body.mockData;
+  }
+
   console.log('📋 处理参数:', params);
   console.log('⚙️ 配置:', config);
 

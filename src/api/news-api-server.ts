@@ -15,6 +15,7 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { ensureSchedulerStarted, getSchedulerInstance } from './scheduler-registry.js';
 import type { NewsSchedulerJobConfig } from './news-types.js';
 import annotationApp from './annotation-api.js';
+import axTrainingApp from './ax-training-api.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(date: Date | string): string {
@@ -125,6 +126,9 @@ app.get('/api/minio-proxy/*', async (c) => {
 
 // 集成标注API
 app.route('/', annotationApp);
+
+// 集成AX训练管理API
+app.route('/api/ax-training', axTrainingApp);
 
 // RSS源数据配置
 const RSS_SOURCES: Record<string, RSSSourceInfo> = {
@@ -674,10 +678,59 @@ app.notFound((c) => {
   }, 404);
 });
 
+/**
+ * 获取RSS新闻列表（用于Playground测试）
+ */
+app.get('/api/rss/list', async (c) => {
+  try {
+    const category = c.req.query('category') || 'technology';
+    const rssSource = c.req.query('rssSource') || 'solidot';
+    const count = parseInt(c.req.query('count') || '10', 10);
+    const startIndex = parseInt(c.req.query('startIndex') || '0', 10);
+
+    // 动态导入RSS数据源
+    const { RSSDataSourceModule } = await import('../react-widgets/core/data-sources/rss-data-source.js');
+    const rssSourceModule = new RSSDataSourceModule();
+
+    // 获取RSS新闻
+    const news = await rssSourceModule.fetchRawData({
+      category,
+      rssSource,
+      count,
+      startIndex
+    });
+
+    // 转换格式
+    const formattedNews = news.map((item: any) => ({
+      title: item.title,
+      description: item.content,
+      link: item.metadata?.link || '',
+      source: item.source,
+      publishTime: item.publishTime
+    }));
+
+    return c.json({
+      success: true,
+      data: formattedNews,
+      metadata: {
+        category,
+        rssSource,
+        count: formattedNews.length
+      }
+    });
+  } catch (error) {
+    console.error('获取RSS列表失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取RSS列表失败'
+    }, 500);
+  }
+});
+
 // 错误处理
 app.onError((error, c) => {
   console.error('API服务器错误:', error);
-  
+
   return c.json({
     success: false,
     error: '内部服务器错误',

@@ -7,6 +7,7 @@ import {
   Download,
   Pin,
   PinOff,
+  Zap,
 } from 'lucide-react';
 
 function Layout() {
@@ -26,6 +27,7 @@ function Layout() {
     { to: '/annotate', icon: FileEdit, label: '开始标注' },
     { to: '/statistics', icon: BarChart3, label: '统计分析' },
     { to: '/export', icon: Download, label: '导出样本' },
+    { to: '/training', icon: Zap, label: 'AX训练' },
   ];
 
   // 保存状态到localStorage

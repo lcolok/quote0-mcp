@@ -5,6 +5,12 @@ export interface NewsProcessRequest {
   processor?: string;
   index?: number;
   renderer?: string;
+  mockData?: {
+    title: string;
+    content: string;
+    link: string;
+    source: string;
+  };
   options?: {
     force?: boolean;
     border?: '0' | '1';

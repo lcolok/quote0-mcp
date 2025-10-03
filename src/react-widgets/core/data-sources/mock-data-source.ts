@@ -88,19 +88,41 @@ export class MockDataSourceModule extends BaseDataSourceModule {
   };
   
   async fetchRawData(params: DataSourceParams): Promise<RawDataItem[]> {
+    // 检查是否有Playground注入的mock数据
+    const playgroundData = (global as any).__PLAYGROUND_MOCK_DATA__;
+    if (playgroundData) {
+      console.log('🎮 使用 Playground 注入的测试数据');
+
+      // 清除注入的数据，避免影响后续请求
+      delete (global as any).__PLAYGROUND_MOCK_DATA__;
+
+      return [{
+        id: `playground_${Date.now()}`,
+        title: playgroundData.title,
+        content: playgroundData.content,
+        source: playgroundData.source,
+        publishTime: new Date().toISOString(),
+        category: params.category || 'technology',
+        metadata: {
+          isPlayground: true,
+          link: playgroundData.link
+        }
+      }];
+    }
+
     const category = params.category || 'technology';
     const count = params.count || 1;
     const startIndex = params.startIndex || 0;
-    
+
     console.log(`📝 Mock数据源获取: category=${category}, count=${count}, startIndex=${startIndex}`);
-    
+
     const categoryData = this.mockData[category] || this.mockData.technology;
     const endIndex = Math.min(startIndex + count, categoryData.length);
     const selectedData = categoryData.slice(startIndex, endIndex);
-    
+
     // 模拟网络延迟
     await new Promise(resolve => setTimeout(resolve, 100));
-    
+
     console.log(`✅ Mock数据源获取成功: ${selectedData.length}条数据`);
     return selectedData.map(item => ({
       ...item,

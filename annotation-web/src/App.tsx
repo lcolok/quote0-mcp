@@ -5,6 +5,7 @@ import Dashboard from './components/Dashboard';
 import AnnotationPage from './components/AnnotationPage';
 import StatisticsPage from './components/StatisticsPage';
 import ExportPage from './components/ExportPage';
+import TrainingPage from './components/TrainingPage';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
           <Route path="annotate" element={<AnnotationPage />} />
           <Route path="statistics" element={<StatisticsPage />} />
           <Route path="export" element={<ExportPage />} />
+          <Route path="training" element={<TrainingPage />} />
         </Route>
       </Routes>
     </>
