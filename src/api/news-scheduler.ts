@@ -373,6 +373,13 @@ export class NewsScheduler {
       job.state.consecutiveFailures += 1;
       console.error(`❌ 定时任务 ${job.config.id} 执行失败 (连续失败 ${job.state.consecutiveFailures} 次):`, error);
 
+      // 连续失败3次后，尝试轮换RSS源（多源模式）
+      if (job.state.consecutiveFailures >= 3) {
+        console.log(`⚠️ 连续失败${job.state.consecutiveFailures}次，尝试轮换RSS源...`);
+        await this.rotateRssSource(job);
+        job.state.consecutiveFailures = 0; // 重置失败计数
+      }
+
       const effectivePoolSize = this.getEffectivePoolSize(job);
       if (job.state.consecutiveFailures >= effectivePoolSize) {
         this.resetIndexState(job);
