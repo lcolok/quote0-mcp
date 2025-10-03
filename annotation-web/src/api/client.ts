@@ -6,7 +6,6 @@ import type {
   QualityAnnotation,
   AnnotationStatistics,
   ImportRSSRequest,
-  TrainingDataExport,
 } from '../types';
 
 // 在生产环境（Docker）中使用相对路径，nginx会代理到news-api
@@ -130,8 +129,8 @@ class AnnotationApiClient {
     minScore?: number;
     maxScore?: number;
     limit?: number;
-  }): Promise<TrainingDataExport> {
-    const response = await this.client.get<TrainingDataExport>(
+  }): Promise<any[]> {
+    const response = await this.client.get<any[]>(
       '/api/annotation/samples/export',
       { params }
     );

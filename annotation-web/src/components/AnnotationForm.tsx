@@ -23,6 +23,11 @@ function AnnotationForm({ onSubmit, isSubmitting, initialData }: AnnotationFormP
   );
   const [confidence, setConfidence] = useState(initialData?.confidence || 80);
 
+  // 优化内容字段
+  const [optimizedTitle, setOptimizedTitle] = useState(initialData?.optimized_title || '');
+  const [optimizedSummary, setOptimizedSummary] = useState(initialData?.optimized_summary || '');
+  const [optimizedContent, setOptimizedContent] = useState(initialData?.optimized_content || '');
+
   // 计算分类
   const getCategory = (score: number): 'high' | 'medium' | 'low' => {
     if (score >= 75) return 'high';
@@ -61,6 +66,11 @@ function AnnotationForm({ onSubmit, isSubmitting, initialData }: AnnotationFormP
       difficulty,
       confidence,
       annotator: 'human',
+
+      // 优化内容（可选）
+      optimized_title: optimizedTitle.trim() || undefined,
+      optimized_summary: optimizedSummary.trim() || undefined,
+      optimized_content: optimizedContent.trim() || undefined,
     };
 
     onSubmit(annotation);
@@ -190,6 +200,62 @@ function AnnotationForm({ onSubmit, isSubmitting, initialData }: AnnotationFormP
               </button>
             </span>
           ))}
+        </div>
+      </div>
+
+      {/* 优化内容 - 用于AX训练 */}
+      <div className="border-t border-gray-200 pt-6">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-gray-900 mb-1">
+            ✨ 内容优化（可选 - 用于AX训练）
+          </h3>
+          <p className="text-xs text-gray-600">
+            填写优化后的标题和摘要，用于训练AX模型学习如何改进内容
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {/* 优化标题 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              优化后的标题
+            </label>
+            <input
+              type="text"
+              value={optimizedTitle}
+              onChange={(e) => setOptimizedTitle(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+              placeholder="如何改进标题？更吸引人、更准确、更简洁..."
+            />
+          </div>
+
+          {/* 优化摘要 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              优化后的摘要
+            </label>
+            <textarea
+              value={optimizedSummary}
+              onChange={(e) => setOptimizedSummary(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+              placeholder="改进后的摘要：提取关键信息、优化表达、控制长度..."
+            />
+          </div>
+
+          {/* 优化正文（可选） */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              优化后的正文（可选）
+            </label>
+            <textarea
+              value={optimizedContent}
+              onChange={(e) => setOptimizedContent(e.target.value)}
+              rows={6}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+              placeholder="完整优化后的正文内容（可选填）"
+            />
+          </div>
         </div>
       </div>
 

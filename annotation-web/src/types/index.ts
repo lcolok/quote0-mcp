@@ -47,6 +47,11 @@ export interface QualityAnnotation {
   is_latest?: boolean;
   created_at?: string;
   updated_at?: string;
+
+  // 新增：优化后的内容（用于训练）
+  optimized_title?: string;      // 优化后的标题
+  optimized_summary?: string;    // 优化后的摘要
+  optimized_content?: string;    // 优化后的正文（可选）
 }
 
 // 新闻详情（含标注）
@@ -120,6 +125,7 @@ export interface TrainingSample {
     title: string;
     source: string;
     description?: string;
+    content?: string;  // 原始正文
   };
   output: {
     score: number;
@@ -128,6 +134,11 @@ export interface TrainingSample {
     reason: string;
     dimensions: QualityDimensions;
     tags: string[];
+
+    // 新增：优化后的内容（AX训练目标）
+    optimizedTitle?: string;     // 优化后的标题
+    optimizedSummary?: string;   // 优化后的摘要
+    optimizedContent?: string;   // 优化后的正文
   };
   metadata: {
     annotator: string;

@@ -7,9 +7,16 @@
 import { SnapshotManager, type TrainingSample } from './snapshot-manager.js';
 
 interface AnnotationSample {
-  title: string;
+  // 原始内容（RSS/API获取的）
+  original_title: string;
+  original_description: string;
+  original_content?: string;
+
+  // LLM处理后的内容（如果有）
+  processed_title?: string;
+  processed_summary?: string;
+
   link: string;
-  description: string;
   overall_score: number;
   quality_level: 'high' | 'medium' | 'low';
   should_filter: boolean;
@@ -17,6 +24,11 @@ interface AnnotationSample {
   tags: string[] | null;
   annotator: string;
   created_at: string;
+
+  // 人工优化的内容（标注时手动填写）
+  optimized_title?: string;
+  optimized_summary?: string;
+  optimized_content?: string;
 }
 
 async function fetchAnnotationSamples(
@@ -49,23 +61,41 @@ async function convertToTrainingSamples(
     const sample = annotationSamples[i];
 
     // 从标注数据中提取信息
-    // 注意：标注数据中的title是原始标题，description是原始内容
-    // 我们需要获取对应的processed_content来得到优化后的标题和摘要
+    // 优先级：人工优化 > LLM处理 > 原始内容
+    const hasManualOptimization = sample.optimized_title || sample.optimized_summary;
+    const hasLLMProcessing = sample.processed_title || sample.processed_summary;
 
-    // 简化处理：使用标注数据中的字段
-    // 实际应用中可能需要从数据库获取完整的processed_content
+    // 输入：始终使用原始内容
+    const inputTitle = sample.original_title;
+    const inputContent = sample.original_content || sample.original_description;
+
+    // 输出：优先使用人工优化，其次LLM处理，最后原始内容
+    const outputTitle = sample.optimized_title || sample.processed_title || sample.original_title;
+    const outputSummary = sample.optimized_summary || sample.processed_summary || sample.original_description;
+
+    // 数据来源标记
+    let dataSource = '原始内容';
+    if (hasManualOptimization) {
+      dataSource = '人工优化';
+    } else if (hasLLMProcessing) {
+      dataSource = 'LLM处理';
+    }
+
     trainingSamples.push({
       sampleId: i + 1,
-      title: sample.title,
-      newsId: 0, // 需要从数据库关联获取
-      fingerprint: '', // 需要从数据库关联获取
-      newsContent: sample.description,
-      optimizedTitle: sample.title, // 实际应该是processed_content.title
-      optimizedSummary: sample.description.substring(0, 200), // 实际应该是processed_content.message
+      title: inputTitle,
+      newsId: 0,
+      fingerprint: '',
+      newsContent: inputContent,
+
+      // ✨ 输出：优先使用人工优化内容
+      optimizedTitle: outputTitle,
+      optimizedSummary: outputSummary,
+
       annotatedAt: sample.created_at,
       annotator: sample.annotator,
       score: sample.overall_score,
-      source: '标注系统', // 需要从数据库关联获取实际来源
+      source: dataSource,
       link: sample.link,
       qualityLevel: sample.quality_level
     });

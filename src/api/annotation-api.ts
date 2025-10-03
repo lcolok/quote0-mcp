@@ -40,6 +40,11 @@ interface QualityAnnotation {
   annotator?: string;
   difficulty?: 'easy' | 'medium' | 'hard';
   confidence?: number;
+
+  // 新增：优化后的内容（用于训练）
+  optimized_title?: string;      // 优化后的标题
+  optimized_summary?: string;    // 优化后的摘要
+  optimized_content?: string;    // 优化后的正文（可选）
 }
 
 // 创建Hono应用
@@ -246,8 +251,9 @@ app.post('/api/annotation/news/:id/annotate',
           INSERT INTO quality_annotations (
             news_id, overall_score, category, should_filter,
             news_value, practicality, density, timeliness, universality,
-            reason, tags, annotator, difficulty, confidence
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            reason, tags, annotator, difficulty, confidence,
+            optimized_title, optimized_summary, optimized_content
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
           RETURNING *
         `, [
           newsId,
@@ -263,7 +269,10 @@ app.post('/api/annotation/news/:id/annotate',
           annotation.tags || [],
           annotation.annotator || 'human',
           annotation.difficulty,
-          annotation.confidence
+          annotation.confidence,
+          annotation.optimized_title,
+          annotation.optimized_summary,
+          annotation.optimized_content
         ]);
 
         // 更新push_log状态为completed
@@ -543,19 +552,25 @@ app.get('/api/annotation/samples/export', async (c) => {
 
     const client = await postgres.getClient();
     try {
-      // 直接查询导出样本
+      // 直接查询导出样本（包含优化内容）
       let query = `
         SELECT
-          npl.raw_content->>'title' as title,
+          npl.raw_content->>'title' as original_title,
           npl.raw_content->>'link' as link,
-          npl.processed_content->>'message' as description,
+          npl.raw_content->>'description' as original_description,
+          npl.raw_content->>'content' as original_content,
+          npl.processed_content->>'title' as processed_title,
+          npl.processed_content->>'message' as processed_summary,
           qa.overall_score,
           qa.category as quality_level,
           qa.should_filter,
           qa.reason,
           qa.tags,
           qa.annotator,
-          qa.created_at
+          qa.created_at,
+          qa.optimized_title,
+          qa.optimized_summary,
+          qa.optimized_content
         FROM quality_annotations qa
         INNER JOIN news_push_log npl ON qa.news_id = npl.id
         WHERE qa.is_latest = true
@@ -746,8 +761,9 @@ app.post('/api/annotation/batch', async (c) => {
           INSERT INTO quality_annotations (
             news_id, overall_score, category, should_filter,
             news_value, practicality, density, timeliness, universality,
-            reason, tags, annotator, difficulty, confidence
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            reason, tags, annotator, difficulty, confidence,
+            optimized_title, optimized_summary, optimized_content
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
           RETURNING *
         `, [
           annotation.news_id,
@@ -763,7 +779,10 @@ app.post('/api/annotation/batch', async (c) => {
           annotation.tags || [],
           annotation.annotator || 'human',
           annotation.difficulty,
-          annotation.confidence
+          annotation.confidence,
+          annotation.optimized_title,
+          annotation.optimized_summary,
+          annotation.optimized_content
         ]);
 
         // 更新状态
