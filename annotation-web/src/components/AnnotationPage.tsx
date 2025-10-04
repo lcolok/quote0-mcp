@@ -4,18 +4,17 @@ import { toast } from 'sonner';
 import { apiClient } from '../api/client';
 import { ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Send, Search, GripVertical } from 'lucide-react';
 
-interface MixedRecord {
+interface NewsRecord {
   id: number;
   title: string;
   category: string;
   dataSource: string;
   imagePath: string | null;
-  timestamp: Date;
-  isPending: boolean;
-  isPushed: boolean;
+  pushedAt: Date;
+  annotationStatus: 'pending' | 'annotating' | 'completed' | 'skipped';
   isRecent?: boolean;
-  pendingData?: any;
-  pushedData?: any;
+  rawContent: any;
+  processedContent: any;
 }
 
 function AnnotationPage() {
@@ -80,107 +79,40 @@ function AnnotationPage() {
     };
   }, [leftWidth]);
 
-  // 获取待标注新闻列表
-  const { data: newsData, isLoading: newsLoading } = useQuery({
-    queryKey: ['pending-news'],
-    queryFn: () =>
-      apiClient.getNews({
-        status: 'pending',
-        limit: 10000,
-      }),
-    refetchInterval: 30000,
-    staleTime: 0,
-  });
-
-  // 获取推送历史
-  const { data: historyData, isLoading: historyLoading } = useQuery({
+  // 只获取推送历史（包含所有新闻记录）
+  const { data: newsData, isLoading } = useQuery({
     queryKey: ['push-history-all'],
     queryFn: () => apiClient.getPushHistory({ limit: 10000 }),
     refetchInterval: 10000,
   });
 
-  // 混合并去重数据（基于新闻ID合并状态）
-  const mixedList = useMemo(() => {
-    const recordMap = new Map<number, MixedRecord>();
-
-    // 处理待标注新闻
-    (newsData?.data || []).forEach((item: any) => {
-      const newsId = item.id;
-      const existing = recordMap.get(newsId);
-
-      if (existing) {
-        existing.isPending = true;
-        existing.pendingData = item;
-      } else {
-        recordMap.set(newsId, {
-          id: newsId,
-          title: item.title || item.processed_content?.title || item.raw_content?.title || '未知标题',
-          category: item.category || '未知',
-          dataSource: item.data_source || item.source || '未知',
-          imagePath: item.image_path,
-          timestamp: new Date(item.created_at || Date.now()),
-          isPending: true,
-          isPushed: false,
-          pendingData: item,
-        });
-      }
-    });
-
-    // 处理推送历史（根据原始新闻ID关联）
-    (historyData?.data || []).forEach((item: any) => {
-      // 推送历史中的ID是push_log的ID，需要通过rawContent获取原始新闻ID
-      const newsId = item.rawContent?.newsId || item.id;
-      const existing = recordMap.get(newsId);
-
-      if (existing) {
-        existing.isPushed = true;
-        existing.pushedData = item;
-        // 如果推送历史有图片，优先使用
-        if (item.imagePath && !existing.imagePath) {
-          existing.imagePath = item.imagePath;
-        }
-        // 优先使用推送时间作为排序依据
-        if (item.pushedAt) {
-          existing.timestamp = new Date(item.pushedAt);
-        }
-        // 如果是最近推送的，标记为recent
-        if (item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000)) {
-          existing.isRecent = true;
-        }
-      } else {
-        // 只在推送历史中的记录（可能已被删除或标注完成）
-        recordMap.set(newsId, {
-          id: newsId,
-          title: item.title || '未知标题',
-          category: item.category || '未知',
-          dataSource: item.dataSource || '未知',
-          imagePath: item.imagePath,
-          timestamp: new Date(item.pushedAt || Date.now()),
-          isPending: false,
-          isPushed: true,
-          isRecent: item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000),
-          pushedData: item,
-        });
-      }
-    });
-
-    // 转换为数组并按时间排序（最新的在前）
-    return Array.from(recordMap.values()).sort((a, b) =>
-      b.timestamp.getTime() - a.timestamp.getTime()
-    );
-  }, [newsData, historyData]);
+  // 处理数据并排序
+  const newsList = useMemo(() => {
+    return (newsData?.data || []).map((item: any): NewsRecord => ({
+      id: item.id,
+      title: item.title || '未知标题',
+      category: item.category || 'unknown',
+      dataSource: item.dataSource || '未知',
+      imagePath: item.imagePath,
+      pushedAt: new Date(item.pushedAt || Date.now()),
+      annotationStatus: item.annotationStatus || 'pending',
+      isRecent: item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000),
+      rawContent: item.rawContent,
+      processedContent: item.processedContent,
+    })).sort((a, b) => b.pushedAt.getTime() - a.pushedAt.getTime());
+  }, [newsData]);
 
   // 根据搜索关键词筛选数据
   const filteredList = useMemo(() => {
-    if (!searchQuery.trim()) return mixedList;
+    if (!searchQuery.trim()) return newsList;
 
     const query = searchQuery.toLowerCase();
-    return mixedList.filter(item =>
+    return newsList.filter(item =>
       item.title.toLowerCase().includes(query) ||
       item.category.toLowerCase().includes(query) ||
       item.dataSource.toLowerCase().includes(query)
     );
-  }, [mixedList, searchQuery]);
+  }, [newsList, searchQuery]);
 
   // 查找选中的记录
   const selectedRecord = selectedId
@@ -188,10 +120,6 @@ function AnnotationPage() {
     : filteredList[0];
 
   const currentRecord = selectedRecord || filteredList[0];
-  const isLoadingData = newsLoading || historyLoading;
-
-  // 获取当前记录的数据（优先使用待标注数据）
-  const currentNews = currentRecord?.pendingData || currentRecord?.pushedData;
 
   // 格式化时间显示
   const formatTime = (date: Date) => {
@@ -229,15 +157,11 @@ function AnnotationPage() {
   });
 
   // 获取预览图路径
-  const rawImagePath = currentRecord?.imagePath ||
-    (renderMutation.isSuccess && renderMutation.data?.success
-      ? renderMutation.data.data.imagePath
+  const previewImagePath = currentRecord?.imagePath
+    ? `/api/minio-proxy${currentRecord.imagePath}`
+    : (renderMutation.isSuccess && renderMutation.data?.success
+      ? `/api/minio-proxy${renderMutation.data.data.imagePath}`
       : null);
-
-  // 通过API代理访问MinIO图片
-  const previewImagePath = rawImagePath
-    ? `/api/minio-proxy${rawImagePath}`
-    : null;
 
   // 快速标注mutation（点赞/点踩）
   const quickAnnotateMutation = useMutation({
@@ -245,7 +169,7 @@ function AnnotationPage() {
       apiClient.quickAnnotate(currentRecord.id, action),
     onSuccess: (_, action) => {
       toast.success(action === 'like' ? '👍 已标记为高质量' : '👎 已标记为低质量');
-      queryClient.invalidateQueries({ queryKey: ['pending-news'] });
+      queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
       queryClient.invalidateQueries({ queryKey: ['statistics'] });
 
       // 自动跳转到下一条
@@ -261,13 +185,14 @@ function AnnotationPage() {
     mutationFn: (id: number) => apiClient.resendPush(id),
     onSuccess: () => {
       toast.success('📤 推送成功');
+      queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
     },
     onError: (error: Error) => {
       toast.error(`推送失败: ${error.message}`);
     },
   });
 
-  const handleSelectRecord = (record: MixedRecord) => {
+  const handleSelectRecord = (record: NewsRecord) => {
     setSelectedId(record.id);
   };
 
@@ -290,20 +215,20 @@ function AnnotationPage() {
   };
 
   const handleQuickAnnotate = (action: 'like' | 'dislike') => {
-    if (currentRecord && currentRecord.isPending && !quickAnnotateMutation.isPending) {
+    if (currentRecord && !quickAnnotateMutation.isPending) {
       quickAnnotateMutation.mutate(action);
     }
   };
 
   const handleRenderPreview = () => {
-    if (currentRecord && currentRecord.isPending) {
+    if (currentRecord) {
       renderMutation.mutate(currentRecord.id);
     }
   };
 
   const handlePush = () => {
-    if (currentRecord && currentRecord.isPushed && currentRecord.pushedData) {
-      pushMutation.mutate(currentRecord.pushedData.id);
+    if (currentRecord) {
+      pushMutation.mutate(currentRecord.id);
     }
   };
 
@@ -353,7 +278,7 @@ function AnnotationPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedId, filteredList, currentRecord]);
 
-  if (isLoadingData) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
@@ -417,14 +342,14 @@ function AnnotationPage() {
             {searchQuery ? (
               <>
                 找到 <span className="font-medium text-primary-600">{filteredList.length}</span> 条结果
-                <span className="ml-1">（共 {mixedList.length} 条）</span>
+                <span className="ml-1">（共 {newsList.length} 条）</span>
               </>
             ) : (
               <>
-                共 {mixedList.length} 条 ·
-                <span className="text-green-600 ml-1">{mixedList.filter(r => r.isPending).length} 待标注</span> ·
-                <span className="text-blue-600 ml-1">{mixedList.filter(r => r.isPushed).length} 已推送</span> ·
-                <span className="text-purple-600 ml-1">{mixedList.filter(r => r.isPending && r.isPushed).length} 双标签</span>
+                共 {newsList.length} 条 ·
+                <span className="text-green-600 ml-1">{newsList.filter(r => r.annotationStatus === 'pending').length} 待标注</span> ·
+                <span className="text-blue-600 ml-1">{newsList.filter(r => r.annotationStatus === 'completed').length} 已标注</span> ·
+                <span className="text-gray-600 ml-1">{newsList.filter(r => r.annotationStatus === 'skipped').length} 已跳过</span>
               </>
             )}
           </div>
@@ -478,16 +403,21 @@ function AnnotationPage() {
                           </h3>
                         </div>
 
-                        {/* 状态标签 - 支持多个标签 */}
+                        {/* 状态标签 */}
                         <div className="flex items-center gap-1.5 text-xs mt-2 flex-wrap">
-                          {record.isPending && (
+                          {record.annotationStatus === 'pending' && (
                             <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
                               🟢 待标注
                             </span>
                           )}
-                          {record.isPushed && (
+                          {record.annotationStatus === 'completed' && (
                             <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
-                              🔵 已推送
+                              ✅ 已标注
+                            </span>
+                          )}
+                          {record.annotationStatus === 'skipped' && (
+                            <span className="px-1.5 py-0.5 bg-gray-100 text-gray-700 rounded-full font-medium">
+                              ⏭️ 已跳过
                             </span>
                           )}
                           {record.isRecent && (
@@ -497,7 +427,7 @@ function AnnotationPage() {
                           )}
                           <span className="text-gray-500">{record.category}</span>
                           <span className="text-gray-400">·</span>
-                          <span className="text-gray-500">{formatTime(record.timestamp)}</span>
+                          <span className="text-gray-500">{formatTime(record.pushedAt)}</span>
                         </div>
                       </div>
                     </div>
@@ -522,9 +452,9 @@ function AnnotationPage() {
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">新闻预览</h3>
-            {(currentNews.link || currentNews.rawContent?.link) && (
+            {(currentRecord.rawContent?.link || currentRecord.processedContent?.link) && (
               <a
-                href={currentNews.link || currentNews.rawContent?.link}
+                href={currentRecord.rawContent?.link || currentRecord.processedContent?.link}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center text-sm text-primary-600 hover:text-primary-700"
@@ -580,19 +510,19 @@ function AnnotationPage() {
               </div>
             )}
 
-            {currentNews.description && !currentNews.raw_content && !currentNews.processed_content && (
+            {currentRecord.rawContent?.description && !currentRecord.rawContent && !currentRecord.processedContent && (
               <div>
                 <label className="text-xs font-medium text-gray-500 uppercase">
                   摘要
                 </label>
                 <p className="mt-1 text-sm text-gray-700">
-                  {currentNews.description}
+                  {currentRecord.rawContent?.description}
                 </p>
               </div>
             )}
 
             {/* 原始RSS数据区域 */}
-            {(currentNews.raw_content || currentNews.rawContent) && (
+            {(currentRecord.rawContent || currentRecord.rawContent) && (
               <div className="mt-2">
                 <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
                   📋 原始RSS数据
@@ -601,40 +531,40 @@ function AnnotationPage() {
                   <div>
                     <span className="text-xs font-semibold text-yellow-800">原始标题：</span>
                     <p className="text-sm text-yellow-900 mt-1">
-                      {(currentNews.raw_content || currentNews.rawContent)?.title}
+                      {(currentRecord.rawContent || currentRecord.rawContent)?.title}
                     </p>
                   </div>
                   {/* 显示原始正文：优先使用 raw_content.content，回退到 news.description */}
-                  {((currentNews.raw_content || currentNews.rawContent)?.content || currentNews.description) && (
+                  {((currentRecord.rawContent || currentRecord.rawContent)?.content || currentRecord.rawContent?.description) && (
                     <div>
                       <span className="text-xs font-semibold text-yellow-800">
                         原始摘要/正文：
-                        {(currentNews.raw_content || currentNews.rawContent)?.content
-                          ? `（${(currentNews.raw_content || currentNews.rawContent).content.length} 字符）`
+                        {(currentRecord.rawContent || currentRecord.rawContent)?.content
+                          ? `（${(currentRecord.rawContent || currentRecord.rawContent).content.length} 字符）`
                           : '（RSS摘要）'}
                       </span>
                       <p className="text-sm text-yellow-900 mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap">
-                        {(currentNews.raw_content || currentNews.rawContent)?.content || currentNews.description}
+                        {(currentRecord.rawContent || currentRecord.rawContent)?.content || currentRecord.rawContent?.description}
                       </p>
                     </div>
                   )}
-                  {(currentNews.raw_content || currentNews.rawContent)?.description && (
+                  {(currentRecord.rawContent || currentRecord.rawContent)?.description && (
                     <div>
                       <span className="text-xs font-semibold text-yellow-800">RSS Description：</span>
                       <p className="text-sm text-yellow-900 mt-1 line-clamp-2">
-                        {(currentNews.raw_content || currentNews.rawContent).description}
+                        {(currentRecord.rawContent || currentRecord.rawContent).description}
                       </p>
                     </div>
                   )}
                   <div className="text-xs text-yellow-600">
-                    来源: {(currentNews.raw_content || currentNews.rawContent)?.source} | 发布: {(currentNews.raw_content || currentNews.rawContent)?.publishTime || '未知'}
+                    来源: {(currentRecord.rawContent || currentRecord.rawContent)?.source} | 发布: {(currentRecord.rawContent || currentRecord.rawContent)?.publishTime || '未知'}
                   </div>
                 </div>
               </div>
             )}
 
             {/* 处理后的数据区域 */}
-            {(currentNews.processed_content || currentNews.processedContent) && (
+            {(currentRecord.processedContent || currentRecord.processedContent) && (
               <div className="mt-2">
                 <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
                   ✨ AX优化后的数据
@@ -643,20 +573,20 @@ function AnnotationPage() {
                   <div>
                     <span className="text-xs font-semibold text-green-800">优化标题：</span>
                     <p className="text-sm text-green-900 mt-1 font-medium">
-                      {(currentNews.processed_content || currentNews.processedContent)?.title}
+                      {(currentRecord.processedContent || currentRecord.processedContent)?.title}
                     </p>
                   </div>
-                  {(currentNews.processed_content || currentNews.processedContent)?.message && (
+                  {(currentRecord.processedContent || currentRecord.processedContent)?.message && (
                     <div>
                       <span className="text-xs font-semibold text-green-800">优化内容：</span>
                       <p className="text-sm text-green-900 mt-1">
-                        {(currentNews.processed_content || currentNews.processedContent).message}
+                        {(currentRecord.processedContent || currentRecord.processedContent).message}
                       </p>
                     </div>
                   )}
-                  {(currentNews.processed_content || currentNews.processedContent)?.signature && (
+                  {(currentRecord.processedContent || currentRecord.processedContent)?.signature && (
                     <div className="text-xs text-green-600">
-                      处理器: {(currentNews.processed_content || currentNews.processedContent).signature}
+                      处理器: {(currentRecord.processedContent || currentRecord.processedContent).signature}
                     </div>
                   )}
                 </div>
@@ -665,21 +595,19 @@ function AnnotationPage() {
 
             <div className="grid grid-cols-2 gap-4 text-xs text-gray-500">
               <div>
-                <span className="font-medium">分类:</span> {currentNews.category || '未知'}
+                <span className="font-medium">分类:</span> {currentRecord.category || '未知'}
               </div>
               <div>
-                <span className="font-medium">数据源:</span> {currentNews.data_source || currentNews.dataSource}
+                <span className="font-medium">数据源:</span> {currentRecord.dataSource || currentRecord.dataSource}
               </div>
-              {currentRecord.isPushed && currentNews.pushedAt && (
-                <div className="col-span-2">
-                  <span className="font-medium">推送时间:</span>{' '}
-                  {new Date(currentNews.pushedAt).toLocaleString('zh-CN')}
-                </div>
-              )}
-              {currentRecord.isPending && currentNews.publish_time && (
+              <div className="col-span-2">
+                <span className="font-medium">推送时间:</span>{' '}
+                {new Date(currentRecord.pushedAt).toLocaleString('zh-CN')}
+              </div>
+              {currentRecord.rawContent?.publishTime && (
                 <div className="col-span-2">
                   <span className="font-medium">发布时间:</span>{' '}
-                  {new Date(currentNews.publish_time).toLocaleString('zh-CN')}
+                  {new Date(currentRecord.rawContent.publishTime).toLocaleString('zh-CN')}
                 </div>
               )}
             </div>
@@ -703,8 +631,8 @@ function AnnotationPage() {
           <h3 className="text-lg font-semibold text-gray-900 mb-4">操作</h3>
 
           <div className="space-y-3">
-            {/* 标注按钮（仅待标注记录显示） */}
-            {currentRecord.isPending && (
+            {/* 标注按钮（待标注状态） */}
+            {currentRecord.annotationStatus === 'pending' && (
               <>
                 <button
                   onClick={() => handleQuickAnnotate('like')}
@@ -735,24 +663,27 @@ function AnnotationPage() {
               </>
             )}
 
-            {/* 推送按钮（已推送记录显示） */}
-            {currentRecord.isPushed && (
-              <button
-                onClick={handlePush}
-                disabled={pushMutation.isPending}
-                className="w-full flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Send className="w-6 h-6 mr-3" />
-                <span className="font-medium text-lg">
-                  {pushMutation.isPending ? '推送中...' : '重新推送到设备'}
-                </span>
-              </button>
-            )}
+            {/* 重新推送按钮（所有记录都可推送） */}
+            <button
+              onClick={handlePush}
+              disabled={pushMutation.isPending}
+              className="w-full flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Send className="w-6 h-6 mr-3" />
+              <span className="font-medium text-lg">
+                {pushMutation.isPending ? '推送中...' : '重新推送到设备'}
+              </span>
+            </button>
 
-            {/* 如果两个状态都不满足，显示提示 */}
-            {!currentRecord.isPending && !currentRecord.isPushed && (
-              <div className="text-sm text-gray-500 text-center py-4">
-                此记录无可用操作
+            {/* 已标注/跳过的提示 */}
+            {currentRecord.annotationStatus === 'completed' && (
+              <div className="text-sm text-green-600 text-center py-2 bg-green-50 rounded">
+                ✅ 已完成标注
+              </div>
+            )}
+            {currentRecord.annotationStatus === 'skipped' && (
+              <div className="text-sm text-gray-600 text-center py-2 bg-gray-50 rounded">
+                ⏭️ 已跳过此条
               </div>
             )}
           </div>
@@ -783,100 +714,6 @@ function AnnotationPage() {
           </div>
         </div>
 
-        {/* 调试信息面板 */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="mt-0 pt-0">
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-medium text-gray-500 uppercase">
-                调试信息
-              </label>
-              <button
-                onClick={() => {
-                  const debugInfo = {
-                    // 基础信息
-                    id: currentNews.id,
-                    title: currentNews.title,
-                    description: currentNews.description,
-                    source: currentNews.source,
-                    data_source: currentNews.data_source,
-                    category: currentNews.category,
-                    rss_index: currentNews.rss_index,
-                    image_path: currentNews.image_path,
-                    publish_time: currentNews.publish_time,
-                    link: currentNews.link,
-                    annotation_status: currentNews.annotation_status,
-                    created_at: currentNews.created_at,
-                    updated_at: currentNews.updated_at,
-
-                    // 原始RSS数据
-                    raw_content: currentNews.raw_content || null,
-
-                    // AX优化后的数据
-                    processed_content: currentNews.processed_content || null,
-
-                    // 数据对比分析
-                    data_analysis: {
-                      has_raw_data: !!currentNews.raw_content,
-                      has_processed_data: !!currentNews.processed_content,
-                      has_description: !!currentNews.description,
-                      data_source_type: currentNews.data_source,
-                      is_from_push_log: currentNews.data_source === 'push_log',
-                      has_image: !!currentNews.image_path
-                    }
-                  };
-                  navigator.clipboard.writeText(JSON.stringify(debugInfo, null, 2));
-                  toast.success('完整调试信息已复制到剪贴板');
-                }}
-                className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
-              >
-                📋 复制完整调试信息
-              </button>
-            </div>
-            <div className="bg-gray-100 rounded p-3 text-xs font-mono space-y-1">
-              <div><span className="text-gray-600">ID:</span> {currentNews.id}</div>
-              <div><span className="text-gray-600">来源字段:</span> {currentNews.source}</div>
-              <div><span className="text-gray-600">数据源字段:</span> {currentNews.data_source}</div>
-              <div><span className="text-gray-600">RSS索引:</span> {currentNews.rss_index ?? 'null'}</div>
-              <div><span className="text-gray-600">图片路径:</span> {currentNews.image_path || '无'}</div>
-
-              <div className="pt-2 border-t border-gray-300">
-                <span className="text-gray-600">数据完整性:</span>
-                <ul className="ml-4 mt-1 space-y-1">
-                  <li className={currentNews.raw_content ? "text-green-600" : "text-gray-500"}>
-                    {currentNews.raw_content ? "✓" : "○"} 原始RSS数据
-                  </li>
-                  <li className={currentNews.processed_content ? "text-green-600" : "text-gray-500"}>
-                    {currentNews.processed_content ? "✓" : "○"} AX优化数据
-                  </li>
-                  <li className={currentNews.description ? "text-green-600" : "text-gray-500"}>
-                    {currentNews.description ? "✓" : "○"} 描述信息
-                  </li>
-                  <li className={currentNews.image_path ? "text-green-600" : "text-gray-500"}>
-                    {currentNews.image_path ? "✓" : "○"} 历史图片
-                  </li>
-                </ul>
-              </div>
-
-              <div className="pt-2 border-t border-gray-300">
-                <span className="text-gray-600">问题诊断:</span>
-                <ul className="ml-4 mt-1 space-y-1">
-                  {!currentNews.image_path && (
-                    <li className="text-orange-600">⚠️ 无历史图片路径</li>
-                  )}
-                  {currentNews.data_source !== 'rss' && (
-                    <li className="text-blue-600">ℹ️ 数据源类型: {currentNews.data_source}</li>
-                  )}
-                  {currentNews.rss_index === null && (
-                    <li className="text-orange-600">⚠️ 缺少RSS索引</li>
-                  )}
-                  {!currentNews.raw_content && !currentNews.processed_content && (
-                    <li className="text-orange-600">⚠️ 无原始/优化数据（可能是直接导入）</li>
-                  )}
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

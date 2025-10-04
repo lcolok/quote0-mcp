@@ -746,7 +746,8 @@ app.get('/api/scheduler/push-history', async (c) => {
         processed_content,
         image_path,
         pushed_at,
-        job_id
+        job_id,
+        annotation_status
       FROM news_push_log
       WHERE 1=1
     `;
@@ -795,6 +796,7 @@ app.get('/api/scheduler/push-history', async (c) => {
       pushedAt: row.pushed_at,
       category: row.raw_content?.category || 'unknown',
       dataSource: row.raw_content?.source || row.job_id || 'unknown',
+      annotationStatus: row.annotation_status || 'pending',
       rawContent: row.raw_content,
       processedContent: row.processed_content,
     }));
