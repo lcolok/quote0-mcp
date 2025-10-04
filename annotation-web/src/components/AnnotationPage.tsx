@@ -139,6 +139,10 @@ function AnnotationPage() {
         if (item.imagePath && !existing.imagePath) {
           existing.imagePath = item.imagePath;
         }
+        // 优先使用推送时间作为排序依据
+        if (item.pushedAt) {
+          existing.timestamp = new Date(item.pushedAt);
+        }
         // 如果是最近推送的，标记为recent
         if (item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000)) {
           existing.isRecent = true;
@@ -188,6 +192,27 @@ function AnnotationPage() {
 
   // 获取当前记录的数据（优先使用待标注数据）
   const currentNews = currentRecord?.pendingData || currentRecord?.pushedData;
+
+  // 格式化时间显示
+  const formatTime = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes}分钟前`;
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+
+    // 超过7天显示具体日期
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const hour = date.getHours();
+    const minute = date.getMinutes();
+    return `${month}/${day} ${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+  };
 
   // 手动渲染的 mutation（仅在没有历史图片时使用）
   const renderMutation = useMutation({
@@ -471,6 +496,8 @@ function AnnotationPage() {
                             </span>
                           )}
                           <span className="text-gray-500">{record.category}</span>
+                          <span className="text-gray-400">·</span>
+                          <span className="text-gray-500">{formatTime(record.timestamp)}</span>
                         </div>
                       </div>
                     </div>
