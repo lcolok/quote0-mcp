@@ -4,18 +4,18 @@ import { toast } from 'sonner';
 import { apiClient } from '../api/client';
 import { ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Send, Search, GripVertical } from 'lucide-react';
 
-type RecordType = 'pending' | 'pushed';
-
 interface MixedRecord {
   id: number;
-  type: RecordType;
   title: string;
   category: string;
   dataSource: string;
   imagePath: string | null;
   timestamp: Date;
+  isPending: boolean;
+  isPushed: boolean;
   isRecent?: boolean;
-  originalData: any;
+  pendingData?: any;
+  pushedData?: any;
 }
 
 function AnnotationPage() {
@@ -86,7 +86,7 @@ function AnnotationPage() {
     queryFn: () =>
       apiClient.getNews({
         status: 'pending',
-        limit: 1000,
+        limit: 10000,
       }),
     refetchInterval: 30000,
     staleTime: 0,
@@ -95,37 +95,75 @@ function AnnotationPage() {
   // 获取推送历史
   const { data: historyData, isLoading: historyLoading } = useQuery({
     queryKey: ['push-history-all'],
-    queryFn: () => apiClient.getPushHistory({ limit: 1000 }),
+    queryFn: () => apiClient.getPushHistory({ limit: 10000 }),
     refetchInterval: 10000,
   });
 
-  // 混合并排序数据
+  // 混合并去重数据（基于新闻ID合并状态）
   const mixedList = useMemo(() => {
-    const pending: MixedRecord[] = (newsData?.data || []).map((item: any) => ({
-      id: item.id,
-      type: 'pending' as RecordType,
-      title: item.title || item.processed_content?.title || item.raw_content?.title || '未知标题',
-      category: item.category || '未知',
-      dataSource: item.data_source || item.source || '未知',
-      imagePath: item.image_path,
-      timestamp: new Date(item.created_at || Date.now()),
-      originalData: item,
-    }));
+    const recordMap = new Map<number, MixedRecord>();
 
-    const pushed: MixedRecord[] = (historyData?.data || []).map((item: any) => ({
-      id: item.id,
-      type: 'pushed' as RecordType,
-      title: item.title || '未知标题',
-      category: item.category || '未知',
-      dataSource: item.dataSource || '未知',
-      imagePath: item.imagePath,
-      timestamp: new Date(item.pushedAt || Date.now()),
-      isRecent: item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000),
-      originalData: item,
-    }));
+    // 处理待标注新闻
+    (newsData?.data || []).forEach((item: any) => {
+      const newsId = item.id;
+      const existing = recordMap.get(newsId);
 
-    // 合并并按时间排序（最新的在前）
-    return [...pending, ...pushed].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      if (existing) {
+        existing.isPending = true;
+        existing.pendingData = item;
+      } else {
+        recordMap.set(newsId, {
+          id: newsId,
+          title: item.title || item.processed_content?.title || item.raw_content?.title || '未知标题',
+          category: item.category || '未知',
+          dataSource: item.data_source || item.source || '未知',
+          imagePath: item.image_path,
+          timestamp: new Date(item.created_at || Date.now()),
+          isPending: true,
+          isPushed: false,
+          pendingData: item,
+        });
+      }
+    });
+
+    // 处理推送历史（根据原始新闻ID关联）
+    (historyData?.data || []).forEach((item: any) => {
+      // 推送历史中的ID是push_log的ID，需要通过rawContent获取原始新闻ID
+      const newsId = item.rawContent?.newsId || item.id;
+      const existing = recordMap.get(newsId);
+
+      if (existing) {
+        existing.isPushed = true;
+        existing.pushedData = item;
+        // 如果推送历史有图片，优先使用
+        if (item.imagePath && !existing.imagePath) {
+          existing.imagePath = item.imagePath;
+        }
+        // 如果是最近推送的，标记为recent
+        if (item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000)) {
+          existing.isRecent = true;
+        }
+      } else {
+        // 只在推送历史中的记录（可能已被删除或标注完成）
+        recordMap.set(newsId, {
+          id: newsId,
+          title: item.title || '未知标题',
+          category: item.category || '未知',
+          dataSource: item.dataSource || '未知',
+          imagePath: item.imagePath,
+          timestamp: new Date(item.pushedAt || Date.now()),
+          isPending: false,
+          isPushed: true,
+          isRecent: item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000),
+          pushedData: item,
+        });
+      }
+    });
+
+    // 转换为数组并按时间排序（最新的在前）
+    return Array.from(recordMap.values()).sort((a, b) =>
+      b.timestamp.getTime() - a.timestamp.getTime()
+    );
   }, [newsData, historyData]);
 
   // 根据搜索关键词筛选数据
@@ -142,11 +180,14 @@ function AnnotationPage() {
 
   // 查找选中的记录
   const selectedRecord = selectedId
-    ? filteredList.find(r => r.id === selectedId && r.type === (mixedList.find(m => m.id === selectedId)?.type || 'pending'))
+    ? filteredList.find(r => r.id === selectedId)
     : filteredList[0];
 
   const currentRecord = selectedRecord || filteredList[0];
   const isLoadingData = newsLoading || historyLoading;
+
+  // 获取当前记录的数据（优先使用待标注数据）
+  const currentNews = currentRecord?.pendingData || currentRecord?.pushedData;
 
   // 手动渲染的 mutation（仅在没有历史图片时使用）
   const renderMutation = useMutation({
@@ -176,7 +217,7 @@ function AnnotationPage() {
   // 快速标注mutation（点赞/点踩）
   const quickAnnotateMutation = useMutation({
     mutationFn: (action: 'like' | 'dislike') =>
-      apiClient.quickAnnotate(currentRecord.originalData.id, action),
+      apiClient.quickAnnotate(currentRecord.id, action),
     onSuccess: (_, action) => {
       toast.success(action === 'like' ? '👍 已标记为高质量' : '👎 已标记为低质量');
       queryClient.invalidateQueries({ queryKey: ['pending-news'] });
@@ -224,20 +265,20 @@ function AnnotationPage() {
   };
 
   const handleQuickAnnotate = (action: 'like' | 'dislike') => {
-    if (currentRecord && currentRecord.type === 'pending' && !quickAnnotateMutation.isPending) {
+    if (currentRecord && currentRecord.isPending && !quickAnnotateMutation.isPending) {
       quickAnnotateMutation.mutate(action);
     }
   };
 
   const handleRenderPreview = () => {
-    if (currentRecord && currentRecord.type === 'pending') {
-      renderMutation.mutate(currentRecord.originalData.id);
+    if (currentRecord && currentRecord.isPending) {
+      renderMutation.mutate(currentRecord.id);
     }
   };
 
   const handlePush = () => {
-    if (currentRecord && currentRecord.type === 'pushed') {
-      pushMutation.mutate(currentRecord.id);
+    if (currentRecord && currentRecord.isPushed && currentRecord.pushedData) {
+      pushMutation.mutate(currentRecord.pushedData.id);
     }
   };
 
@@ -317,7 +358,6 @@ function AnnotationPage() {
     );
   }
 
-  const currentNews = currentRecord.originalData;
   const currentIdx = filteredList.findIndex(r => r.id === selectedId);
 
   return (
@@ -357,8 +397,9 @@ function AnnotationPage() {
             ) : (
               <>
                 共 {mixedList.length} 条 ·
-                <span className="text-green-600 ml-1">{mixedList.filter(r => r.type === 'pending').length} 待标注</span> ·
-                <span className="text-blue-600 ml-1">{mixedList.filter(r => r.type === 'pushed').length} 已推送</span>
+                <span className="text-green-600 ml-1">{mixedList.filter(r => r.isPending).length} 待标注</span> ·
+                <span className="text-blue-600 ml-1">{mixedList.filter(r => r.isPushed).length} 已推送</span> ·
+                <span className="text-purple-600 ml-1">{mixedList.filter(r => r.isPending && r.isPushed).length} 双标签</span>
               </>
             )}
           </div>
@@ -377,7 +418,7 @@ function AnnotationPage() {
                 const isSelected = record.id === selectedId;
                 return (
                   <div
-                    key={`${record.type}-${record.id}`}
+                    key={record.id}
                     onClick={() => handleSelectRecord(record)}
                     className={`p-4 cursor-pointer transition-colors hover:bg-gray-50 ${
                       isSelected ? 'bg-primary-50 border-l-4 border-primary-600' : ''
@@ -412,23 +453,22 @@ function AnnotationPage() {
                           </h3>
                         </div>
 
-                        {/* 状态和时间 */}
-                        <div className="flex items-center gap-2 text-xs mt-2">
-                          {record.type === 'pending' ? (
+                        {/* 状态标签 - 支持多个标签 */}
+                        <div className="flex items-center gap-1.5 text-xs mt-2 flex-wrap">
+                          {record.isPending && (
                             <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
                               🟢 待标注
                             </span>
-                          ) : (
-                            <>
-                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
-                                🔵 已推送
-                              </span>
-                              {record.isRecent && (
-                                <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-medium">
-                                  ⭐ 最新
-                                </span>
-                              )}
-                            </>
+                          )}
+                          {record.isPushed && (
+                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
+                              🔵 已推送
+                            </span>
+                          )}
+                          {record.isRecent && (
+                            <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-medium">
+                              ⭐ 最新
+                            </span>
                           )}
                           <span className="text-gray-500">{record.category}</span>
                         </div>
@@ -454,9 +494,7 @@ function AnnotationPage() {
       <div style={{ width: `${middleWidth}%` }} className="bg-white rounded-lg shadow overflow-y-auto">
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">
-              {currentRecord.type === 'pending' ? '新闻预览' : '推送历史预览'}
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900">新闻预览</h3>
             {(currentNews.link || currentNews.rawContent?.link) && (
               <a
                 href={currentNews.link || currentNews.rawContent?.link}
@@ -605,13 +643,13 @@ function AnnotationPage() {
               <div>
                 <span className="font-medium">数据源:</span> {currentNews.data_source || currentNews.dataSource}
               </div>
-              {currentRecord.type === 'pushed' && currentNews.pushedAt && (
+              {currentRecord.isPushed && currentNews.pushedAt && (
                 <div className="col-span-2">
                   <span className="font-medium">推送时间:</span>{' '}
                   {new Date(currentNews.pushedAt).toLocaleString('zh-CN')}
                 </div>
               )}
-              {currentRecord.type === 'pending' && currentNews.publish_time && (
+              {currentRecord.isPending && currentNews.publish_time && (
                 <div className="col-span-2">
                   <span className="font-medium">发布时间:</span>{' '}
                   {new Date(currentNews.publish_time).toLocaleString('zh-CN')}
@@ -633,58 +671,64 @@ function AnnotationPage() {
 
       {/* 第三列：标注和调试信息 */}
       <div style={{ width: `${100 - leftWidth - middleWidth}%` }} className="flex flex-col gap-4 overflow-y-auto">
-        {/* 快速标注 / 推送操作 */}
+        {/* 操作面板 */}
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            {currentRecord.type === 'pending' ? '快速标注' : '推送操作'}
-          </h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">操作</h3>
 
-          {currentRecord.type === 'pending' ? (
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={() => handleQuickAnnotate('like')}
-                disabled={quickAnnotateMutation.isPending}
-                className="flex items-center justify-center px-6 py-4 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="点赞 / 高质量 (快捷键: W)"
-              >
-                <span className="text-3xl mr-3">👍</span>
-                <span className="font-medium text-lg">好 / 高质量</span>
-                <span className="text-sm opacity-75 ml-2">(W)</span>
-              </button>
-              <button
-                onClick={() => handleQuickAnnotate('dislike')}
-                disabled={quickAnnotateMutation.isPending}
-                className="flex items-center justify-center px-6 py-4 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="点踩 / 低质量 (快捷键: S)"
-              >
-                <span className="text-3xl mr-3">👎</span>
-                <span className="font-medium text-lg">差 / 低质量</span>
-                <span className="text-sm opacity-75 ml-2">(S)</span>
-              </button>
-              <button
-                onClick={handleSkip}
-                className="px-6 py-3 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                跳过 (Space)
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
+          <div className="space-y-3">
+            {/* 标注按钮（仅待标注记录显示） */}
+            {currentRecord.isPending && (
+              <>
+                <button
+                  onClick={() => handleQuickAnnotate('like')}
+                  disabled={quickAnnotateMutation.isPending}
+                  className="w-full flex items-center justify-center px-6 py-4 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="点赞 / 高质量 (快捷键: W)"
+                >
+                  <span className="text-3xl mr-3">👍</span>
+                  <span className="font-medium text-lg">好 / 高质量</span>
+                  <span className="text-sm opacity-75 ml-2">(W)</span>
+                </button>
+                <button
+                  onClick={() => handleQuickAnnotate('dislike')}
+                  disabled={quickAnnotateMutation.isPending}
+                  className="w-full flex items-center justify-center px-6 py-4 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="点踩 / 低质量 (快捷键: S)"
+                >
+                  <span className="text-3xl mr-3">👎</span>
+                  <span className="font-medium text-lg">差 / 低质量</span>
+                  <span className="text-sm opacity-75 ml-2">(S)</span>
+                </button>
+                <button
+                  onClick={handleSkip}
+                  className="w-full px-6 py-3 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  跳过 (Space)
+                </button>
+              </>
+            )}
+
+            {/* 推送按钮（已推送记录显示） */}
+            {currentRecord.isPushed && (
               <button
                 onClick={handlePush}
                 disabled={pushMutation.isPending}
-                className="flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="w-6 h-6 mr-3" />
                 <span className="font-medium text-lg">
                   {pushMutation.isPending ? '推送中...' : '重新推送到设备'}
                 </span>
               </button>
-              <div className="text-xs text-gray-500 text-center mt-2">
-                将此历史记录重新推送到 MindReset 设备
+            )}
+
+            {/* 如果两个状态都不满足，显示提示 */}
+            {!currentRecord.isPending && !currentRecord.isPushed && (
+              <div className="text-sm text-gray-500 text-center py-4">
+                此记录无可用操作
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* 导航按钮 */}
           <div className="mt-6 pt-6 border-t border-gray-200">
