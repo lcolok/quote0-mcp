@@ -270,6 +270,9 @@ export class PostgresDatabase {
           image_path TEXT
       );
 
+      -- 数据库迁移：添加 disabled_sources 字段（如果不存在）
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS disabled_sources JSONB DEFAULT '[]'::jsonb;
+
       -- 创建索引
       CREATE INDEX IF NOT EXISTS idx_news_cache_key ON news_cache(cache_key);
       CREATE INDEX IF NOT EXISTS idx_news_cache_source ON news_cache(source, category, index_num);

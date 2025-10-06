@@ -346,8 +346,6 @@ export class NewsScheduler {
         imagePath
       });
 
-      this.markIndexUsed(job, candidate.index);
-
       // 轮换到下一个RSS源（多源模式）
       await this.rotateRssSource(job);
 
