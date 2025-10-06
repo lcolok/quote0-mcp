@@ -599,7 +599,10 @@ export class NewsScheduler {
   private getEnabledRssSources(job: SchedulerJobInstance): string[] {
     const allSources = job.config.rssSources || [];
     const disabledSources = (job.config as any).disabledSources || [];
-    return allSources.filter(source => !disabledSources.includes(source));
+    console.log(`🔍 过滤禁用源: allSources=${JSON.stringify(allSources)}, disabledSources=${JSON.stringify(disabledSources)}`);
+    const enabled = allSources.filter(source => !disabledSources.includes(source));
+    console.log(`🔍 过滤后启用源: ${JSON.stringify(enabled)}`);
+    return enabled;
   }
 
   private getCurrentRssSource(job: SchedulerJobInstance): string {
@@ -708,6 +711,7 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
     dataSource: record.dataSource,
     rssSource: record.rssSource,
     rssSources: record.rssSources, // 多源轮换支持
+    disabledSources: record.disabledSources || [], // 禁用的RSS源列表
     currentSourceIndex: record.currentSourceIndex || 0, // RSS源轮换索引
     processor: record.processor,
     renderer: record.renderer,
