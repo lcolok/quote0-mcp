@@ -1036,6 +1036,190 @@ app.post('/api/scheduler/reload', async (c) => {
   }
 });
 
+// 获取单个调度任务的完整信息（包含rssSources）
+app.get('/api/scheduler/jobs/:jobId', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const job = await postgres.getSchedulerJob(jobId);
+
+    if (!job) {
+      return c.json({
+        success: false,
+        error: `未找到任务: ${jobId}`
+      }, 404);
+    }
+
+    return c.json({
+      success: true,
+      data: job
+    });
+  } catch (error) {
+    console.error('获取调度任务失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取调度任务失败'
+    }, 500);
+  }
+});
+
+// 更新调度任务的RSS源列表
+app.post('/api/scheduler/jobs/:jobId/update-sources', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const body = await c.req.json();
+    const rssSources = body.rssSources;
+
+    if (!Array.isArray(rssSources) || rssSources.length === 0) {
+      return c.json({
+        success: false,
+        error: 'rssSources必须是非空数组'
+      }, 400);
+    }
+
+    // 更新数据库
+    await postgres.pool.query(
+      'UPDATE news_scheduler_jobs SET rss_sources = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [JSON.stringify(rssSources), jobId]
+    );
+
+    return c.json({
+      success: true,
+      message: `任务 ${jobId} 的RSS源已更新`
+    });
+  } catch (error) {
+    console.error('更新RSS源失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '更新RSS源失败'
+    }, 500);
+  }
+});
+
+// 禁用/启用单个RSS源
+app.post('/api/scheduler/jobs/:jobId/toggle-source', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const body = await c.req.json();
+    const { source, enabled } = body;
+
+    if (!source || typeof enabled !== 'boolean') {
+      return c.json({
+        success: false,
+        error: 'source和enabled参数必填'
+      }, 400);
+    }
+
+    // 获取当前禁用列表
+    const result = await postgres.pool.query(
+      'SELECT disabled_sources FROM news_scheduler_jobs WHERE id = $1',
+      [jobId]
+    );
+
+    if (result.rows.length === 0) {
+      return c.json({
+        success: false,
+        error: `未找到任务: ${jobId}`
+      }, 404);
+    }
+
+    let disabledSources: string[] = result.rows[0].disabled_sources || [];
+
+    if (enabled) {
+      // 启用：从禁用列表中移除
+      disabledSources = disabledSources.filter(s => s !== source);
+    } else {
+      // 禁用：添加到禁用列表
+      if (!disabledSources.includes(source)) {
+        disabledSources.push(source);
+      }
+    }
+
+    // 更新数据库
+    await postgres.pool.query(
+      'UPDATE news_scheduler_jobs SET disabled_sources = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [JSON.stringify(disabledSources), jobId]
+    );
+
+    return c.json({
+      success: true,
+      message: `RSS源 ${source} 已${enabled ? '启用' : '禁用'}`
+    });
+  } catch (error) {
+    console.error('切换RSS源状态失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '切换RSS源状态失败'
+    }, 500);
+  }
+});
+
+// 获取所有RSS源的元数据
+app.get('/api/rss-sources/metadata', async (c) => {
+  try {
+    const result = await postgres.pool.query(
+      'SELECT source_id, display_name, description FROM rss_source_metadata ORDER BY source_id'
+    );
+
+    const metadata: Record<string, { displayName: string; description: string }> = {};
+    result.rows.forEach(row => {
+      metadata[row.source_id] = {
+        displayName: row.display_name || row.source_id,
+        description: row.description || ''
+      };
+    });
+
+    return c.json({
+      success: true,
+      data: metadata
+    });
+  } catch (error) {
+    console.error('获取RSS源元数据失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取RSS源元数据失败'
+    }, 500);
+  }
+});
+
+// 更新RSS源元数据
+app.post('/api/rss-sources/:sourceId/metadata', async (c) => {
+  try {
+    const sourceId = c.req.param('sourceId');
+    const body = await c.req.json();
+    const { displayName, description } = body;
+
+    if (!displayName && !description) {
+      return c.json({
+        success: false,
+        error: 'displayName或description至少需要一个'
+      }, 400);
+    }
+
+    // 使用 UPSERT
+    await postgres.pool.query(
+      `INSERT INTO rss_source_metadata (source_id, display_name, description)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (source_id)
+       DO UPDATE SET
+         display_name = COALESCE($2, rss_source_metadata.display_name),
+         description = COALESCE($3, rss_source_metadata.description),
+         updated_at = CURRENT_TIMESTAMP`,
+      [sourceId, displayName || null, description || null]
+    );
+
+    return c.json({
+      success: true,
+      message: `RSS源 ${sourceId} 元数据已更新`
+    });
+  } catch (error) {
+    console.error('更新RSS源元数据失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '更新RSS源元数据失败'
+    }, 500);
+  }
+});
+
 // 错误处理
 app.onError((error, c) => {
   console.error('API服务器错误:', error);

@@ -856,6 +856,7 @@ export class PostgresDatabase {
         dataSource: row.data_source,
         rssSource: row.rss_source,
         rssSources: row.rss_sources || undefined, // jsonb类型已自动解析
+        disabledSources: row.disabled_sources || [], // 禁用的RSS源列表
         currentSourceIndex: row.current_source_index || 0, // RSS源轮换索引
         processor: row.processor,
         renderer: row.renderer,
@@ -889,6 +890,7 @@ export class PostgresDatabase {
         dataSource: row.data_source,
         rssSource: row.rss_source,
         rssSources: row.rss_sources || undefined, // jsonb类型已自动解析
+        disabledSources: row.disabled_sources || [], // 禁用的RSS源列表
         currentSourceIndex: row.current_source_index || 0, // RSS源轮换索引
         processor: row.processor,
         renderer: row.renderer,

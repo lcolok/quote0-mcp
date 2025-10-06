@@ -18,10 +18,6 @@ interface NormalizedSchedulerJob extends NewsSchedulerJobRecord {
 }
 
 interface SchedulerJobState {
-  nextIndex: number;
-  lastIndex: number | null;
-  shuffledOrder: number[];
-  shuffledPointer: number;
   running: boolean;
   consecutiveFailures: number;
   currentSourceIndex: number; // 当前使用的RSS源索引（多源轮换） | Current RSS source index for rotation
@@ -474,55 +470,53 @@ export class NewsScheduler {
         };
       });
 
-      // least-pushed-with-cooldown 策略：应用过滤逻辑
+      // fair-rotation 策略：应用冷却过滤逻辑
       const strategy = job.config.indexStrategy;
       let filtered = scored;
 
-      if (strategy.type === 'least-pushed-with-cooldown') {
-        const cooldownHours = strategy.cooldownHours ?? 6;
-        const maxPushCount = strategy.maxPushCount ?? 3;
-        const now = Date.now();
-        const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      const cooldownHours = strategy.cooldownHours;
+      const maxPushCount = strategy.maxPushCount;
+      const now = Date.now();
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
 
-        console.log(`🔍 应用冷却过滤: 冷却时间=${cooldownHours}小时, 最大推送次数=${maxPushCount}`);
+      console.log(`🔍 应用冷却过滤: 冷却时间=${cooldownHours}小时, 最大推送次数=${maxPushCount}`);
 
-        // 过滤1: 时间冷却 + 推送次数上限
-        const strictFiltered = scored.filter(c => {
-          if (c.pushCount >= maxPushCount) return false;
+      // 过滤1: 时间冷却 + 推送次数上限
+      const strictFiltered = scored.filter(c => {
+        if (c.pushCount >= maxPushCount) return false;
+        if (!c.lastPushedAt) return true;
+        const timeSince = now - new Date(c.lastPushedAt).getTime();
+        return timeSince >= cooldownMs;
+      });
+
+      if (strictFiltered.length > 0) {
+        filtered = strictFiltered;
+        console.log(`✅ 严格过滤后剩余 ${filtered.length} 条候选新闻`);
+      } else {
+        // 降级1: 只使用时间冷却，忽略推送次数限制
+        const cooldownFiltered = scored.filter(c => {
           if (!c.lastPushedAt) return true;
           const timeSince = now - new Date(c.lastPushedAt).getTime();
           return timeSince >= cooldownMs;
         });
 
-        if (strictFiltered.length > 0) {
-          filtered = strictFiltered;
-          console.log(`✅ 严格过滤后剩余 ${filtered.length} 条候选新闻`);
+        if (cooldownFiltered.length > 0) {
+          filtered = cooldownFiltered;
+          console.log(`⚠️ 降级过滤（忽略次数限制）: 剩余 ${filtered.length} 条候选`);
         } else {
-          // 降级1: 只使用时间冷却，忽略推送次数限制
-          const cooldownFiltered = scored.filter(c => {
+          // 降级2: 减半冷却时间
+          const relaxedFiltered = scored.filter(c => {
             if (!c.lastPushedAt) return true;
             const timeSince = now - new Date(c.lastPushedAt).getTime();
-            return timeSince >= cooldownMs;
+            return timeSince >= cooldownMs / 2;
           });
 
-          if (cooldownFiltered.length > 0) {
-            filtered = cooldownFiltered;
-            console.log(`⚠️ 降级过滤（忽略次数限制）: 剩余 ${filtered.length} 条候选`);
+          if (relaxedFiltered.length > 0) {
+            filtered = relaxedFiltered;
+            console.log(`⚠️ 降级过滤（减半冷却时间）: 剩余 ${filtered.length} 条候选`);
           } else {
-            // 降级2: 减半冷却时间
-            const relaxedFiltered = scored.filter(c => {
-              if (!c.lastPushedAt) return true;
-              const timeSince = now - new Date(c.lastPushedAt).getTime();
-              return timeSince >= cooldownMs / 2;
-            });
-
-            if (relaxedFiltered.length > 0) {
-              filtered = relaxedFiltered;
-              console.log(`⚠️ 降级过滤（减半冷却时间）: 剩余 ${filtered.length} 条候选`);
-            } else {
-              // 降级3: 使用全部候选，但会在后面触发RSS源切换
-              console.log(`⚠️ 所有过滤失败，使用全部候选，建议切换RSS源`);
-            }
+            // 降级3: 使用全部候选，但会在后面触发RSS源切换
+            console.log(`⚠️ 所有过滤失败，使用全部候选，建议切换RSS源`);
           }
         }
       }
@@ -540,29 +534,18 @@ export class NewsScheduler {
         return a.index - b.index;
       });
 
-      // 选择最终候选
-      let chosen: CandidateArticle;
+      // 选择最终候选：使用智能排序后的第一个
+      const chosen = filtered[0];
 
-      if (strategy.type === 'least-pushed' || strategy.type === 'least-pushed-with-cooldown') {
-        chosen = filtered[0];
-
-        // 保护机制: 如果选中的候选pushCount超过maxPushCount,强制切换RSS源
-        if (strategy.type === 'least-pushed-with-cooldown') {
-          const maxPushCount = strategy.maxPushCount ?? 3;
-          if (chosen.pushCount >= maxPushCount) {
-            console.log(`⛔ 所有候选pushCount都超过${maxPushCount},强制切换RSS源避免重复`);
-            await this.rotateRssSource(job);
-            throw new Error(`当前RSS源所有新闻已推送${maxPushCount}次以上,已切换到下一个源`);
-          }
-        }
-
-        const title = chosen.context.title?.substring(0, 30) || 'N/A';
-        console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}"`);
-      } else {
-        const targetIndex = this.getNextCandidateIndex(job);
-        const foundByIndex = filtered.find(c => c.index === targetIndex);
-        chosen = foundByIndex || filtered[0];
+      // 保护机制: 如果选中的候选pushCount超过maxPushCount,强制切换RSS源
+      if (chosen.pushCount >= maxPushCount) {
+        console.log(`⛔ 所有候选pushCount都超过${maxPushCount},强制切换RSS源避免重复`);
+        await this.rotateRssSource(job);
+        throw new Error(`当前RSS源所有新闻已推送${maxPushCount}次以上,已切换到下一个源`);
       }
+
+      const title = chosen.context.title?.substring(0, 30) || 'N/A';
+      console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}"`);
 
       if (!chosen.context.fingerprint) {
         chosen.context.fingerprint = chosen.fingerprint;
@@ -604,60 +587,7 @@ export class NewsScheduler {
     };
   }
 
-  private getNextCandidateIndex(job: SchedulerJobInstance): number {
-    const strategy = job.config.indexStrategy;
-    const state = job.state;
-
-    // 获取有效的poolSize（支持动态poolSize）
-    const effectivePoolSize = this.getEffectivePoolSize(job);
-
-    switch (strategy.type) {
-      case 'random': {
-        const candidate = Math.floor(Math.random() * effectivePoolSize);
-        return candidate;
-      }
-      case 'shuffle': {
-        if (state.shuffledOrder.length === 0 || state.shuffledPointer >= state.shuffledOrder.length) {
-          state.shuffledOrder = createShuffledIndices(effectivePoolSize);
-          state.shuffledPointer = 0;
-        }
-        return state.shuffledOrder[state.shuffledPointer];
-      }
-      case 'sequential':
-      default: {
-        return state.nextIndex % effectivePoolSize;
-      }
-    }
-  }
-
-  private markIndexUsed(job: SchedulerJobInstance, index: number): void {
-    const strategy = job.config.indexStrategy;
-    const state = job.state;
-
-    state.lastIndex = index;
-
-    // 获取有效的poolSize（支持动态poolSize）
-    const effectivePoolSize = this.getEffectivePoolSize(job);
-
-    switch (strategy.type) {
-      case 'random':
-        break;
-      case 'shuffle':
-        state.shuffledPointer += 1;
-        break;
-      case 'sequential':
-      default:
-        state.nextIndex = (index + 1) % effectivePoolSize;
-        break;
-    }
-  }
-
   private resetIndexState(job: SchedulerJobInstance): void {
-    const strategy = job.config.indexStrategy;
-    job.state.nextIndex = strategy.startIndex;
-    job.state.lastIndex = null;
-    job.state.shuffledOrder = [];
-    job.state.shuffledPointer = 0;
     job.state.consecutiveFailures = 0;
   }
 
@@ -665,11 +595,25 @@ export class NewsScheduler {
    * 获取当前使用的RSS源
    * 支持单源模式（rssSource）和多源轮换模式（rssSources[]）
    */
+  /**
+   * 获取启用的RSS源列表（过滤掉禁用的源）
+   */
+  private getEnabledRssSources(job: SchedulerJobInstance): string[] {
+    const allSources = job.config.rssSources || [];
+    const disabledSources = (job.config as any).disabledSources || [];
+    return allSources.filter(source => !disabledSources.includes(source));
+  }
+
   private getCurrentRssSource(job: SchedulerJobInstance): string {
     // 多源轮换模式
     if (job.config.rssSources && job.config.rssSources.length > 0) {
-      const index = job.state.currentSourceIndex % job.config.rssSources.length;
-      return job.config.rssSources[index];
+      const enabledSources = this.getEnabledRssSources(job);
+      if (enabledSources.length === 0) {
+        console.warn('⚠️ 所有RSS源都被禁用，使用第一个源作为备用');
+        return job.config.rssSources[0];
+      }
+      const index = job.state.currentSourceIndex % enabledSources.length;
+      return enabledSources[index];
     }
     // 单源模式（向后兼容）
     return job.config.rssSource || 'solidot';
@@ -681,18 +625,27 @@ export class NewsScheduler {
    */
   private async rotateRssSource(job: SchedulerJobInstance): Promise<void> {
     const strategy = job.config.indexStrategy;
-    const shouldRotate = strategy.type === 'least-pushed-with-cooldown'
-      ? (strategy.rotateAfterEachPush ?? true)
-      : false;
+    console.log(`🔍 RSS源轮换检查: rotateAfterEachPush=${strategy.rotateAfterEachPush}`);
 
-    if (!shouldRotate) return;
+    if (!strategy.rotateAfterEachPush) {
+      console.log('⚠️ 轮换已禁用，跳过');
+      return;
+    }
 
     if (job.config.rssSources && job.config.rssSources.length > 1) {
+      const enabledSources = this.getEnabledRssSources(job);
+      console.log(`🔍 启用的源: ${enabledSources.join(', ')}, 当前索引: ${job.state.currentSourceIndex}`);
+
+      if (enabledSources.length <= 1) {
+        console.log('⚠️ 只有1个或0个启用的源，跳过轮换');
+        return;
+      }
+
       const oldIndex = job.state.currentSourceIndex;
-      const newIndex = (oldIndex + 1) % job.config.rssSources.length;
+      const newIndex = (oldIndex + 1) % enabledSources.length;
       job.state.currentSourceIndex = newIndex;
 
-      console.log(`🔄 RSS源轮换: ${job.config.rssSources[oldIndex]} -> ${job.config.rssSources[newIndex]} (${newIndex + 1}/${job.config.rssSources.length})`);
+      console.log(`🔄 RSS源轮换: ${enabledSources[oldIndex]} -> ${enabledSources[newIndex]} (${newIndex + 1}/${enabledSources.length})`);
 
       // 持久化到数据库
       try {
@@ -701,6 +654,8 @@ export class NewsScheduler {
       } catch (error) {
         console.warn(`⚠️ RSS源索引持久化失败: ${error}`);
       }
+    } else {
+      console.log(`⚠️ 不满足轮换条件: rssSources=${job.config.rssSources?.length}`);
     }
   }
 
@@ -729,10 +684,6 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
 
   // 如果有保存的状态，优先使用；否则使用默认值
   const defaultState = {
-    nextIndex: job.indexStrategy.startIndex,
-    lastIndex: null,
-    shuffledOrder: [],
-    shuffledPointer: 0,
     running: false,
     consecutiveFailures: 0,
     currentSourceIndex,
@@ -787,18 +738,14 @@ function normalizeIndexStrategy(strategy: RequiredSchedulerIndexStrategy): Requi
     ? 0
     : ((startIndexValue % poolSize) + poolSize) % poolSize;
 
-  const validTypes = ['sequential', 'shuffle', 'random', 'least-pushed', 'least-pushed-with-cooldown'];
-  const type: SchedulerIndexType = validTypes.includes(strategy?.type as SchedulerIndexType)
-    ? (strategy.type as SchedulerIndexType)
-    : 'shuffle';
-
   return {
-    type,
+    type: 'fair-rotation',
     poolSize,
     startIndex,
-    cooldownHours: strategy?.cooldownHours ?? 6,
-    maxPushCount: strategy?.maxPushCount ?? 3,
-    rotateAfterEachPush: strategy?.rotateAfterEachPush ?? true
+    cooldownHours: strategy?.cooldownHours ?? 24,
+    maxPushCount: strategy?.maxPushCount ?? 5,
+    rotateAfterEachPush: strategy?.rotateAfterEachPush ?? true,
+    skipEmptySource: strategy?.skipEmptySource ?? true
   };
 }
 

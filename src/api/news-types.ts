@@ -70,13 +70,13 @@ export interface FullNewsProcessingResult extends NewsProcessingResult {
 }
 
 export interface SchedulerIndexStrategy {
-  type?: 'sequential' | 'shuffle' | 'random' | 'least-pushed' | 'least-pushed-with-cooldown';
+  type?: 'fair-rotation';
   poolSize?: number; // -1 表示动态获取RSS源的实际条目数量 | -1 means dynamically fetch actual RSS feed item count
   startIndex?: number;
-  // least-pushed-with-cooldown 专用参数
-  cooldownHours?: number; // 冷却时间（小时），该时间内不重复推送同一新闻，默认6小时
-  maxPushCount?: number; // 单条新闻最多推送次数，默认3次
+  cooldownHours?: number; // 冷却时间（小时），该时间内不重复推送同一新闻，默认24小时
+  maxPushCount?: number; // 单条新闻最多推送次数，默认5次
   rotateAfterEachPush?: boolean; // 每次推送后是否切换RSS源，默认true
+  skipEmptySource?: boolean; // 无可推送内容时跳过该源，默认true
 }
 
 export interface NewsSchedulerJobConfig {
@@ -118,6 +118,7 @@ export interface NewsSchedulerJobRecord {
   dataSource: string;
   rssSource?: string; // 单个RSS源（向后兼容）
   rssSources?: string[]; // 多个RSS源轮换 | Multiple RSS sources for rotation
+  disabledSources?: string[]; // 禁用的RSS源列表 | Disabled RSS sources list
   currentSourceIndex?: number; // 当前使用的RSS源索引（多源轮换）
   processor: string;
   renderer: string;
@@ -131,12 +132,13 @@ export interface NewsSchedulerJobRecord {
 }
 
 export interface RequiredSchedulerIndexStrategy {
-  type: 'sequential' | 'shuffle' | 'random' | 'least-pushed' | 'least-pushed-with-cooldown';
+  type: 'fair-rotation';
   poolSize: number;
   startIndex: number;
-  cooldownHours?: number;
-  maxPushCount?: number;
-  rotateAfterEachPush?: boolean;
+  cooldownHours: number;
+  maxPushCount: number;
+  rotateAfterEachPush: boolean;
+  skipEmptySource: boolean;
 }
 
 export interface NewsPushHistoryRecord {

@@ -8,6 +8,7 @@ import {
   PinOff,
   Zap,
   Calendar,
+  Settings,
 } from 'lucide-react';
 
 function Layout() {
@@ -28,6 +29,7 @@ function Layout() {
     { to: '/export', icon: Download, label: '导出样本' },
     { to: '/training', icon: Zap, label: 'AX训练' },
     { to: '/scheduler', icon: Calendar, label: '调度器' },
+    { to: '/sources', icon: Settings, label: 'RSS源管理' },
   ];
 
   // 保存状态到localStorage
