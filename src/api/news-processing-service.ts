@@ -117,23 +117,54 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
       } else if (params.renderer === 'device') {
         console.log('📱 设备推送渲染器 - 启用MinIO直接缓存...');
 
-        // 🔑 先获取原始RSS数据以获得稳定的fingerprint（使用passthrough避免LLM非确定性）
-        console.log('📝 先获取原始新闻数据以计算fingerprint...');
-        const jsonParams = { ...params, processor: 'passthrough' as const, renderer: 'json' as const };
-        const jsonResult = await modularNewsPlugin.getData(jsonParams);
-        const jsonData = jsonResult as any;
+        let newsFingerprint: string;
 
-        // 从结果中提取fingerprint
-        const newsFingerprint = jsonData?.fingerprint ||
-                                jsonData?.metadata?.fingerprint ||
-                                computeNewsFingerprint({
-                                  title: jsonData?.title || '',
-                                  link: jsonData?.link || '',
-                                  publishTime: jsonData?.publishTime || '',
-                                  source: jsonData?.source || '',
-                                  category: jsonData?.category || params.category,
-                                  fallback: `${params.dataSource}:${params.rssSource}:${params.index}`
-                                });
+        let usedContextForFingerprint = false;
+
+        if (context.title || context.link || context.publishTime || context.fingerprint) {
+          // 调度器会传入完整上下文，优先利用现有数据避免再次执行JSON流程
+          console.log('🧾 使用传入上下文计算fingerprint，跳过额外的JSON流程');
+          newsFingerprint = context.fingerprint ?? computeNewsFingerprint({
+            title: context.title,
+            link: context.link,
+            publishTime: context.publishTime,
+            source: context.source,
+            category: context.category,
+            fallback: `${params.dataSource}:${params.rssSource}:${params.index}`
+          });
+          usedContextForFingerprint = true;
+        } else {
+          // 若无上下文可用（例如手动API调用），回退到一次性JSON流程
+          console.log('📝 未提供上下文，执行一次JSON流程用于fingerprint计算...');
+          const jsonParams = { ...params, processor: 'passthrough' as const, renderer: 'json' as const };
+          const jsonResult = await modularNewsPlugin.getData(jsonParams);
+          const jsonData = jsonResult as any;
+
+          newsFingerprint = jsonData?.fingerprint ||
+                            jsonData?.metadata?.fingerprint ||
+                            computeNewsFingerprint({
+                              title: jsonData?.title || '',
+                              link: jsonData?.link || '',
+                              publishTime: jsonData?.publishTime || '',
+                              source: jsonData?.source || '',
+                              category: jsonData?.category || params.category,
+                              fallback: `${params.dataSource}:${params.rssSource}:${params.index}`
+                            });
+
+          // 同步上下文，避免后续流程继续缺失元数据
+          if (jsonData) {
+            context.title = context.title || jsonData.title;
+            context.link = context.link || jsonData.link;
+            context.publishTime = context.publishTime || jsonData.publishTime;
+            context.source = context.source || jsonData.source;
+            context.category = context.category || jsonData.category;
+            context.fingerprint = newsFingerprint;
+          }
+        }
+
+        if (!context.fingerprint && usedContextForFingerprint) {
+          context.fingerprint = newsFingerprint;
+        }
 
         const cacheKeyString = `${params.dataSource}_${params.rssSource}_${params.processor}_${params.category}_${newsFingerprint}`;
         console.log(`🔑 生成缓存键（含fingerprint）: ${cacheKeyString}`);
