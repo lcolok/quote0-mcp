@@ -118,6 +118,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         console.log('📱 设备推送渲染器 - 启用MinIO直接缓存...');
 
         let newsFingerprint: string;
+        let cachedTextData: any = null;
 
         let usedContextForFingerprint = false;
 
@@ -185,7 +186,6 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             console.log(`🔍 搜索模式: ${searchPattern}`);
 
             let existsResult: { url: string; objectKey?: string } | null = null;
-            let cachedTextData: any = null; // 用于保存缓存的文本数据
 
             try {
               const postgres = cacheInternals.postgres;
@@ -200,6 +200,15 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                     if (cachedImageInfo.renderConfig && (cachedImageInfo.renderConfig as any).textData) {
                       cachedTextData = (cachedImageInfo.renderConfig as any).textData;
                       console.log('✅ 从缓存中恢复文本数据');
+                      // 使用缓存文本反填上下文，避免后续流程缺失元数据
+                      if (cachedTextData) {
+                        context.title = context.title || cachedTextData.title;
+                        context.link = context.link || cachedTextData.link;
+                        context.source = context.source || cachedTextData.source;
+                        context.category = context.category || params.category;
+                        context.publishTime = context.publishTime || cachedTextData.publishTime;
+                        context.fingerprint = context.fingerprint || cachedTextData.fingerprint || newsFingerprint;
+                      }
                     }
                   }
                 }
@@ -309,7 +318,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                         summary: (deviceResult as any).summary || (deviceResult as any).message,
                         source: (deviceResult as any).source,
                         signature: (deviceResult as any).signature,
-                        link: (deviceResult as any).link
+                        link: (deviceResult as any).link,
+                        publishTime: context.publishTime || (deviceResult as any).publishTime || null,
+                        fingerprint: newsFingerprint
                       }
                     } as Record<string, unknown>,
                     ttl: cacheConfig.imageCacheTTL
