@@ -10,12 +10,40 @@ import { spawn } from 'child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
+const ANNOTATION_DIR = path.join(ROOT_DIR, 'annotation-web');
+
+const SERVICES: ServiceConfig[] = [
+  {
+    key: 'news-api',
+    containerName: 'quote0-news-api',
+    defaultImageTag: 'quote0-mcp-news-api',
+    dockerfile: 'Dockerfile.api',
+    contextPath: ROOT_DIR,
+    hostBuild: true,
+  },
+  {
+    key: 'annotation-web',
+    containerName: 'quote0-annotation-web',
+    defaultImageTag: 'quote0-mcp-annotation-web',
+    dockerfile: 'Dockerfile',
+    contextPath: ANNOTATION_DIR,
+  },
+];
 
 interface DeployOptions {
   containerName: string;
   imageTag: string;
   dockerfile: string;
   contextPath: string;
+}
+
+interface ServiceConfig {
+  key: string;
+  containerName: string;
+  defaultImageTag: string;
+  dockerfile: string;
+  contextPath: string;
+  hostBuild?: boolean;
 }
 
 async function runCommand(command: string, args: string[], options: { cwd?: string } = {}): Promise<void> {
@@ -178,49 +206,104 @@ async function recreateContainer(docker: Docker, opts: DeployOptions): Promise<v
 }
 
 async function main() {
-  const containerName = process.env.DEPLOY_CONTAINER_NAME || 'quote0-news-api';
-  const dockerfile = process.env.DEPLOY_DOCKERFILE || 'Dockerfile.api';
-  const contextPath = process.env.DEPLOY_CONTEXT || ROOT_DIR;
-
   const docker = new Docker();
 
-  console.log('🔍 Detecting current container image');
-  let imageTag = process.env.DEPLOY_IMAGE_TAG || 'quote0-mcp-news-api';
-  try {
-    const inspect = await docker.getContainer(containerName).inspect();
-    if (inspect?.Config?.Image) {
-      imageTag = inspect.Config.Image;
+  const targetsEnv = (process.env.DEPLOY_TARGETS || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  let selectedServices: ServiceConfig[];
+
+  if (targetsEnv.length > 0) {
+    selectedServices = SERVICES.filter((service) =>
+      targetsEnv.some((target) => target === service.key || target === service.containerName),
+    );
+    if (selectedServices.length === 0) {
+      throw new Error(`No services matched DEPLOY_TARGETS=${targetsEnv.join(',')}`);
     }
-  } catch (error: any) {
-    if (error?.statusCode === 404) {
-      console.warn(`⚠️ Container ${containerName} not found. Using default image tag ${imageTag}`);
-    } else {
-      throw error;
+  } else if (process.env.DEPLOY_CONTAINER_NAME) {
+    const override = process.env.DEPLOY_CONTAINER_NAME;
+    const matched = SERVICES.find(
+      (service) => service.containerName === override || service.key === override,
+    );
+    if (!matched) {
+      throw new Error(
+        `DEPLOY_CONTAINER_NAME=${override} is not recognised. ` +
+          `Use DEPLOY_TARGETS=news-api,annotation-web to deploy multiple services.`,
+      );
     }
+    selectedServices = [matched];
+  } else {
+    selectedServices = SERVICES;
   }
 
   const hostBuildEnabled = (process.env.DEPLOY_HOST_BUILD || 'false').toLowerCase() === 'true';
+  let hostBuildExecuted = false;
 
-  if (hostBuildEnabled) {
-    console.log('🛠️  Running TypeScript build on host');
-    await runCommand('npm', ['run', 'build']);
-  } else {
-    console.log('⏭️  Skipping host TypeScript build (build will rely on container image)');
+  for (const service of selectedServices) {
+    console.log(`\n=============================`);
+    console.log(`🚀 Deploying ${service.key} (${service.containerName})`);
+    console.log('=============================');
+
+    let imageTag = service.defaultImageTag;
+    const singleService = selectedServices.length === 1;
+
+    if (singleService && process.env.DEPLOY_IMAGE_TAG) {
+      imageTag = process.env.DEPLOY_IMAGE_TAG;
+    } else {
+      try {
+        const inspect = await docker.getContainer(service.containerName).inspect();
+        if (inspect?.Config?.Image) {
+          imageTag = inspect.Config.Image;
+        }
+      } catch (error: any) {
+        if (error?.statusCode === 404) {
+          console.warn(
+            `⚠️ Container ${service.containerName} not found. Using default image tag ${imageTag}`,
+          );
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    let dockerfile = service.dockerfile;
+    let contextPath = service.contextPath;
+
+    if (singleService && process.env.DEPLOY_DOCKERFILE) {
+      dockerfile = process.env.DEPLOY_DOCKERFILE;
+    }
+
+    if (singleService && process.env.DEPLOY_CONTEXT) {
+      contextPath = path.isAbsolute(process.env.DEPLOY_CONTEXT)
+        ? process.env.DEPLOY_CONTEXT
+        : path.resolve(ROOT_DIR, process.env.DEPLOY_CONTEXT);
+    }
+
+    if (hostBuildEnabled && service.hostBuild && !hostBuildExecuted) {
+      console.log('🛠️  Running TypeScript build on host');
+      await runCommand('npm', ['run', 'build']);
+      hostBuildExecuted = true;
+    } else if (service.hostBuild && !hostBuildEnabled && !hostBuildExecuted) {
+      console.log('⏭️  Skipping host TypeScript build (build will rely on container image)');
+      hostBuildExecuted = true;
+    }
+
+    await buildDockerImage(docker, {
+      containerName: service.containerName,
+      imageTag,
+      dockerfile,
+      contextPath,
+    });
+
+    await recreateContainer(docker, {
+      containerName: service.containerName,
+      imageTag,
+      dockerfile,
+      contextPath,
+    });
   }
-
-  await buildDockerImage(docker, {
-    containerName,
-    imageTag,
-    dockerfile,
-    contextPath,
-  });
-
-  await recreateContainer(docker, {
-    containerName,
-    imageTag,
-    dockerfile,
-    contextPath,
-  });
 
   console.log('\n🎉 Deployment complete');
 }
