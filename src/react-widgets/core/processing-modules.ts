@@ -12,6 +12,76 @@ import {
   ProcessingHealthStatus 
 } from './modular-architecture.js';
 
+const DEFAULT_MODULE_HEALTH_TIMEOUT_MS = Number(process.env.MODULE_HEALTH_TIMEOUT_MS ?? '5000');
+const LLM_HEALTH_TIMEOUT_MS = Math.min(DEFAULT_MODULE_HEALTH_TIMEOUT_MS, 4000);
+
+type EndpointCheckResult = {
+  reachable: boolean;
+  status?: number;
+  timedOut: boolean;
+  duration: number;
+  message?: string;
+};
+
+async function checkLLMEndpointReachability(baseURL: string, apiKey: string, timeoutMs: number): Promise<EndpointCheckResult> {
+  const startTime = Date.now();
+
+  if (!baseURL) {
+    return {
+      reachable: false,
+      timedOut: false,
+      duration: 0,
+      message: 'LLM_BASE_URL 未配置'
+    };
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    const response = await fetch(baseURL, {
+      method: 'GET',
+      headers,
+      signal: controller.signal
+    });
+
+    const duration = Date.now() - startTime;
+    const status = response.status;
+    const reachable = response.ok || status === 401 || status === 403 || status === 404 || status === 405;
+
+    return {
+      reachable,
+      status,
+      timedOut: false,
+      duration,
+      message: reachable ? undefined : `HTTP ${status}`
+    };
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    const message = error instanceof Error ? error.message : '未知错误';
+
+    return {
+      reachable: false,
+      status: undefined,
+      timedOut,
+      duration: timedOut ? timeoutMs : duration,
+      message
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * LLM处理模块抽象基类
  */
@@ -286,7 +356,61 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
       throw new Error(`基础LLM处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
-  
+
+  async getHealthStatus(): Promise<ProcessingHealthStatus> {
+    if (!this.baseURL || !this.apiKey) {
+      return {
+        healthy: false,
+        message: 'LLM处理器未完成配置 (缺少API Key或Base URL)',
+        lastChecked: new Date().toISOString(),
+        responseTime: 0,
+        modelStatus: 'error',
+        queueLength: 0,
+        additionalInfo: {
+          baseURL: this.baseURL || null,
+          apiKeyConfigured: Boolean(this.apiKey)
+        }
+      };
+    }
+
+    const endpointCheck = await checkLLMEndpointReachability(this.baseURL, this.apiKey, LLM_HEALTH_TIMEOUT_MS);
+    const responseTime = endpointCheck.duration;
+    const timestamp = new Date().toISOString();
+
+    if (endpointCheck.reachable) {
+      return {
+        healthy: true,
+        message: `LLM端点可访问 (HTTP ${endpointCheck.status ?? '未知'})`,
+        lastChecked: timestamp,
+        responseTime,
+        modelStatus: 'ready',
+        queueLength: 0,
+        additionalInfo: {
+          baseURL: this.baseURL,
+          statusCode: endpointCheck.status ?? null,
+          timedOut: false
+        }
+      };
+    }
+
+    return {
+      healthy: false,
+      message: endpointCheck.timedOut
+        ? `LLM端点在 ${LLM_HEALTH_TIMEOUT_MS}ms 内未响应`
+        : `LLM端点检查失败: ${endpointCheck.message ?? '未知错误'}`,
+      lastChecked: timestamp,
+      responseTime,
+      modelStatus: endpointCheck.timedOut ? 'loading' : 'error',
+      queueLength: 0,
+      additionalInfo: {
+        baseURL: this.baseURL,
+        statusCode: endpointCheck.status ?? null,
+        error: endpointCheck.message,
+        timedOut: endpointCheck.timedOut
+      }
+    };
+  }
+
   getSupportedParams(): ProcessingParamDefinition[] {
     return [
       {
@@ -479,6 +603,69 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       throw new Error(`AX优化处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
+
+  async getHealthStatus(): Promise<ProcessingHealthStatus> {
+    const timestamp = new Date().toISOString();
+    const configReport = this.validateConfiguration();
+    const additionalInfo: Record<string, any> = {
+      baseURL: this.config.baseURL,
+      model: this.config.model
+    };
+
+    if (!configReport.isValid) {
+      additionalInfo.configErrors = configReport.errors;
+      return {
+        healthy: false,
+        message: `AX处理器配置错误: ${configReport.errors.join(', ')}`,
+        lastChecked: timestamp,
+        responseTime: 0,
+        modelStatus: 'error',
+        queueLength: 0,
+        additionalInfo
+      };
+    }
+
+    const modelPath = `${process.cwd()}/ax-framework/models/production/latest.json`;
+    let modelExists = false;
+    try {
+      modelExists = fs.existsSync(modelPath);
+    } catch (error) {
+      additionalInfo.modelPathReadError = error instanceof Error ? error.message : error;
+    }
+    additionalInfo.modelFileExists = modelExists;
+    additionalInfo.modelPath = modelPath;
+
+    const endpointCheck = await checkLLMEndpointReachability(this.config.baseURL, this.config.apiKey, LLM_HEALTH_TIMEOUT_MS);
+    additionalInfo.statusCode = endpointCheck.status ?? null;
+    additionalInfo.timedOut = endpointCheck.timedOut;
+    if (endpointCheck.message) {
+      additionalInfo.endpointMessage = endpointCheck.message;
+    }
+
+    const responseTime = endpointCheck.duration;
+    const isHealthy = endpointCheck.reachable;
+
+    let message: string;
+    if (isHealthy && !modelExists) {
+      message = `AX处理器端点可访问 (HTTP ${endpointCheck.status ?? '未知'})，未检测到模型文件，将按需执行快速训练`;
+    } else if (isHealthy) {
+      message = `AX处理器就绪 (HTTP ${endpointCheck.status ?? '未知'})`;
+    } else if (endpointCheck.timedOut) {
+      message = `AX处理器端点在 ${LLM_HEALTH_TIMEOUT_MS}ms 内未响应`;
+    } else {
+      message = `AX处理器健康检查失败: ${endpointCheck.message ?? '未知原因'}`;
+    }
+
+    return {
+      healthy: isHealthy,
+      message,
+      lastChecked: timestamp,
+      responseTime,
+      modelStatus: isHealthy ? 'ready' : endpointCheck.timedOut ? 'loading' : 'error',
+      queueLength: 0,
+      additionalInfo
+    };
+  }
   
   /**
    * 启动热重载监控
@@ -555,6 +742,7 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
  */
 export class ProcessingRegistry {
   private modules: Map<string, ProcessingModule> = new Map();
+  private readonly healthCheckTimeoutMs = Number(process.env.MODULE_HEALTH_TIMEOUT_MS ?? '5000');
   
   constructor() {
     // 注册默认处理模块
@@ -659,24 +847,66 @@ export class ProcessingRegistry {
   getAvailable(): string[] {
     return Array.from(this.modules.keys());
   }
-  
+
+  private createTimeoutStatus(name: string): ProcessingHealthStatus {
+    return {
+      healthy: false,
+      message: `健康检查超时 (${this.healthCheckTimeoutMs}ms) - ${name}`,
+      lastChecked: new Date().toISOString(),
+      responseTime: this.healthCheckTimeoutMs,
+      modelStatus: 'error',
+      queueLength: 0
+    };
+  }
+
+  private createErrorStatus(error: unknown): ProcessingHealthStatus {
+    return {
+      healthy: false,
+      message: `健康检查异常: ${error instanceof Error ? error.message : '未知错误'}`,
+      lastChecked: new Date().toISOString(),
+      responseTime: 0,
+      modelStatus: 'error',
+      queueLength: 0
+    };
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, fallback: () => T): Promise<T> {
+    const timeoutMs = this.healthCheckTimeoutMs;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(fallback()), timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
   async getModuleStatus(name: string): Promise<ProcessingHealthStatus | null> {
     const module = this.modules.get(name);
     if (!module) {
       return null;
     }
-    
-    return await module.getHealthStatus();
+
+    try {
+      return await this.withTimeout(module.getHealthStatus(), () => this.createTimeoutStatus(name));
+    } catch (error) {
+      return this.createErrorStatus(error);
+    }
   }
-  
+
   async getAllModulesStatus(): Promise<Record<string, ProcessingHealthStatus | null>> {
     const status: Record<string, ProcessingHealthStatus | null> = {};
     
     for (const [name, module] of this.modules) {
       try {
-        status[name] = await module.getHealthStatus();
+        status[name] = await this.withTimeout(module.getHealthStatus(), () => this.createTimeoutStatus(name));
       } catch (error) {
-        status[name] = null;
+        status[name] = this.createErrorStatus(error);
       }
     }
     

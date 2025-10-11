@@ -695,6 +695,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
  */
 export class RenderingRegistry {
   private modules: Map<string, RenderingModule> = new Map();
+  private readonly healthCheckTimeoutMs = Number(process.env.MODULE_HEALTH_TIMEOUT_MS ?? '5000');
   
   constructor() {
     // 注册默认渲染模块
@@ -715,24 +716,66 @@ export class RenderingRegistry {
   getAvailable(): string[] {
     return Array.from(this.modules.keys());
   }
-  
+
+  private createTimeoutStatus(name: string): RenderingHealthStatus {
+    return {
+      healthy: false,
+      message: `健康检查超时 (${this.healthCheckTimeoutMs}ms) - ${name}`,
+      lastChecked: new Date().toISOString(),
+      responseTime: this.healthCheckTimeoutMs,
+      renderingCapacity: 0,
+      fontStatus: 'error'
+    };
+  }
+
+  private createErrorStatus(error: unknown): RenderingHealthStatus {
+    return {
+      healthy: false,
+      message: `健康检查异常: ${error instanceof Error ? error.message : '未知错误'}`,
+      lastChecked: new Date().toISOString(),
+      responseTime: 0,
+      renderingCapacity: 0,
+      fontStatus: 'error'
+    };
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, fallback: () => T): Promise<T> {
+    const timeoutMs = this.healthCheckTimeoutMs;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(fallback()), timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
   async getModuleStatus(name: string): Promise<RenderingHealthStatus | null> {
     const module = this.modules.get(name);
     if (!module) {
       return null;
     }
-    
-    return await module.getHealthStatus();
+
+    try {
+      return await this.withTimeout(module.getHealthStatus(), () => this.createTimeoutStatus(name));
+    } catch (error) {
+      return this.createErrorStatus(error);
+    }
   }
-  
+
   async getAllModulesStatus(): Promise<Record<string, RenderingHealthStatus | null>> {
     const status: Record<string, RenderingHealthStatus | null> = {};
     
     for (const [name, module] of this.modules) {
       try {
-        status[name] = await module.getHealthStatus();
+        status[name] = await this.withTimeout(module.getHealthStatus(), () => this.createTimeoutStatus(name));
       } catch (error) {
-        status[name] = null;
+        status[name] = this.createErrorStatus(error);
       }
     }
     

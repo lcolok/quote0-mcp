@@ -28,6 +28,7 @@ import {
  */
 export class DataSourceRegistry {
   private modules: Map<string, DataSourceModule> = new Map();
+  private readonly healthCheckTimeoutMs = Number(process.env.MODULE_HEALTH_TIMEOUT_MS ?? '5000');
   
   constructor() {
     // 自动注册所有数据源模块
@@ -60,7 +61,7 @@ export class DataSourceRegistry {
   get(name: string): DataSourceModule | undefined {
     return this.modules.get(name);
   }
-  
+
   /**
    * 获取所有可用的数据源模块名称
    */
@@ -79,7 +80,45 @@ export class DataSourceRegistry {
       description: module.description
     }));
   }
-  
+
+  private createTimeoutStatus(name: string): DataSourceHealthStatus {
+    return {
+      healthy: false,
+      message: `健康检查超时 (${this.healthCheckTimeoutMs}ms) - ${name}`,
+      lastChecked: new Date().toISOString(),
+      responseTime: this.healthCheckTimeoutMs,
+      dataQuality: 0,
+      connectionStatus: 'error'
+    };
+  }
+
+  private createErrorStatus(error: unknown): DataSourceHealthStatus {
+    return {
+      healthy: false,
+      message: `健康检查异常: ${error instanceof Error ? error.message : '未知错误'}`,
+      lastChecked: new Date().toISOString(),
+      responseTime: 0,
+      dataQuality: 0,
+      connectionStatus: 'error'
+    };
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, fallback: () => T): Promise<T> {
+    const timeoutMs = this.healthCheckTimeoutMs;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(fallback()), timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
   /**
    * 获取指定模块的健康状态
    */
@@ -88,40 +127,28 @@ export class DataSourceRegistry {
     if (!module) {
       return null;
     }
-    
+
     try {
-      return await module.getHealthStatus();
+      return await this.withTimeout(module.getHealthStatus(), () => this.createTimeoutStatus(name));
     } catch (error) {
-      return {
-        healthy: false,
-        message: `健康检查异常: ${error instanceof Error ? error.message : '未知错误'}`,
-        lastChecked: new Date().toISOString(),
-        responseTime: 0,
-        dataQuality: 0
-      };
+      return this.createErrorStatus(error);
     }
   }
-  
+
   /**
    * 获取所有模块的健康状态
    */
   async getAllModulesStatus(): Promise<Record<string, DataSourceHealthStatus | null>> {
     const status: Record<string, DataSourceHealthStatus | null> = {};
-    
+
     const statusPromises = Array.from(this.modules.entries()).map(async ([name, module]) => {
       try {
-        status[name] = await module.getHealthStatus();
+        status[name] = await this.withTimeout(module.getHealthStatus(), () => this.createTimeoutStatus(name));
       } catch (error) {
-        status[name] = {
-          healthy: false,
-          message: `健康检查异常: ${error instanceof Error ? error.message : '未知错误'}`,
-          lastChecked: new Date().toISOString(),
-          responseTime: 0,
-          dataQuality: 0
-        };
+        status[name] = this.createErrorStatus(error);
       }
     });
-    
+
     await Promise.all(statusPromises);
     return status;
   }

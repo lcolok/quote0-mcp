@@ -236,38 +236,81 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
   
   async getHealthStatus(): Promise<DataSourceHealthStatus> {
     const startTime = Date.now();
-    
+    const feedKey = 'solidot';
+    const testFeed = this.rssFeeds[feedKey];
+    const timeoutMs = Math.min(Number(process.env.MODULE_HEALTH_TIMEOUT_MS ?? '5000'), 4000);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+
     try {
-      // 测试默认的Solidot RSS源
-      const testData = await this.fetchRawData({ 
-        source: 'solidot', 
-        count: 1, 
-        startIndex: 0 
+      const response = await fetch(testFeed.url, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'ModularNewsWidget/1.0 (+https://quote0.local/rss-health)'
+        },
+        signal: controller.signal
       });
-      
+
       const responseTime = Date.now() - startTime;
-      
+      const bodySnippet = await response.text().then((content) => content.slice(0, 512)).catch(() => '');
+      const hasItems = bodySnippet.includes('<item') || bodySnippet.includes('<entry');
+
+      if (!response.ok) {
+        return {
+          healthy: false,
+          message: `RSS源响应异常 (${response.status})`,
+          lastChecked: new Date().toISOString(),
+          responseTime,
+          dataQuality: 0,
+          connectionStatus: 'error',
+          additionalInfo: {
+            statusCode: response.status,
+            feedKey,
+            url: testFeed.url
+          }
+        };
+      }
+
       return {
         healthy: true,
-        message: `RSS数据源正常运行 (${Object.keys(this.rssFeeds).length}个预设源)`,
+        message: `RSS源可访问 (${Object.keys(this.rssFeeds).length}个预设源)`,
         lastChecked: new Date().toISOString(),
         responseTime,
-        dataQuality: testData.length > 0 ? 100 : 50,
+        dataQuality: hasItems ? 100 : 60,
+        connectionStatus: 'connected',
         additionalInfo: {
           availableFeeds: Object.keys(this.rssFeeds).length,
           presetSources: Object.keys(this.rssFeeds),
-          testSource: 'solidot'
+          testSource: feedKey,
+          statusCode: response.status,
+          bodyPreview: bodySnippet
         }
       };
-      
     } catch (error) {
+      const duration = Date.now() - startTime;
+      const message = timedOut
+        ? `RSS源在 ${timeoutMs}ms 内未响应`
+        : `RSS数据源异常: ${error instanceof Error ? error.message : '未知错误'}`;
       return {
         healthy: false,
-        message: `RSS数据源异常: ${error instanceof Error ? error.message : '未知错误'}`,
+        message,
         lastChecked: new Date().toISOString(),
-        responseTime: Date.now() - startTime,
-        dataQuality: 0
+        responseTime: duration,
+        dataQuality: 0,
+        connectionStatus: 'error',
+        additionalInfo: {
+          feedKey,
+          url: testFeed.url,
+          timedOut
+        }
       };
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
+
