@@ -786,20 +786,25 @@ app.get('/api/scheduler/push-history', async (c) => {
 
     client.release();
 
-    const records = result.rows.map(row => ({
-      id: row.id,
-      title: row.processed_content?.title || row.raw_content?.title || '未知标题',
-      originalTitle: row.raw_content?.title,
-      summary: row.processed_content?.message || row.raw_content?.description,
-      imagePath: row.image_path,
-      publishTime: row.raw_content?.publishTime,
-      pushedAt: row.pushed_at,
-      category: row.raw_content?.category || row.processed_content?.category || 'unknown',
-      dataSource: row.raw_content?.source || row.processed_content?.source || row.job_id || 'unknown',
-      annotationStatus: row.annotation_status || 'pending',
-      rawContent: row.raw_content,
-      processedContent: row.processed_content,
-    }));
+    const records = result.rows.map(row => {
+      const pushedAtDate = row.pushed_at ? new Date(row.pushed_at) : null;
+      return {
+        id: row.id,
+        title: row.processed_content?.title || row.raw_content?.title || '未知标题',
+        originalTitle: row.raw_content?.title,
+        summary: row.processed_content?.message || row.raw_content?.description,
+        imagePath: row.image_path,
+        publishTime: row.raw_content?.publishTime,
+        pushedAt: pushedAtDate ? formatToChinaTime(pushedAtDate) : null,
+        pushedAtUtc: pushedAtDate ? pushedAtDate.toISOString() : null,
+        pushedAtEpoch: pushedAtDate ? pushedAtDate.getTime() : null,
+        category: row.raw_content?.category || row.processed_content?.category || 'unknown',
+        dataSource: row.raw_content?.source || row.processed_content?.source || row.job_id || 'unknown',
+        annotationStatus: row.annotation_status || 'pending',
+        rawContent: row.raw_content,
+        processedContent: row.processed_content,
+      };
+    });
 
     return c.json({
       success: true,

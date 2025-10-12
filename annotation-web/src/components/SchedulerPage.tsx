@@ -19,6 +19,8 @@ interface PushRecord {
   imagePath: string | null;
   publishTime: string;
   pushedAt: string;
+  pushedAtUtc?: string | null;
+  pushedAtEpoch?: number | null;
   category: string;
   dataSource: string;
   rawContent: any;
@@ -67,8 +69,27 @@ function SchedulerPage() {
   const pagination = historyData?.pagination;
   const selectedRecord = records.find(r => r.id === selectedId);
 
-  const formatTime = (dateStr: string) => {
-    const date = new Date(dateStr);
+  const parseCstString = (value: string): Date => {
+    const normalized = value
+      .replace(/\//g, '-')
+      .replace(' ', 'T');
+    return new Date(`${normalized}+08:00`);
+  };
+
+  const getPushedDate = (record: PushRecord): Date => {
+    if (typeof record.pushedAtEpoch === 'number') {
+      return new Date(record.pushedAtEpoch);
+    }
+    const base = record.pushedAtUtc || record.pushedAt;
+    if (!base) return new Date();
+    if (record.pushedAtUtc) {
+      return new Date(base);
+    }
+    return parseCstString(base);
+  };
+
+  const formatTime = (record: PushRecord) => {
+    const date = getPushedDate(record);
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const minutes = Math.floor(diff / 60000);
@@ -82,8 +103,8 @@ function SchedulerPage() {
     return date.toLocaleDateString('zh-CN');
   };
 
-  const isRecent = (dateStr: string) => {
-    const diff = new Date().getTime() - new Date(dateStr).getTime();
+  const isRecent = (record: PushRecord) => {
+    const diff = Date.now() - getPushedDate(record).getTime();
     return diff < 3600000; // 1小时内
   };
 
@@ -128,7 +149,7 @@ function SchedulerPage() {
             <div className="divide-y divide-gray-200">
               {records.map((record) => {
                 const isSelected = record.id === selectedId;
-                const recent = isRecent(record.pushedAt);
+                const recent = isRecent(record);
 
                 return (
                   <div
@@ -180,7 +201,7 @@ function SchedulerPage() {
                         <div className="flex items-center gap-3 text-xs text-gray-500">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatTime(record.pushedAt)}
+                            {formatTime(record)}
                           </span>
                           <span className="px-1.5 py-0.5 bg-gray-100 rounded">
                             {record.category}
@@ -228,7 +249,7 @@ function SchedulerPage() {
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">推送详情</h2>
                 <p className="text-sm text-gray-600 mt-0.5">
-                  ID: {selectedRecord.id} · {formatTime(selectedRecord.pushedAt)}
+                  ID: {selectedRecord.id} · {formatTime(selectedRecord)}
                 </p>
               </div>
               <button

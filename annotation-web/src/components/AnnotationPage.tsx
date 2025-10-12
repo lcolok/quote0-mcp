@@ -11,6 +11,7 @@ interface NewsRecord {
   dataSource: string;
   imagePath: string | null;
   pushedAt: Date;
+  pushedAtUtc?: string | null;
   annotationStatus: 'pending' | 'annotating' | 'completed' | 'skipped';
   isRecent?: boolean;
   rawContent: any;
@@ -87,19 +88,39 @@ function AnnotationPage() {
   });
 
   // 处理数据并排序
+  const parsePushedAt = (item: any): { date: Date; utc?: string | null } => {
+    if (typeof item.pushedAtEpoch === 'number') {
+      return { date: new Date(item.pushedAtEpoch), utc: item.pushedAtUtc };
+    }
+    if (item.pushedAtUtc) {
+      return { date: new Date(item.pushedAtUtc), utc: item.pushedAtUtc };
+    }
+    if (item.pushedAt) {
+      const normalized = item.pushedAt
+        .replace(/\//g, '-')
+        .replace(' ', 'T');
+      return { date: new Date(`${normalized}+08:00`) };
+    }
+    return { date: new Date() };
+  };
+
   const newsList = useMemo(() => {
-    return (newsData?.data || []).map((item: any): NewsRecord => ({
-      id: item.id,
-      title: item.title || '未知标题',
-      category: item.category || 'unknown',
-      dataSource: item.dataSource || '未知',
-      imagePath: item.imagePath,
-      pushedAt: new Date(item.pushedAt || Date.now()),
-      annotationStatus: item.annotationStatus || 'pending',
-      isRecent: item.pushedAt && (Date.now() - new Date(item.pushedAt).getTime() < 3600000),
-      rawContent: item.rawContent,
-      processedContent: item.processedContent,
-    })).sort((a, b) => b.pushedAt.getTime() - a.pushedAt.getTime());
+    return (newsData?.data || []).map((item: any): NewsRecord => {
+      const { date: pushedAtDate, utc: pushedAtUtc } = parsePushedAt(item);
+      return {
+        id: item.id,
+        title: item.title || '未知标题',
+        category: item.category || 'unknown',
+        dataSource: item.dataSource || '未知',
+        imagePath: item.imagePath,
+        pushedAt: pushedAtDate,
+        pushedAtUtc,
+        annotationStatus: item.annotationStatus || 'pending',
+        isRecent: Date.now() - pushedAtDate.getTime() < 3600000,
+        rawContent: item.rawContent,
+        processedContent: item.processedContent,
+      };
+    }).sort((a, b) => b.pushedAt.getTime() - a.pushedAt.getTime());
   }, [newsData]);
 
   // 根据搜索关键词筛选数据
