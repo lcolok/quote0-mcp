@@ -22,6 +22,11 @@ interface SchedulerJobState {
   consecutiveFailures: number;
   currentSourceIndex: number; // 当前使用的RSS源索引（多源轮换） | Current RSS source index for rotation
   dynamicPoolSize: number | null; // 动态获取的poolSize（缓存） | Dynamically fetched poolSize (cached)
+  nextIndex: number;
+  lastIndex: number | null;
+  shuffledOrder: number[];
+  shuffledPointer: number;
+  recentFingerprints: string[];
 }
 
 interface SchedulerJobInstance {
@@ -296,6 +301,7 @@ export class NewsScheduler {
         link: candidate.context.link,
         publishTime: candidate.context.publishTime,
         source: candidate.context.source,
+        category: candidate.context.category || job.config.category,
         fingerprint: candidate.fingerprint,
         content: candidate.context.content,  // 原始RSS正文内容
         description: candidate.context.description  // RSS的description字段
@@ -310,7 +316,9 @@ export class NewsScheduler {
           summary: (result.result as any).summary || (result.result as any).message,
           source: (result.result as any).source || candidate.context.source,
           signature: (result.result as any).signature,
-          link: (result.result as any).link || candidate.context.link
+          link: (result.result as any).link || candidate.context.link,
+          category: (result.result as any).category || candidate.context.category || job.config.category,
+          publishTime: (result.result as any).publishTime || candidate.context.publishTime
         };
         console.log('✅ 从渲染结果中提取文本数据，确保与图片内容一致');
       }
@@ -335,7 +343,8 @@ export class NewsScheduler {
         metadata: {
           publishTime: candidate.context.publishTime,
           index: candidate.index,
-          rssSource: currentRssSource
+          rssSource: currentRssSource,
+          category: candidate.context.category || job.config.category
         },
         result: {
           workflow: result.workflow,
@@ -360,7 +369,8 @@ export class NewsScheduler {
         shuffledPointer: job.state.shuffledPointer,
         consecutiveFailures: job.state.consecutiveFailures,
         currentSourceIndex: job.state.currentSourceIndex,
-        dynamicPoolSize: job.state.dynamicPoolSize
+        dynamicPoolSize: job.state.dynamicPoolSize,
+        recentFingerprints: job.state.recentFingerprints.slice(0, 20)
       }, nextRunAt);
       console.log(`💾 已保存调度器状态: ${job.config.id}, 下次运行: ${nextRunAt.toISOString()}`);
     } catch (error) {
@@ -384,8 +394,11 @@ export class NewsScheduler {
   }
 
   private async selectCandidate(job: SchedulerJobInstance, overrideIndex?: number): Promise<CandidateArticle | null> {
+    this.ensureIndexState(job);
+
     if (typeof overrideIndex === 'number') {
       const context = this.buildContextFromIndex(job.config, overrideIndex);
+      this.updateIndexState(job, overrideIndex);
       return {
         index: overrideIndex,
         fingerprint: context.fingerprint!,
@@ -398,7 +411,7 @@ export class NewsScheduler {
     const dataSourceModule: any = dataSourceRegistry.get(job.config.dataSource);
     if (!dataSourceModule || typeof dataSourceModule.fetchRawData !== 'function') {
       console.warn(`⚠️ 数据源 ${job.config.dataSource} 不支持fetchRawData，使用索引备选`);
-      return this.fallbackCandidate(job);
+      return await this.fallbackCandidate(job);
     }
 
     // 获取当前RSS源（支持多源轮换）
@@ -419,14 +432,16 @@ export class NewsScheduler {
       });
 
       if (!rawItems || rawItems.length === 0) {
-        return this.fallbackCandidate(job);
+        return await this.fallbackCandidate(job);
       }
 
       // 动态poolSize模式：缓存实际获取到的条目数量
       if (configPoolSize === -1) {
-        job.state.dynamicPoolSize = rawItems.length;
-        console.log(`📊 动态poolSize已更新: ${rawItems.length} (来源: ${currentRssSource})`);
-      }
+      job.state.dynamicPoolSize = rawItems.length;
+      console.log(`📊 动态poolSize已更新: ${rawItems.length} (来源: ${currentRssSource})`);
+    }
+
+      this.prepareIndexSequence(job, rawItems);
 
       const candidates = rawItems.map((item, idx) => {
         const originalIndex = item.metadata?.originalIndex ?? item.metadata?.index ?? idx;
@@ -435,7 +450,7 @@ export class NewsScheduler {
           link: item.link,
           publishTime: item.publishTime,
           source: item.source,
-          category: item.category,
+          category: item.category || job.config.category,
           fallback: `${job.config.dataSource}:${job.config.rssSource}:${originalIndex}`
         });
         const context: NewsPushContext = {
@@ -443,7 +458,7 @@ export class NewsScheduler {
           link: item.link,
           publishTime: item.publishTime,
           source: item.source,
-          category: item.category,
+          category: item.category || job.config.category,
           fingerprint,
           rawIndex: originalIndex,
           content: item.content,  // 保存原始RSS正文内容
@@ -520,51 +535,71 @@ export class NewsScheduler {
       }
 
       // 使用智能排序：推送次数少的优先，其次按时间新旧，最后按索引
-      filtered.sort((a, b) => {
-        if (a.pushCount !== b.pushCount) {
-          return a.pushCount - b.pushCount;
-        }
-        const timeA = a.publishTime ? new Date(a.publishTime).getTime() : 0;
-        const timeB = b.publishTime ? new Date(b.publishTime).getTime() : 0;
-        if (timeA !== timeB) {
-          return timeB - timeA;
-        }
-        return a.index - b.index;
-      });
+      const filteredMap = new Map<number, CandidateArticle>();
+      for (const item of filtered) {
+        filteredMap.set(item.index, item);
+      }
 
-      // 选择最终候选：使用智能排序后的第一个
-      const chosen = filtered[0];
+      const order = job.state.shuffledOrder;
+      const orderLength = order.length;
 
-      // 保护机制: 如果选中的候选pushCount超过maxPushCount,强制切换RSS源
-      if (chosen.pushCount >= maxPushCount) {
-        console.log(`⛔ 所有候选pushCount都超过${maxPushCount},强制切换RSS源避免重复`);
+      if (orderLength === 0) {
+        throw new Error('无法构建候选索引顺序');
+      }
+
+      let chosen: CandidateArticle | null = null;
+      const recentSet = new Set(job.state.recentFingerprints || []);
+      for (let attempt = 0; attempt < orderLength; attempt++) {
+        const pointerIndex = (job.state.shuffledPointer + attempt) % orderLength;
+        const candidateIndex = order[pointerIndex];
+        const candidate = filteredMap.get(candidateIndex);
+        if (!candidate) {
+          continue;
+        }
+
+        if (recentSet.has(candidate.fingerprint)) {
+          continue;
+        }
+
+        if (candidate.pushCount >= maxPushCount) {
+          continue;
+        }
+
+        chosen = candidate;
+        job.state.shuffledPointer = (pointerIndex + 1) % orderLength;
+        break;
+      }
+
+      if (!chosen) {
+        console.log(`⛔ 所有候选pushCount都超过${maxPushCount}或不满足条件,强制切换RSS源避免重复`);
         await this.rotateRssSource(job);
-        throw new Error(`当前RSS源所有新闻已推送${maxPushCount}次以上,已切换到下一个源`);
+        throw new Error(`当前RSS源无可用候选,已切换到下一个源`);
       }
 
       const title = chosen.context.title?.substring(0, 30) || 'N/A';
-      console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}"`);
+      console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}" (index=${chosen.index})`);
 
       if (!chosen.context.fingerprint) {
         chosen.context.fingerprint = chosen.fingerprint;
       }
+
+      this.updateIndexState(job, chosen.index, rawItems.length);
+      this.recordRecentFingerprint(job, chosen.fingerprint);
       return chosen;
     } catch (error) {
       console.warn(`⚠️ 获取候选新闻失败，使用索引备选: ${error instanceof Error ? error.message : error}`);
-      return this.fallbackCandidate(job);
+      return await this.fallbackCandidate(job);
     }
   }
 
-  private fallbackCandidate(job: SchedulerJobInstance): CandidateArticle | null {
-    const fallbackIndex = this.getNextCandidateIndex(job);
-    const context = this.buildContextFromIndex(job.config, fallbackIndex);
-    return {
-      index: fallbackIndex,
-      fingerprint: context.fingerprint!,
-      publishTime: context.publishTime,
-      pushCount: 0,
-      context
-    };
+  private async fallbackCandidate(job: SchedulerJobInstance): Promise<CandidateArticle | null> {
+    console.warn('⚠️ 回退策略：当前源无合适候选，切换到下一个RSS源');
+    try {
+      await this.rotateRssSource(job);
+    } catch (error) {
+      console.warn('⚠️ 回退轮换RSS源失败:', error);
+    }
+    return null;
   }
 
   private buildContextFromIndex(job: NormalizedSchedulerJob, index: number): NewsPushContext {
@@ -587,6 +622,12 @@ export class NewsScheduler {
 
   private resetIndexState(job: SchedulerJobInstance): void {
     job.state.consecutiveFailures = 0;
+    const startIndex = job.config.indexStrategy.startIndex ?? 0;
+    job.state.nextIndex = startIndex;
+    job.state.lastIndex = null;
+    job.state.shuffledOrder = [];
+    job.state.shuffledPointer = 0;
+    job.state.recentFingerprints = [];
   }
 
   /**
@@ -664,15 +705,119 @@ export class NewsScheduler {
    * 获取有效的poolSize（支持动态poolSize）
    * poolSize=-1 表示动态获取RSS源的实际条目数
    */
+  private ensureIndexState(job: SchedulerJobInstance): void {
+    if (typeof job.state.nextIndex !== 'number') {
+      job.state.nextIndex = job.config.indexStrategy.startIndex ?? 0;
+    }
+    if (job.state.lastIndex === undefined) {
+      job.state.lastIndex = null;
+    }
+    if (!Array.isArray(job.state.shuffledOrder)) {
+      job.state.shuffledOrder = [];
+    }
+    if (typeof job.state.shuffledPointer !== 'number') {
+      job.state.shuffledPointer = 0;
+    }
+    if (!Array.isArray(job.state.recentFingerprints)) {
+      job.state.recentFingerprints = [];
+    }
+  }
+
+  private prepareIndexSequence(job: SchedulerJobInstance, rawItems: RawDataItem[]): void {
+    this.ensureIndexState(job);
+
+    const order = rawItems
+      .map((item, idx) => {
+        const originalIndex = item.metadata?.originalIndex ?? item.metadata?.index ?? idx;
+        const publishTime = item.publishTime ? new Date(item.publishTime).getTime() : 0;
+        return { index: originalIndex, publishTime };
+      })
+      .sort((a, b) => {
+        if (a.publishTime !== b.publishTime) {
+          return b.publishTime - a.publishTime;
+        }
+        return a.index - b.index;
+      })
+      .map(item => item.index);
+
+    if (order.length === 0) {
+      job.state.shuffledOrder = [];
+      job.state.shuffledPointer = 0;
+      return;
+    }
+
+    if (!arraysEqual(job.state.shuffledOrder, order)) {
+      job.state.shuffledOrder = order;
+      job.state.shuffledPointer = job.state.shuffledPointer % order.length;
+      job.state.nextIndex = job.state.nextIndex % order.length;
+    }
+
+    if (job.state.shuffledPointer >= order.length) {
+      job.state.shuffledPointer = 0;
+    }
+
+    job.state.dynamicPoolSize = order.length;
+  }
+
   private getEffectivePoolSize(job: SchedulerJobInstance): number {
     const configPoolSize = job.config.indexStrategy.poolSize;
 
-    // 如果配置为-1，使用动态缓存的poolSize
     if (configPoolSize === -1) {
-      return job.state.dynamicPoolSize || 10; // fallback到10
+      if (job.state.shuffledOrder.length > 0) {
+        return job.state.shuffledOrder.length;
+      }
+      return job.state.dynamicPoolSize || 10;
     }
 
     return configPoolSize;
+  }
+
+  private updateIndexState(job: SchedulerJobInstance, usedIndex: number, poolSize?: number): void {
+    this.ensureIndexState(job);
+    const effectivePoolSize = poolSize && poolSize > 0
+      ? poolSize
+      : this.getEffectivePoolSize(job) || 1;
+
+    job.state.lastIndex = usedIndex;
+
+    if (effectivePoolSize > 0 && Number.isFinite(effectivePoolSize)) {
+      job.state.nextIndex = (usedIndex + 1) % effectivePoolSize;
+    } else {
+      job.state.nextIndex = usedIndex + 1;
+    }
+
+    const order = job.state.shuffledOrder;
+    if (order.length > 0) {
+      const position = order.indexOf(usedIndex);
+      if (position >= 0) {
+        job.state.shuffledPointer = (position + 1) % order.length;
+      }
+    }
+  }
+
+  private getNextCandidateIndex(job: SchedulerJobInstance): number {
+    this.ensureIndexState(job);
+    const poolSize = this.getEffectivePoolSize(job);
+    const next = job.state.nextIndex ?? 0;
+    const normalized = poolSize > 0 ? ((next % poolSize) + poolSize) % poolSize : next;
+    this.updateIndexState(job, normalized, poolSize);
+    return normalized;
+  }
+
+  private recordRecentFingerprint(job: SchedulerJobInstance, fingerprint: string | undefined, limit = 20): void {
+    if (!fingerprint) {
+      return;
+    }
+    this.ensureIndexState(job);
+    const list = job.state.recentFingerprints;
+    const existingIndex = list.indexOf(fingerprint);
+    if (existingIndex >= 0) {
+      list.splice(existingIndex, 1);
+    }
+    list.unshift(fingerprint);
+    if (list.length > limit) {
+      list.length = limit;
+    }
   }
 }
 
@@ -683,21 +828,46 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
     ? (job as any).currentSourceIndex
     : 0;
 
+  const startIndex = job.indexStrategy.startIndex ?? 0;
+
   // 如果有保存的状态，优先使用；否则使用默认值
-  const defaultState = {
+  const defaultState: SchedulerJobState = {
     running: false,
     consecutiveFailures: 0,
     currentSourceIndex,
-    dynamicPoolSize: null
+    dynamicPoolSize: null,
+    nextIndex: startIndex,
+    lastIndex: null,
+    shuffledOrder: [],
+    shuffledPointer: 0,
+    recentFingerprints: []
   };
+
+  const mergedState = {
+    ...defaultState,
+    ...savedState,
+    running: false
+  } as typeof defaultState;
+
+  if (typeof mergedState.nextIndex !== 'number') {
+    mergedState.nextIndex = startIndex;
+  }
+  if (typeof mergedState.lastIndex !== 'number' && mergedState.lastIndex !== null) {
+    mergedState.lastIndex = null;
+  }
+  if (!Array.isArray(mergedState.shuffledOrder)) {
+    mergedState.shuffledOrder = [];
+  }
+  if (typeof mergedState.shuffledPointer !== 'number') {
+    mergedState.shuffledPointer = 0;
+  }
+  if (!Array.isArray(mergedState.recentFingerprints)) {
+    mergedState.recentFingerprints = [];
+  }
 
   return {
     config: job,
-    state: {
-      ...defaultState,
-      ...savedState,  // 从数据库恢复的状态会覆盖默认值
-      running: false  // 重启后总是设为未运行
-    },
+    state: mergedState,
     timer: null
   };
 }
@@ -790,6 +960,21 @@ function createShuffledIndices(poolSize: number): number[] {
     [indices[i], indices[j]] = [indices[j], indices[i]];
   }
   return indices;
+}
+
+function arraysEqual<T>(a: T[] | undefined, b: T[]): boolean {
+  if (!Array.isArray(a)) {
+    return false;
+  }
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function buildSchedulerFromDatabase(): Promise<NewsScheduler> {
