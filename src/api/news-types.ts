@@ -129,6 +129,10 @@ export interface NewsSchedulerJobRecord {
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  state?: Record<string, any>;
+  metadata?: Record<string, any>;
 }
 
 export interface RequiredSchedulerIndexStrategy {
@@ -162,4 +166,7 @@ export interface NewsPushLogEntry {
   link?: string;
   source?: string;
   category?: string;
+  layer?: string;
+  isFallback?: boolean | null;
+  strategySnapshot?: Record<string, any> | null;
 }

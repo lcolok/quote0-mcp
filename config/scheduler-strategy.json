@@ -1,0 +1,13 @@
+{
+  "version": "2025.10.12",
+  "cooldownHoursStrict": 6,
+  "maxPushCountStrict": 3,
+  "recentFingerprintsLimitStrict": 10,
+  "cooldownHoursRelaxed": 3,
+  "maxPushCountRelaxed": 6,
+  "recentFingerprintsLimitRelaxed": 5,
+  "fallbackRepeatLimit": 2,
+  "sourceFailureSkipThreshold": 3,
+  "recentFingerprintGlobalLimit": 24,
+  "recentFingerprintSnapshotSize": 12
+}

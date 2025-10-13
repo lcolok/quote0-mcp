@@ -119,6 +119,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         let newsFingerprint: string;
         let cachedTextData: any = null;
+        let deviceResultData: Record<string, any> | null = null;
 
         let usedContextForFingerprint = false;
 
@@ -283,9 +284,10 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             console.log('📱 缓存未命中，执行完整设备推送...');
           }
 
-          const deviceResult = (await modularNewsPlugin.getData(params)) as any;
+          const deviceResult = (await modularNewsPlugin.getData(params)) as Record<string, any> | null;
 
-          if (typeof deviceResult === 'object' && deviceResult?.imageUrl) {
+          if (deviceResult && typeof deviceResult === 'object' && deviceResult.imageUrl) {
+            deviceResultData = deviceResult;
             imageUrl = deviceResult.imageUrl;
             localImagePath = deviceResult.localImagePath;  // 保存localImagePath
             devicePushResult = deviceResult.deviceResult || '推送完成';
@@ -373,17 +375,30 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           }
         }
 
+        const mergedTextData = {
+          title: cachedTextData?.title ?? deviceResultData?.title ?? context.title,
+          message: cachedTextData?.message ?? deviceResultData?.message ?? context.description,
+          summary:
+            cachedTextData?.summary ??
+            deviceResultData?.summary ??
+            deviceResultData?.message ??
+            cachedTextData?.message ??
+            context.description,
+          source: cachedTextData?.source ?? deviceResultData?.source ?? context.source,
+          signature: cachedTextData?.signature ?? deviceResultData?.signature,
+          link: cachedTextData?.link ?? deviceResultData?.link ?? context.link
+        };
+
         result = {
           imageUrl,
           localImagePath,  // 添加localImagePath字段
           deviceResult: devicePushResult,
-          // 从deviceResult或缓存中提取文本数据，确保与图片一致
-          title: cachedTextData?.title || (deviceResult as any).title,
-          message: cachedTextData?.message || (deviceResult as any).message,
-          summary: cachedTextData?.summary || (deviceResult as any).summary || (deviceResult as any).message,
-          source: cachedTextData?.source || (deviceResult as any).source,
-          signature: cachedTextData?.signature || (deviceResult as any).signature,
-          link: cachedTextData?.link || (deviceResult as any).link,
+          title: mergedTextData.title,
+          message: mergedTextData.message,
+          summary: mergedTextData.summary,
+          source: mergedTextData.source,
+          signature: mergedTextData.signature,
+          link: mergedTextData.link,
           cacheInfo: {
             hit: localCacheHit,
             source: localCacheHit ? 'minio_cache' : 'original',

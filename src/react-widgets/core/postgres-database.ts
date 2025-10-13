@@ -237,6 +237,7 @@ export class PostgresDatabase {
           category VARCHAR(50) NOT NULL,
           data_source VARCHAR(50) NOT NULL,
           rss_source VARCHAR(100) NOT NULL,
+          rss_sources JSONB,
           processor VARCHAR(50) NOT NULL,
           renderer VARCHAR(50) NOT NULL,
           interval_ms INTEGER NOT NULL,
@@ -244,6 +245,12 @@ export class PostgresDatabase {
           options JSONB,
           index_strategy JSONB NOT NULL,
           enabled BOOLEAN NOT NULL DEFAULT true,
+          disabled_sources JSONB DEFAULT '[]'::jsonb,
+          current_source_index INTEGER NOT NULL DEFAULT 0,
+          state JSONB,
+          last_run_at TIMESTAMPTZ,
+          next_run_at TIMESTAMPTZ,
+          metadata JSONB,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -266,12 +273,48 @@ export class PostgresDatabase {
           job_id VARCHAR(64),
           fingerprint VARCHAR(64) NOT NULL REFERENCES news_push_stats(fingerprint) ON DELETE CASCADE,
           pushed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          layer VARCHAR(20),
+          is_fallback BOOLEAN,
           result JSONB,
+          strategy_snapshot JSONB,
+          raw_content JSONB,
+          processed_content JSONB,
           image_path TEXT
       );
 
-      -- 数据库迁移：添加 disabled_sources 字段（如果不存在）
+      CREATE TABLE IF NOT EXISTS scheduler_run_history (
+          id BIGSERIAL PRIMARY KEY,
+          job_id VARCHAR(64) NOT NULL,
+          run_started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          run_finished_at TIMESTAMPTZ,
+          source VARCHAR(100),
+          layer VARCHAR(20),
+          candidate_id BIGINT,
+          candidate_fingerprint VARCHAR(128),
+          candidate_publish_time TIMESTAMPTZ,
+          candidate_process_time TIMESTAMPTZ,
+          push_time TIMESTAMPTZ,
+          push_status VARCHAR(20),
+          push_reason TEXT,
+          push_count_before INTEGER,
+          push_count_after INTEGER,
+          cooling_elapsed INTERVAL,
+          metadata JSONB
+      );
+
+      -- 数据库迁移：为兼容旧结构补齐缺失字段
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS rss_sources JSONB;
       ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS disabled_sources JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS current_source_index INTEGER DEFAULT 0;
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS state JSONB;
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ;
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+      ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS metadata JSONB;
+      ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS layer VARCHAR(20);
+      ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS is_fallback BOOLEAN;
+      ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS strategy_snapshot JSONB;
+      ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS raw_content JSONB;
+      ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS processed_content JSONB;
 
       -- 创建索引
       CREATE INDEX IF NOT EXISTS idx_news_cache_key ON news_cache(cache_key);
@@ -288,6 +331,9 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_push_stats_last ON news_push_stats(last_pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_stats_count ON news_push_stats(push_count, last_pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_log_job ON news_push_log(job_id, pushed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_push_log_fingerprint ON news_push_log(fingerprint, pushed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_job ON scheduler_run_history(job_id, run_started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_status ON scheduler_run_history(push_status);
 
       -- 插入初始统计数据
       INSERT INTO cache_stats (cache_type, hit_count, miss_count, total_requests) 
@@ -872,7 +918,8 @@ export class PostgresDatabase {
         updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
         lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
         nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
-        state: row.state || {}
+        state: row.state || {},
+        metadata: row.metadata || {}
       }));
     } finally {
       client.release();
@@ -906,7 +953,8 @@ export class PostgresDatabase {
         updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
         lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
         nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
-        state: row.state || {}
+        state: row.state || {},
+        metadata: row.metadata || {}
       };
     } finally {
       client.release();
@@ -1011,6 +1059,7 @@ export class PostgresDatabase {
     currentSourceIndex: number;
     dynamicPoolSize: number | null;
     recentFingerprints: string[];
+    failureCount?: Record<string, number>;
   }, nextRunAt?: Date): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -1022,6 +1071,203 @@ export class PostgresDatabase {
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
       `, [id, JSON.stringify(state), nextRunAt || null]);
+    } finally {
+      client.release();
+    }
+  }
+
+  async createSchedulerRunHistory(entry: {
+    jobId: string;
+    runStartedAt?: Date;
+    layer?: string;
+    source?: string;
+    candidateId?: number;
+    candidateFingerprint?: string;
+    candidatePublishTime?: Date | string | null;
+    candidateProcessTime?: Date | string | null;
+    pushStatus?: string;
+    pushReason?: string;
+    pushCountBefore?: number;
+    metadata?: Record<string, any> | null;
+  }): Promise<number> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO scheduler_run_history (
+            job_id,
+            run_started_at,
+            layer,
+            source,
+            candidate_id,
+            candidate_fingerprint,
+            candidate_publish_time,
+            candidate_process_time,
+            push_status,
+            push_reason,
+            push_count_before,
+            metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'running'), $10, $11, $12)
+        RETURNING id
+      `,
+        [
+          entry.jobId,
+          entry.runStartedAt || new Date(),
+          entry.layer || null,
+          entry.source || null,
+          entry.candidateId ?? null,
+          entry.candidateFingerprint || null,
+          entry.candidatePublishTime || null,
+          entry.candidateProcessTime || null,
+          entry.pushStatus || null,
+          entry.pushReason || null,
+          entry.pushCountBefore ?? null,
+          entry.metadata ? JSON.stringify(entry.metadata) : null
+        ]
+      );
+
+      return result.rows[0]?.id as number;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateSchedulerRunHistory(id: number, updates: {
+    runFinishedAt?: Date | string | null;
+    layer?: string | null;
+    source?: string | null;
+    candidateId?: number | null;
+    candidateFingerprint?: string | null;
+    candidatePublishTime?: Date | string | null;
+    candidateProcessTime?: Date | string | null;
+    pushTime?: Date | string | null;
+    pushStatus?: string | null;
+    pushReason?: string | null;
+    pushCountBefore?: number | null;
+    pushCountAfter?: number | null;
+    coolingElapsedMs?: number | null;
+    metadata?: Record<string, any> | null;
+  }): Promise<void> {
+    const sets: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    const assign = (clause: string, value: any) => {
+      sets.push(clause.replace('$$', `$${idx}`));
+      values.push(value);
+      idx += 1;
+    };
+
+    if (updates.runFinishedAt !== undefined) {
+      if (updates.runFinishedAt === null) {
+        sets.push('run_finished_at = NULL');
+      } else {
+        assign('run_finished_at = $$', updates.runFinishedAt);
+      }
+    }
+    if (updates.layer !== undefined) {
+      if (updates.layer === null) {
+        sets.push('layer = NULL');
+      } else {
+        assign('layer = $$', updates.layer);
+      }
+    }
+    if (updates.source !== undefined) {
+      if (updates.source === null) {
+        sets.push('source = NULL');
+      } else {
+        assign('source = $$', updates.source);
+      }
+    }
+    if (updates.candidateId !== undefined) {
+      if (updates.candidateId === null) {
+        sets.push('candidate_id = NULL');
+      } else {
+        assign('candidate_id = $$', updates.candidateId);
+      }
+    }
+    if (updates.candidateFingerprint !== undefined) {
+      if (updates.candidateFingerprint === null) {
+        sets.push('candidate_fingerprint = NULL');
+      } else {
+        assign('candidate_fingerprint = $$', updates.candidateFingerprint);
+      }
+    }
+    if (updates.candidatePublishTime !== undefined) {
+      if (updates.candidatePublishTime === null) {
+        sets.push('candidate_publish_time = NULL');
+      } else {
+        assign('candidate_publish_time = $$', updates.candidatePublishTime);
+      }
+    }
+    if (updates.candidateProcessTime !== undefined) {
+      if (updates.candidateProcessTime === null) {
+        sets.push('candidate_process_time = NULL');
+      } else {
+        assign('candidate_process_time = $$', updates.candidateProcessTime);
+      }
+    }
+    if (updates.pushTime !== undefined) {
+      if (updates.pushTime === null) {
+        sets.push('push_time = NULL');
+      } else {
+        assign('push_time = $$', updates.pushTime);
+      }
+    }
+    if (updates.pushStatus !== undefined) {
+      if (updates.pushStatus === null) {
+        sets.push('push_status = NULL');
+      } else {
+        assign('push_status = $$', updates.pushStatus);
+      }
+    }
+    if (updates.pushReason !== undefined) {
+      if (updates.pushReason === null) {
+        sets.push('push_reason = NULL');
+      } else {
+        assign('push_reason = $$', updates.pushReason);
+      }
+    }
+    if (updates.pushCountBefore !== undefined) {
+      if (updates.pushCountBefore === null) {
+        sets.push('push_count_before = NULL');
+      } else {
+        assign('push_count_before = $$', updates.pushCountBefore);
+      }
+    }
+    if (updates.pushCountAfter !== undefined) {
+      if (updates.pushCountAfter === null) {
+        sets.push('push_count_after = NULL');
+      } else {
+        assign('push_count_after = $$', updates.pushCountAfter);
+      }
+    }
+    if (updates.coolingElapsedMs !== undefined) {
+      if (updates.coolingElapsedMs === null) {
+        sets.push('cooling_elapsed = NULL');
+      } else {
+        sets.push(`cooling_elapsed = ($${idx}::bigint) * INTERVAL '1 millisecond'`);
+        values.push(updates.coolingElapsedMs);
+        idx += 1;
+      }
+    }
+    if (updates.metadata !== undefined) {
+      if (updates.metadata === null) {
+        sets.push('metadata = NULL');
+      } else {
+        assign('metadata = COALESCE(metadata, \'{}\'::jsonb) || $$::jsonb', JSON.stringify(updates.metadata));
+      }
+    }
+
+    if (sets.length === 0) {
+      return;
+    }
+
+    const sql = `UPDATE scheduler_run_history SET ${sets.join(', ')} WHERE id = $${idx}`;
+    values.push(id);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query(sql, values);
     } finally {
       client.release();
     }
@@ -1083,6 +1329,9 @@ export class PostgresDatabase {
     rawContent?: Record<string, any>; // 原始RSS内容
     processedContent?: Record<string, any>; // AX优化后的内容
     imagePath?: string; // MinIO图片路径
+    layer?: string;
+    isFallback?: boolean;
+    strategySnapshot?: Record<string, any>;
   }): Promise<void> {
     const client = await this.pool.connect();
     const transformedMetadata = entry.metadata || {};
@@ -1111,12 +1360,15 @@ export class PostgresDatabase {
       ]);
 
       await client.query(`
-        INSERT INTO news_push_log (job_id, fingerprint, result, raw_content, processed_content, image_path)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO news_push_log (job_id, fingerprint, layer, is_fallback, result, strategy_snapshot, raw_content, processed_content, image_path)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `, [
         entry.jobId || null,
         entry.fingerprint,
+        entry.layer || null,
+        entry.isFallback ?? null,
         entry.result || null,
+        entry.strategySnapshot || null,
         entry.rawContent || null,
         entry.processedContent || null,
         entry.imagePath || null
@@ -1168,7 +1420,10 @@ export class PostgresDatabase {
                log.job_id,
                log.fingerprint,
                log.pushed_at,
+               log.layer,
+               log.is_fallback,
                log.result,
+               log.strategy_snapshot,
                log.raw_content,
                log.processed_content,
                stats.title,
@@ -1188,7 +1443,10 @@ export class PostgresDatabase {
                log.job_id,
                log.fingerprint,
                log.pushed_at,
+               log.layer,
+               log.is_fallback,
                log.result,
+               log.strategy_snapshot,
                log.raw_content,
                log.processed_content,
                stats.title,
@@ -1212,7 +1470,10 @@ export class PostgresDatabase {
           jobId: row.job_id,
           fingerprint: row.fingerprint,
           pushedAt: row.pushed_at?.toISOString?.() || row.pushed_at,
+          layer: row.layer || null,
+          isFallback: row.is_fallback ?? null,
           result: row.result || null,
+          strategySnapshot: row.strategy_snapshot || null,
           title: row.title || undefined,
           link: row.link || undefined,
           source: row.source || undefined,

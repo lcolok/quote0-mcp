@@ -43,6 +43,7 @@ COPY package.json bun.lock ./
 
 # 复制静态资源 (变化频率较低)
 COPY assets/ ./assets/
+COPY config/ ./config/
 
 # 安装依赖 (只有依赖变化时才会重新执行)
 RUN bun install --frozen-lockfile

@@ -18,18 +18,27 @@ import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
 
 // 时间格式化工具函数
-function formatToChinaTime(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleString('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
+function formatToChinaTime(input: Date | string): string {
+  const sourceDate = typeof input === 'string' ? new Date(input) : new Date(input.getTime());
+
+  if (Number.isNaN(sourceDate.getTime())) {
+    return '未知时间';
+  }
+
+  const utcMillis = sourceDate.getTime() + (sourceDate.getTimezoneOffset() * 60_000);
+  const shanghaiMillis = utcMillis + (8 * 60 * 60 * 1_000);
+  const shanghaiDate = new Date(shanghaiMillis);
+
+  const pad = (value: number) => value.toString().padStart(2, '0');
+
+  const year = shanghaiDate.getFullYear();
+  const month = pad(shanghaiDate.getMonth() + 1);
+  const day = pad(shanghaiDate.getDate());
+  const hour = pad(shanghaiDate.getHours());
+  const minute = pad(shanghaiDate.getMinutes());
+  const second = pad(shanghaiDate.getSeconds());
+
+  return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
 }
 
 // RSS源信息
@@ -746,6 +755,7 @@ app.get('/api/scheduler/push-history', async (c) => {
         processed_content,
         image_path,
         pushed_at,
+        pushed_at AT TIME ZONE 'UTC' AS pushed_at_utc,
         job_id,
         annotation_status
       FROM news_push_log
@@ -787,7 +797,8 @@ app.get('/api/scheduler/push-history', async (c) => {
     client.release();
 
     const records = result.rows.map(row => {
-      const pushedAtDate = row.pushed_at ? new Date(row.pushed_at) : null;
+      const pushedAtUtcDate = row.pushed_at_utc ? new Date(row.pushed_at_utc) : null;
+      const pushedAtLocal = pushedAtUtcDate ? formatToChinaTime(pushedAtUtcDate) : null;
       return {
         id: row.id,
         title: row.processed_content?.title || row.raw_content?.title || '未知标题',
@@ -795,9 +806,9 @@ app.get('/api/scheduler/push-history', async (c) => {
         summary: row.processed_content?.message || row.raw_content?.description,
         imagePath: row.image_path,
         publishTime: row.raw_content?.publishTime,
-        pushedAt: pushedAtDate ? formatToChinaTime(pushedAtDate) : null,
-        pushedAtUtc: pushedAtDate ? pushedAtDate.toISOString() : null,
-        pushedAtEpoch: pushedAtDate ? pushedAtDate.getTime() : null,
+        pushedAt: pushedAtLocal,
+        pushedAtUtc: pushedAtUtcDate ? pushedAtUtcDate.toISOString() : null,
+        pushedAtEpoch: pushedAtUtcDate ? pushedAtUtcDate.getTime() : null,
         category: row.raw_content?.category || row.processed_content?.category || 'unknown',
         dataSource: row.raw_content?.source || row.processed_content?.source || row.job_id || 'unknown',
         annotationStatus: row.annotation_status || 'pending',

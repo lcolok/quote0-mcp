@@ -9,6 +9,7 @@ import type {
 import { dataSourceRegistry } from '../react-widgets/core/data-source-modules.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RawDataItem } from '../react-widgets/core/modular-architecture.js';
+import { getSchedulerStrategyConfig, type SchedulerStrategyConfig, type StrategyLayerKey } from './scheduler-strategy-config.js';
 
 type SchedulerIndexType = RequiredSchedulerIndexStrategy['type'];
 
@@ -27,6 +28,7 @@ interface SchedulerJobState {
   shuffledOrder: number[];
   shuffledPointer: number;
   recentFingerprints: string[];
+  failureCount: Record<string, number>;
 }
 
 interface SchedulerJobInstance {
@@ -56,6 +58,31 @@ interface CandidateArticle {
   context: NewsPushContext;
 }
 
+interface LayerAttemptLog {
+  layer: StrategyLayerKey;
+  reason: string;
+  stats?: Record<string, unknown>;
+}
+
+interface LayerSelectionResult {
+  candidate: CandidateArticle;
+  layer: StrategyLayerKey;
+  isFallback: boolean;
+  pushCountBefore: number;
+  coolingElapsedMs?: number;
+  reasons: LayerAttemptLog[];
+  strategySnapshot: Record<string, any>;
+  poolSize: number;
+  totalCandidates: number;
+}
+
+interface CandidateSelectionOutcome {
+  selection: LayerSelectionResult | null;
+  attempts: LayerAttemptLog[];
+  totalCandidates: number;
+  poolSize: number;
+}
+
 const DEFAULT_FETCH_MULTIPLIER = 3;
 const DEFAULT_MIN_FETCH_COUNT = 8;
 
@@ -63,11 +90,13 @@ export class NewsScheduler {
   private jobs: Map<string, SchedulerJobInstance> = new Map();
   private started = false;
   private readonly postgres = getPostgresDatabase();
+  private strategyConfig: SchedulerStrategyConfig = getSchedulerStrategyConfig();
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.strategyConfig = getSchedulerStrategyConfig();
     await this.postgres.initialize();
     await this.reloadJobs();
     this.startHeartbeat();
@@ -259,22 +288,69 @@ export class NewsScheduler {
     }, actualDelay);
   }
 
+
   private async runJob(job: SchedulerJobInstance, overrideIndex?: number): Promise<void> {
     if (job.state.running) {
       console.warn(`⚠️ 定时任务 ${job.config.id} 尚未完成，跳过本次执行`);
       return;
     }
 
+    this.ensureIndexState(job);
     job.state.running = true;
 
+    const runStartedAt = new Date();
+    const sourceInfo = await this.resolveRunnableSource(job, overrideIndex);
+    let currentRssSource = sourceInfo.source;
+    let runHistoryId: number | null = null;
+
     try {
-      const candidate = await this.selectCandidate(job, overrideIndex);
-      if (!candidate) {
-        throw new Error('无法获取有效的新闻候选');
+      runHistoryId = await this.postgres.createSchedulerRunHistory({
+        jobId: job.config.id,
+        runStartedAt,
+        layer: overrideIndex !== undefined ? 'override' : undefined,
+        source: currentRssSource,
+        metadata: {
+          overrideIndex: overrideIndex ?? null,
+          skippedSources: sourceInfo.skipped,
+          strategyVersion: this.strategyConfig.version ?? 'default',
+          intervalMs: job.config.intervalMs
+        }
+      });
+
+      const selectionOutcome = await this.selectCandidate(job, currentRssSource, overrideIndex);
+      const selection = selectionOutcome.selection;
+
+      if (!selection) {
+        const reason = selectionOutcome.attempts.length
+          ? selectionOutcome.attempts.map((item) => `${item.layer}:${item.reason}`).join('|')
+          : 'no_candidate';
+
+        if (runHistoryId) {
+          try {
+            await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+              layer: overrideIndex !== undefined ? 'override' : null,
+              pushStatus: 'skipped',
+              pushReason: reason,
+              runFinishedAt: new Date(),
+              metadata: {
+                selectionAttempts: selectionOutcome.attempts,
+                totalCandidates: selectionOutcome.totalCandidates,
+                poolSize: selectionOutcome.poolSize
+              }
+            });
+          } catch (historyError) {
+            console.warn('⚠️ 更新运行历史失败:', historyError);
+          }
+        }
+
+        this.incrementFailureCount(job, currentRssSource);
+        job.state.consecutiveFailures += 1;
+
+        await this.handlePostRunFailure(job, currentRssSource);
+        return;
       }
 
-      // 获取当前使用的RSS源（支持多源轮换）
-      const currentRssSource = this.getCurrentRssSource(job);
+      const candidate = selection.candidate;
 
       const request: NewsProcessRequest = {
         category: job.config.category,
@@ -287,15 +363,14 @@ export class NewsScheduler {
         context: candidate.context
       };
 
-      console.log(`🕒 定时任务 ${job.config.id} 准备推送 source=${currentRssSource} fingerprint=${candidate.fingerprint} index=${candidate.index}`);
+      console.log(`🕒 定时任务 ${job.config.id} 准备推送 layer=${selection.layer} source=${currentRssSource} fingerprint=${candidate.fingerprint} index=${candidate.index}`);
 
-      // 直接处理新闻（device renderer 现在会返回文本数据）
-      let processedContent: Record<string, any> | undefined = undefined;
-
+      const processStart = Date.now();
       const result = await processNews(request);
-      console.log(`✅ 定时任务 ${job.config.id} 成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
+      const processingDurationMs = Date.now() - processStart;
 
-      // 提取原始RSS内容（包含完整正文）
+      console.log(`✅ 定时任务 ${job.config.id} 推送成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
+
       const rawContent = {
         title: candidate.context.title,
         link: candidate.context.link,
@@ -303,12 +378,11 @@ export class NewsScheduler {
         source: candidate.context.source,
         category: candidate.context.category || job.config.category,
         fingerprint: candidate.fingerprint,
-        content: candidate.context.content,  // 原始RSS正文内容
-        description: candidate.context.description  // RSS的description字段
+        content: candidate.context.content,
+        description: candidate.context.description
       };
 
-      // 从device renderer的返回结果中提取文本数据
-      // device renderer现在会同时返回图片和文本数据，确保一致性
+      let processedContent: Record<string, any> | undefined;
       if (result.result && typeof result.result === 'object' && !Buffer.isBuffer(result.result)) {
         processedContent = {
           title: (result.result as any).title || candidate.context.title,
@@ -320,18 +394,14 @@ export class NewsScheduler {
           category: (result.result as any).category || candidate.context.category || job.config.category,
           publishTime: (result.result as any).publishTime || candidate.context.publishTime
         };
-        console.log('✅ 从渲染结果中提取文本数据，确保与图片内容一致');
       }
 
-      // 提取图片路径（如果是设备推送）
-      let imagePath: string | undefined = undefined;
+      let imagePath: string | undefined;
       if (result.result && typeof result.result === 'object' && 'localImagePath' in result.result) {
         imagePath = (result.result as any).localImagePath;
-        console.log(`✅ 提取图片路径: ${imagePath}`);
-      } else {
-        console.log(`⚠️ 未找到localImagePath，result结构:`, JSON.stringify(result.result, null, 2));
-        console.log(`result对象keys:`, result.result ? Object.keys(result.result) : 'null');
       }
+
+      const pushTime = new Date();
 
       await this.postgres.recordPushResult({
         jobId: job.config.id,
@@ -344,262 +414,549 @@ export class NewsScheduler {
           publishTime: candidate.context.publishTime,
           index: candidate.index,
           rssSource: currentRssSource,
-          category: candidate.context.category || job.config.category
+          category: candidate.context.category || job.config.category,
+          layer: selection.layer,
+          isFallback: selection.isFallback
         },
         result: {
           workflow: result.workflow,
           cache: result.cacheSource
         },
         rawContent,
-        processedContent: processedContent || undefined,
-        imagePath
+        processedContent,
+        imagePath,
+        layer: selection.layer,
+        isFallback: selection.isFallback,
+        strategySnapshot: selection.strategySnapshot
       });
 
-      // 轮换到下一个RSS源（多源模式）
-      await this.rotateRssSource(job);
+      if (runHistoryId) {
+        try {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            layer: selection.layer,
+            candidateId: candidate.index,
+            candidateFingerprint: candidate.fingerprint,
+            candidatePublishTime: candidate.context.publishTime ? new Date(candidate.context.publishTime) : null,
+            candidateProcessTime: processingDurationMs ? new Date(pushTime.getTime() - processingDurationMs) : null,
+            pushTime,
+            pushStatus: 'success',
+            pushReason: 'selected',
+            pushCountBefore: selection.pushCountBefore,
+            pushCountAfter: selection.pushCountBefore + 1,
+            coolingElapsedMs: selection.coolingElapsedMs ?? null,
+            metadata: {
+              selectionAttempts: selection.reasons,
+              strategySnapshot: selection.strategySnapshot,
+              processingDurationMs,
+              totalCandidates: selection.totalCandidates,
+              poolSize: selection.poolSize
+            },
+            runFinishedAt: new Date()
+          });
+        } catch (historyError) {
+          console.warn('⚠️ 更新运行历史失败:', historyError);
+        }
+      }
 
+      this.resetFailureCount(job, currentRssSource);
       job.state.consecutiveFailures = 0;
 
-      // 保存状态到数据库（持久化支持）
+      this.recordRecentFingerprint(job, candidate.fingerprint, this.strategyConfig.recentFingerprintGlobalLimit);
+      this.updateIndexState(job, candidate.index, selection.poolSize);
+
+      await this.rotateRssSource(job);
+
       const nextRunAt = new Date(Date.now() + job.config.intervalMs);
-      await this.postgres.saveSchedulerState(job.config.id, {
-        nextIndex: job.state.nextIndex,
-        lastIndex: job.state.lastIndex,
-        shuffledOrder: job.state.shuffledOrder,
-        shuffledPointer: job.state.shuffledPointer,
-        consecutiveFailures: job.state.consecutiveFailures,
-        currentSourceIndex: job.state.currentSourceIndex,
-        dynamicPoolSize: job.state.dynamicPoolSize,
-        recentFingerprints: job.state.recentFingerprints.slice(0, 20)
-      }, nextRunAt);
+      await this.persistSchedulerState(job, nextRunAt);
+
       console.log(`💾 已保存调度器状态: ${job.config.id}, 下次运行: ${nextRunAt.toISOString()}`);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`❌ 定时任务 ${job.config.id} 执行失败: ${message}`, error);
+
+      this.incrementFailureCount(job, currentRssSource);
       job.state.consecutiveFailures += 1;
-      console.error(`❌ 定时任务 ${job.config.id} 执行失败 (连续失败 ${job.state.consecutiveFailures} 次):`, error);
 
-      // 连续失败3次后，尝试轮换RSS源（多源模式）
-      if (job.state.consecutiveFailures >= 3) {
-        console.log(`⚠️ 连续失败${job.state.consecutiveFailures}次，尝试轮换RSS源...`);
-        await this.rotateRssSource(job);
-        job.state.consecutiveFailures = 0; // 重置失败计数
+      if (runHistoryId) {
+        try {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'failed',
+            pushReason: message,
+            runFinishedAt: new Date(),
+            metadata: {
+              error: message,
+              failureCount: this.getFailureCount(job, currentRssSource),
+              consecutiveFailures: job.state.consecutiveFailures
+            }
+          });
+        } catch (historyError) {
+          console.warn('⚠️ 更新运行历史失败:', historyError);
+        }
       }
 
-      const effectivePoolSize = this.getEffectivePoolSize(job);
-      if (job.state.consecutiveFailures >= effectivePoolSize) {
-        this.resetIndexState(job);
-      }
+      await this.handlePostRunFailure(job, currentRssSource);
     } finally {
       job.state.running = false;
     }
   }
 
-  private async selectCandidate(job: SchedulerJobInstance, overrideIndex?: number): Promise<CandidateArticle | null> {
+  private async selectCandidate(job: SchedulerJobInstance, currentRssSource: string, overrideIndex?: number): Promise<CandidateSelectionOutcome> {
     this.ensureIndexState(job);
 
     if (typeof overrideIndex === 'number') {
       const context = this.buildContextFromIndex(job.config, overrideIndex);
-      this.updateIndexState(job, overrideIndex);
-      return {
+      const candidate: CandidateArticle = {
         index: overrideIndex,
         fingerprint: context.fingerprint!,
         publishTime: context.publishTime,
         pushCount: 0,
+        lastPushedAt: undefined,
         context
+      };
+      const reasons: LayerAttemptLog[] = [{ layer: 'override', reason: 'manual_override' }];
+      const poolSize = this.getEffectivePoolSize(job);
+      const snapshot = this.buildStrategySnapshot(job, 'override', currentRssSource, reasons, {
+        overrideIndex
+      });
+      return {
+        selection: {
+          candidate,
+          layer: 'override',
+          isFallback: false,
+          pushCountBefore: 0,
+          coolingElapsedMs: undefined,
+          reasons,
+          strategySnapshot: snapshot,
+          poolSize,
+          totalCandidates: 1
+        },
+        attempts: reasons,
+        totalCandidates: 1,
+        poolSize
       };
     }
 
+    const attempts: LayerAttemptLog[] = [];
     const dataSourceModule: any = dataSourceRegistry.get(job.config.dataSource);
     if (!dataSourceModule || typeof dataSourceModule.fetchRawData !== 'function') {
-      console.warn(`⚠️ 数据源 ${job.config.dataSource} 不支持fetchRawData，使用索引备选`);
-      return await this.fallbackCandidate(job);
+      attempts.push({ layer: 'strict', reason: 'data_source_missing' });
+      return {
+        selection: null,
+        attempts,
+        totalCandidates: 0,
+        poolSize: this.getEffectivePoolSize(job)
+      };
     }
 
-    // 获取当前RSS源（支持多源轮换）
-    const currentRssSource = this.getCurrentRssSource(job);
-
-    // 支持动态poolSize：如果poolSize=-1，则获取RSS源的全部条目
     const configPoolSize = job.config.indexStrategy.poolSize;
     const fetchCount = configPoolSize === -1
-      ? 100 // 动态模式：获取足够多的条目（最多100条）
+      ? 100
       : Math.max(configPoolSize * DEFAULT_FETCH_MULTIPLIER, DEFAULT_MIN_FETCH_COUNT);
 
+    let rawItems: RawDataItem[];
     try {
-      const rawItems: RawDataItem[] = await dataSourceModule.fetchRawData({
+      rawItems = await dataSourceModule.fetchRawData({
         category: job.config.category,
         source: currentRssSource,
         startIndex: 0,
         count: fetchCount
       });
+    } catch (error) {
+      attempts.push({
+        layer: 'strict',
+        reason: 'fetch_error',
+        stats: {
+          message: error instanceof Error ? error.message : String(error)
+        }
+      });
+      return {
+        selection: null,
+        attempts,
+        totalCandidates: 0,
+        poolSize: this.getEffectivePoolSize(job)
+      };
+    }
 
-      if (!rawItems || rawItems.length === 0) {
-        return await this.fallbackCandidate(job);
-      }
+    if (!rawItems || rawItems.length === 0) {
+      attempts.push({ layer: 'strict', reason: 'empty_feed' });
+      return {
+        selection: null,
+        attempts,
+        totalCandidates: 0,
+        poolSize: 0
+      };
+    }
 
-      // 动态poolSize模式：缓存实际获取到的条目数量
-      if (configPoolSize === -1) {
+    if (configPoolSize === -1) {
       job.state.dynamicPoolSize = rawItems.length;
       console.log(`📊 动态poolSize已更新: ${rawItems.length} (来源: ${currentRssSource})`);
     }
 
-      this.prepareIndexSequence(job, rawItems);
+    this.prepareIndexSequence(job, rawItems);
 
-      const candidates = rawItems.map((item, idx) => {
-        const originalIndex = item.metadata?.originalIndex ?? item.metadata?.index ?? idx;
-        const fingerprint = computeNewsFingerprint({
-          title: item.title,
-          link: item.link,
-          publishTime: item.publishTime,
-          source: item.source,
-          category: item.category || job.config.category,
-          fallback: `${job.config.dataSource}:${job.config.rssSource}:${originalIndex}`
-        });
-        const context: NewsPushContext = {
-          title: item.title,
-          link: item.link,
-          publishTime: item.publishTime,
-          source: item.source,
-          category: item.category || job.config.category,
-          fingerprint,
-          rawIndex: originalIndex,
-          content: item.content,  // 保存原始RSS正文内容
-          description: item.metadata?.description  // 保存RSS的description字段（如果有）
-        };
-        return { index: originalIndex, fingerprint, publishTime: item.publishTime, context };
+    const candidates = rawItems.map((item, idx) => {
+      const originalIndex = item.metadata?.originalIndex ?? item.metadata?.index ?? idx;
+      const fingerprint = computeNewsFingerprint({
+        title: item.title,
+        link: item.link,
+        publishTime: item.publishTime,
+        source: item.source,
+        category: item.category || job.config.category,
+        fallback: `${job.config.dataSource}:${job.config.rssSource}:${originalIndex}`
       });
+      const context: NewsPushContext = {
+        title: item.title,
+        link: item.link,
+        publishTime: item.publishTime,
+        source: item.source,
+        category: item.category || job.config.category,
+        fingerprint,
+        rawIndex: originalIndex,
+        content: item.content,
+        description: item.metadata?.description
+      };
+      return { index: originalIndex, fingerprint, publishTime: item.publishTime, context };
+    });
 
-      const stats = await this.postgres.getPushStatsForFingerprints(candidates.map((c) => c.fingerprint));
+    const stats = await this.postgres.getPushStatsForFingerprints(candidates.map((c) => c.fingerprint));
 
-      const scored: CandidateArticle[] = candidates.map((candidate) => {
-        const stat = stats[candidate.fingerprint];
-        const pushCount = stat?.pushCount ?? 0;
-        const lastPushedAt = stat?.lastPushedAt ?? null;
+    const scored: CandidateArticle[] = candidates.map((candidate) => {
+      const stat = stats[candidate.fingerprint];
+      const pushCount = stat?.pushCount ?? 0;
+      const lastPushedAt = stat?.lastPushedAt ?? null;
+      return {
+        index: candidate.index,
+        fingerprint: candidate.fingerprint,
+        publishTime: candidate.publishTime,
+        pushCount,
+        lastPushedAt,
+        context: candidate.context
+      };
+    });
+
+    const now = Date.now();
+    const totalCandidates = scored.length;
+    const poolSize = rawItems.length;
+
+    const strictFilter = this.filterCandidatesForLayer('strict', scored, job, now);
+    attempts.push({ layer: 'strict', reason: strictFilter.filtered.length ? 'pool_available' : 'pool_empty', stats: strictFilter.stats });
+    if (strictFilter.filtered.length) {
+      const candidate = this.pickCandidateByOrder(job, strictFilter.filtered);
+      if (candidate) {
+        const selectionLog: LayerAttemptLog = { layer: 'strict', reason: 'selected', stats: { index: candidate.index } };
+        const reasons: LayerAttemptLog[] = [...attempts, selectionLog];
+        const snapshot = this.buildStrategySnapshot(job, 'strict', currentRssSource, reasons, {
+          totalCandidates,
+          filterStats: strictFilter.stats
+        });
         return {
-          index: candidate.index,
-          fingerprint: candidate.fingerprint,
-          publishTime: candidate.publishTime,
-          pushCount,
-          lastPushedAt,
-          context: candidate.context
+          selection: {
+            candidate,
+            layer: 'strict',
+            isFallback: false,
+            pushCountBefore: candidate.pushCount,
+            coolingElapsedMs: candidate.lastPushedAt ? now - new Date(candidate.lastPushedAt).getTime() : undefined,
+            reasons,
+            strategySnapshot: snapshot,
+            poolSize,
+            totalCandidates
+          },
+          attempts: reasons,
+          totalCandidates,
+          poolSize
         };
-      });
-
-      // fair-rotation 策略：应用冷却过滤逻辑
-      const strategy = job.config.indexStrategy;
-      let filtered = scored;
-
-      const cooldownHours = strategy.cooldownHours;
-      const maxPushCount = strategy.maxPushCount;
-      const now = Date.now();
-      const cooldownMs = cooldownHours * 60 * 60 * 1000;
-
-      console.log(`🔍 应用冷却过滤: 冷却时间=${cooldownHours}小时, 最大推送次数=${maxPushCount}`);
-
-      // 过滤1: 时间冷却 + 推送次数上限
-      const strictFiltered = scored.filter(c => {
-        if (c.pushCount >= maxPushCount) return false;
-        if (!c.lastPushedAt) return true;
-        const timeSince = now - new Date(c.lastPushedAt).getTime();
-        return timeSince >= cooldownMs;
-      });
-
-      if (strictFiltered.length > 0) {
-        filtered = strictFiltered;
-        console.log(`✅ 严格过滤后剩余 ${filtered.length} 条候选新闻`);
-      } else {
-        // 降级1: 只使用时间冷却，忽略推送次数限制
-        const cooldownFiltered = scored.filter(c => {
-          if (!c.lastPushedAt) return true;
-          const timeSince = now - new Date(c.lastPushedAt).getTime();
-          return timeSince >= cooldownMs;
-        });
-
-        if (cooldownFiltered.length > 0) {
-          filtered = cooldownFiltered;
-          console.log(`⚠️ 降级过滤（忽略次数限制）: 剩余 ${filtered.length} 条候选`);
-        } else {
-          // 降级2: 减半冷却时间
-          const relaxedFiltered = scored.filter(c => {
-            if (!c.lastPushedAt) return true;
-            const timeSince = now - new Date(c.lastPushedAt).getTime();
-            return timeSince >= cooldownMs / 2;
-          });
-
-          if (relaxedFiltered.length > 0) {
-            filtered = relaxedFiltered;
-            console.log(`⚠️ 降级过滤（减半冷却时间）: 剩余 ${filtered.length} 条候选`);
-          } else {
-            // 降级3: 使用全部候选，但会在后面触发RSS源切换
-            console.log(`⚠️ 所有过滤失败，使用全部候选，建议切换RSS源`);
-          }
-        }
       }
-
-      // 使用智能排序：推送次数少的优先，其次按时间新旧，最后按索引
-      const filteredMap = new Map<number, CandidateArticle>();
-      for (const item of filtered) {
-        filteredMap.set(item.index, item);
-      }
-
-      const order = job.state.shuffledOrder;
-      const orderLength = order.length;
-
-      if (orderLength === 0) {
-        throw new Error('无法构建候选索引顺序');
-      }
-
-      let chosen: CandidateArticle | null = null;
-      const recentSet = new Set(job.state.recentFingerprints || []);
-      for (let attempt = 0; attempt < orderLength; attempt++) {
-        const pointerIndex = (job.state.shuffledPointer + attempt) % orderLength;
-        const candidateIndex = order[pointerIndex];
-        const candidate = filteredMap.get(candidateIndex);
-        if (!candidate) {
-          continue;
-        }
-
-        if (recentSet.has(candidate.fingerprint)) {
-          continue;
-        }
-
-        if (candidate.pushCount >= maxPushCount) {
-          continue;
-        }
-
-        chosen = candidate;
-        job.state.shuffledPointer = (pointerIndex + 1) % orderLength;
-        break;
-      }
-
-      if (!chosen) {
-        console.log(`⛔ 所有候选pushCount都超过${maxPushCount}或不满足条件,强制切换RSS源避免重复`);
-        await this.rotateRssSource(job);
-        throw new Error(`当前RSS源无可用候选,已切换到下一个源`);
-      }
-
-      const title = chosen.context.title?.substring(0, 30) || 'N/A';
-      console.log(`🎯 智能选择: 推送${chosen.pushCount}次 "${title}" (index=${chosen.index})`);
-
-      if (!chosen.context.fingerprint) {
-        chosen.context.fingerprint = chosen.fingerprint;
-      }
-
-      this.updateIndexState(job, chosen.index, rawItems.length);
-      this.recordRecentFingerprint(job, chosen.fingerprint);
-      return chosen;
-    } catch (error) {
-      console.warn(`⚠️ 获取候选新闻失败，使用索引备选: ${error instanceof Error ? error.message : error}`);
-      return await this.fallbackCandidate(job);
+      attempts.push({ layer: 'strict', reason: 'order_exhausted', stats: { filtered: strictFilter.stats.passed } });
     }
+
+    const relaxedFilter = this.filterCandidatesForLayer('relaxed', scored, job, now);
+    attempts.push({ layer: 'relaxed', reason: relaxedFilter.filtered.length ? 'pool_available' : 'pool_empty', stats: relaxedFilter.stats });
+    if (relaxedFilter.filtered.length) {
+      const candidate = this.pickCandidateByOrder(job, relaxedFilter.filtered);
+      if (candidate) {
+        const selectionLog: LayerAttemptLog = { layer: 'relaxed', reason: 'selected', stats: { index: candidate.index } };
+        const reasons: LayerAttemptLog[] = [...attempts, selectionLog];
+        const snapshot = this.buildStrategySnapshot(job, 'relaxed', currentRssSource, reasons, {
+          totalCandidates,
+          filterStats: relaxedFilter.stats
+        });
+        return {
+          selection: {
+            candidate,
+            layer: 'relaxed',
+            isFallback: false,
+            pushCountBefore: candidate.pushCount,
+            coolingElapsedMs: candidate.lastPushedAt ? now - new Date(candidate.lastPushedAt).getTime() : undefined,
+            reasons,
+            strategySnapshot: snapshot,
+            poolSize,
+            totalCandidates
+          },
+          attempts: reasons,
+          totalCandidates,
+          poolSize
+        };
+      }
+      attempts.push({ layer: 'relaxed', reason: 'order_exhausted', stats: { filtered: relaxedFilter.stats.passed } });
+    }
+
+    const fallbackFilter = this.filterCandidatesForFallback(scored, job);
+    attempts.push({ layer: 'fallback', reason: fallbackFilter.filtered.length ? 'pool_available' : 'pool_empty', stats: fallbackFilter.stats });
+    if (fallbackFilter.filtered.length) {
+      const candidate = this.pickCandidateByOrder(job, fallbackFilter.filtered);
+      if (candidate) {
+        const selectionLog: LayerAttemptLog = { layer: 'fallback', reason: 'selected', stats: { index: candidate.index } };
+        const reasons: LayerAttemptLog[] = [...attempts, selectionLog];
+        const snapshot = this.buildStrategySnapshot(job, 'fallback', currentRssSource, reasons, {
+          totalCandidates,
+          filterStats: fallbackFilter.stats
+        });
+        return {
+          selection: {
+            candidate,
+            layer: 'fallback',
+            isFallback: true,
+            pushCountBefore: candidate.pushCount,
+            coolingElapsedMs: candidate.lastPushedAt ? now - new Date(candidate.lastPushedAt).getTime() : undefined,
+            reasons,
+            strategySnapshot: snapshot,
+            poolSize,
+            totalCandidates
+          },
+          attempts: reasons,
+          totalCandidates,
+          poolSize
+        };
+      }
+      attempts.push({ layer: 'fallback', reason: 'order_exhausted', stats: { filtered: fallbackFilter.stats.passed } });
+    }
+
+    return {
+      selection: null,
+      attempts,
+      totalCandidates,
+      poolSize
+    };
   }
 
-  private async fallbackCandidate(job: SchedulerJobInstance): Promise<CandidateArticle | null> {
-    console.warn('⚠️ 回退策略：当前源无合适候选，切换到下一个RSS源');
-    try {
-      await this.rotateRssSource(job);
-    } catch (error) {
-      console.warn('⚠️ 回退轮换RSS源失败:', error);
+  private async resolveRunnableSource(job: SchedulerJobInstance, overrideIndex?: number): Promise<{ source: string; skipped: Array<{ source: string; failureCount: number }> }> {
+    const initialSource = this.getCurrentRssSource(job);
+    if (overrideIndex !== undefined) {
+      return { source: initialSource, skipped: [] };
     }
-    return null;
+
+    const threshold = this.strategyConfig.sourceFailureSkipThreshold ?? 0;
+    if (threshold <= 0) {
+      return { source: initialSource, skipped: [] };
+    }
+
+    const enabledSources = this.getEnabledRssSources(job);
+    if (enabledSources.length <= 1) {
+      return { source: initialSource, skipped: [] };
+    }
+
+    const skipped: Array<{ source: string; failureCount: number }> = [];
+    let currentSource = initialSource;
+
+    for (let attempt = 0; attempt < enabledSources.length; attempt++) {
+      const failureCount = this.getFailureCount(job, currentSource);
+      if (failureCount < threshold) {
+        return { source: currentSource, skipped };
+      }
+
+      skipped.push({ source: currentSource, failureCount });
+      console.warn(`⚠️ 源 ${currentSource} 因连续失败 ${failureCount} 次，将尝试跳过`);
+      await this.rotateRssSource(job);
+      currentSource = this.getCurrentRssSource(job);
+    }
+
+    return { source: currentSource, skipped };
+  }
+
+  private filterCandidatesForLayer(layer: Extract<StrategyLayerKey, 'strict' | 'relaxed'>, candidates: CandidateArticle[], job: SchedulerJobInstance, now: number): { filtered: CandidateArticle[]; stats: Record<string, number> } {
+    const stats = {
+      total: candidates.length,
+      passed: 0,
+      blockedByCooldown: 0,
+      blockedByPushCount: 0,
+      blockedByRecent: 0
+    };
+
+    const config = layer === 'strict'
+      ? {
+          cooldownMs: this.strategyConfig.cooldownHoursStrict * 60 * 60 * 1000,
+          maxPushCount: this.strategyConfig.maxPushCountStrict,
+          recentLimit: this.strategyConfig.recentFingerprintsLimitStrict
+        }
+      : {
+          cooldownMs: this.strategyConfig.cooldownHoursRelaxed * 60 * 60 * 1000,
+          maxPushCount: this.strategyConfig.maxPushCountRelaxed,
+          recentLimit: this.strategyConfig.recentFingerprintsLimitRelaxed
+        };
+
+    const filtered: CandidateArticle[] = [];
+    for (const candidate of candidates) {
+      if (config.maxPushCount !== undefined && candidate.pushCount >= config.maxPushCount) {
+        stats.blockedByPushCount += 1;
+        continue;
+      }
+      if (config.cooldownMs !== undefined && candidate.lastPushedAt) {
+        const elapsed = now - new Date(candidate.lastPushedAt).getTime();
+        if (elapsed < config.cooldownMs) {
+          stats.blockedByCooldown += 1;
+          continue;
+        }
+      }
+      if (this.isFingerprintRecent(job, candidate.fingerprint, config.recentLimit)) {
+        stats.blockedByRecent += 1;
+        continue;
+      }
+      filtered.push(candidate);
+    }
+
+    stats.passed = filtered.length;
+    return { filtered, stats };
+  }
+
+  private filterCandidatesForFallback(candidates: CandidateArticle[], job: SchedulerJobInstance): { filtered: CandidateArticle[]; stats: Record<string, number> } {
+    const stats = {
+      total: candidates.length,
+      passed: 0,
+      blockedByRecent: 0
+    };
+
+    const recentLimit = Math.max(0, this.strategyConfig.fallbackRepeatLimit ?? 0);
+    const sorted = [...candidates].sort((a, b) => {
+      if (a.pushCount !== b.pushCount) {
+        return a.pushCount - b.pushCount;
+      }
+      const aTime = a.lastPushedAt ? new Date(a.lastPushedAt).getTime() : 0;
+      const bTime = b.lastPushedAt ? new Date(b.lastPushedAt).getTime() : 0;
+      if (aTime !== bTime) {
+        return aTime - bTime;
+      }
+      return a.index - b.index;
+    });
+
+    const filtered: CandidateArticle[] = [];
+    for (const candidate of sorted) {
+      if (this.isFingerprintRecent(job, candidate.fingerprint, recentLimit)) {
+        stats.blockedByRecent += 1;
+        continue;
+      }
+      filtered.push(candidate);
+    }
+
+    stats.passed = filtered.length;
+    return { filtered, stats };
+  }
+
+  private pickCandidateByOrder(job: SchedulerJobInstance, candidates: CandidateArticle[]): CandidateArticle | null {
+    if (!candidates.length) {
+      return null;
+    }
+    const candidateMap = new Map(candidates.map((item) => [item.index, item]));
+    const order = job.state.shuffledOrder;
+
+    if (order.length > 0) {
+      for (let attempt = 0; attempt < order.length; attempt++) {
+        const pointerIndex = (job.state.shuffledPointer + attempt) % order.length;
+        const candidateIndex = order[pointerIndex];
+        const candidate = candidateMap.get(candidateIndex);
+        if (candidate) {
+          return candidate;
+        }
+      }
+    }
+
+    return candidates[0] ?? null;
+  }
+
+  private buildStrategySnapshot(job: SchedulerJobInstance, layer: StrategyLayerKey, source: string, reasons: LayerAttemptLog[], extra: Record<string, any> = {}): Record<string, any> {
+    const snapshotSize = this.strategyConfig.recentFingerprintSnapshotSize ?? 15;
+    return {
+      layer,
+      source,
+      strategy: this.strategyConfig,
+      state: {
+        nextIndex: job.state.nextIndex,
+        lastIndex: job.state.lastIndex,
+        currentSourceIndex: job.state.currentSourceIndex,
+        recentFingerprints: job.state.recentFingerprints.slice(0, snapshotSize),
+        failureCount: job.state.failureCount,
+        consecutiveFailures: job.state.consecutiveFailures,
+        shuffledPointer: job.state.shuffledPointer
+      },
+      reasons,
+      extra
+    };
+  }
+
+  private incrementFailureCount(job: SchedulerJobInstance, source: string | undefined): void {
+    if (!source) {
+      return;
+    }
+    this.ensureIndexState(job);
+    job.state.failureCount[source] = this.getFailureCount(job, source) + 1;
+  }
+
+  private resetFailureCount(job: SchedulerJobInstance, source: string | undefined): void {
+    if (!source) {
+      return;
+    }
+    this.ensureIndexState(job);
+    job.state.failureCount[source] = 0;
+  }
+
+  private getFailureCount(job: SchedulerJobInstance, source: string | undefined): number {
+    if (!source) {
+      return 0;
+    }
+    this.ensureIndexState(job);
+    return job.state.failureCount[source] ?? 0;
+  }
+
+  private isFingerprintRecent(job: SchedulerJobInstance, fingerprint: string | undefined, limit: number | undefined): boolean {
+    if (!fingerprint || !limit || limit <= 0) {
+      return false;
+    }
+    this.ensureIndexState(job);
+    return job.state.recentFingerprints.slice(0, limit).includes(fingerprint);
+  }
+
+  private async persistSchedulerState(job: SchedulerJobInstance, nextRunAt?: Date): Promise<void> {
+    const limit = this.strategyConfig.recentFingerprintGlobalLimit;
+    if (limit > 0 && job.state.recentFingerprints.length > limit) {
+      job.state.recentFingerprints = job.state.recentFingerprints.slice(0, limit);
+    }
+    await this.postgres.saveSchedulerState(job.config.id, {
+      nextIndex: job.state.nextIndex,
+      lastIndex: job.state.lastIndex,
+      shuffledOrder: job.state.shuffledOrder,
+      shuffledPointer: job.state.shuffledPointer,
+      consecutiveFailures: job.state.consecutiveFailures,
+      currentSourceIndex: job.state.currentSourceIndex,
+      dynamicPoolSize: job.state.dynamicPoolSize,
+      recentFingerprints: job.state.recentFingerprints,
+      failureCount: job.state.failureCount
+    }, nextRunAt);
+  }
+
+  private async handlePostRunFailure(job: SchedulerJobInstance, currentRssSource: string): Promise<void> {
+    const threshold = this.strategyConfig.sourceFailureSkipThreshold ?? 0;
+    const failureCount = this.getFailureCount(job, currentRssSource);
+    if (threshold > 0 && failureCount >= threshold) {
+      console.warn(`⚠️ 源 ${currentRssSource} 连续失败 ${failureCount} 次，将轮换到下一个源`);
+      await this.rotateRssSource(job);
+    }
+
+    const effectivePoolSize = this.getEffectivePoolSize(job);
+    if (job.state.consecutiveFailures >= effectivePoolSize) {
+      this.resetIndexState(job);
+    }
+
+    const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+    await this.persistSchedulerState(job, nextRunAt);
   }
 
   private buildContextFromIndex(job: NormalizedSchedulerJob, index: number): NewsPushContext {
@@ -721,6 +1078,9 @@ export class NewsScheduler {
     if (!Array.isArray(job.state.recentFingerprints)) {
       job.state.recentFingerprints = [];
     }
+    if (!job.state.failureCount || typeof job.state.failureCount !== 'object') {
+      job.state.failureCount = {};
+    }
   }
 
   private prepareIndexSequence(job: SchedulerJobInstance, rawItems: RawDataItem[]): void {
@@ -804,7 +1164,7 @@ export class NewsScheduler {
     return normalized;
   }
 
-  private recordRecentFingerprint(job: SchedulerJobInstance, fingerprint: string | undefined, limit = 20): void {
+  private recordRecentFingerprint(job: SchedulerJobInstance, fingerprint: string | undefined, limit: number): void {
     if (!fingerprint) {
       return;
     }
@@ -815,7 +1175,7 @@ export class NewsScheduler {
       list.splice(existingIndex, 1);
     }
     list.unshift(fingerprint);
-    if (list.length > limit) {
+    if (limit > 0 && list.length > limit) {
       list.length = limit;
     }
   }
@@ -840,7 +1200,8 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
     lastIndex: null,
     shuffledOrder: [],
     shuffledPointer: 0,
-    recentFingerprints: []
+    recentFingerprints: [],
+    failureCount: {}
   };
 
   const mergedState = {
@@ -863,6 +1224,9 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
   }
   if (!Array.isArray(mergedState.recentFingerprints)) {
     mergedState.recentFingerprints = [];
+  }
+  if (!mergedState.failureCount || typeof mergedState.failureCount !== 'object') {
+    mergedState.failureCount = {};
   }
 
   return {
