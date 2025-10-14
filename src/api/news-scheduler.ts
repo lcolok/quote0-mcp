@@ -9,6 +9,50 @@ import type {
 import { dataSourceRegistry } from '../react-widgets/core/data-source-modules.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RawDataItem } from '../react-widgets/core/modular-architecture.js';
+interface RetryOptions {
+  retries?: number;
+  initialDelayMs?: number;
+  backoffFactor?: number;
+  maxDelayMs?: number;
+  onRetry?: (error: unknown, attempt: number) => void;
+}
+
+async function retryWithBackoff<T>(operation: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
+  const {
+    retries = 5,
+    initialDelayMs = 500,
+    backoffFactor = 2,
+    maxDelayMs = 10_000,
+    onRetry,
+  } = options;
+
+  let attempt = 0;
+  let delay = initialDelayMs;
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      attempt += 1;
+      if (attempt > retries) {
+        throw error;
+      }
+
+      if (onRetry) {
+        try {
+          onRetry(error, attempt);
+        } catch {
+          // ignore logging errors
+        }
+      }
+
+      const jitter = Math.random() * delay * 0.2;
+      const waitTime = Math.min(delay + jitter, maxDelayMs);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+      delay = Math.min(delay * backoffFactor, maxDelayMs);
+    }
+  }
+}
 import { getSchedulerStrategyConfig, type SchedulerStrategyConfig, type StrategyLayerKey } from './scheduler-strategy-config.js';
 
 type SchedulerIndexType = RequiredSchedulerIndexStrategy['type'];
@@ -97,8 +141,27 @@ export class NewsScheduler {
     if (this.started) return;
     this.started = true;
     this.strategyConfig = getSchedulerStrategyConfig();
-    await this.postgres.initialize();
-    await this.reloadJobs();
+    await retryWithBackoff(async () => {
+      await this.postgres.initialize();
+    }, {
+      retries: 6,
+      initialDelayMs: 1000,
+      onRetry: (error, attempt) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ PostgreSQL 初始化失败（第 ${attempt} 次重试），等待后台服务就绪...`, message);
+      }
+    });
+
+    await retryWithBackoff(async () => {
+      await this.reloadJobs();
+    }, {
+      retries: 5,
+      initialDelayMs: 1000,
+      onRetry: (error, attempt) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ 重新加载调度任务失败（第 ${attempt} 次重试），等待数据库就绪...`, message);
+      }
+    });
     this.startHeartbeat();
   }
 
