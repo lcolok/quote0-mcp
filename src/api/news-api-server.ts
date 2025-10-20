@@ -98,39 +98,53 @@ app.get('/images/:filename', async (c) => {
 
 // MinIO图片代理 - 将请求转发到MinIO
 app.get('/api/minio-proxy/*', async (c) => {
-  try {
-    // 从请求路径中提取MinIO对象路径
-    const fullPath = c.req.path;
-    const path = fullPath.replace('/api/minio-proxy/', '');
+  // 从请求路径中提取MinIO对象路径
+  const fullPath = c.req.path;
+  const path = fullPath.replace('/api/minio-proxy/', '');
 
-    // 构建MinIO URL
-    const minioUrl = `http://minio:9000/quote0-images/${path}`;
-    console.log(`🔄 MinIO代理请求: ${minioUrl}`);
+  // 构建MinIO URL
+  const minioUrl = `http://minio:9000/quote0-images/${path}`;
+  console.log(`🔄 MinIO代理请求: ${minioUrl}`);
 
-    // 从MinIO获取图片
-    const response = await fetch(minioUrl);
-    console.log(`📡 MinIO响应状态: ${response.status}`);
+  const maxAttempts = 3;
+  let lastError: unknown = null;
 
-    if (!response.ok) {
-      console.error(`❌ MinIO返回错误: ${response.status} ${response.statusText}`);
-      return c.text('Image not found', 404);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(minioUrl);
+      console.log(`📡 MinIO响应状态: ${response.status} (尝试 ${attempt}/${maxAttempts})`);
+
+      if (response.status === 404) {
+        console.warn(`⚠️ MinIO未找到对象: ${minioUrl}`);
+        return c.text('Image not found', 404);
+      }
+
+      if (!response.ok) {
+        lastError = new Error(`MinIO responded with ${response.status} ${response.statusText}`);
+        console.warn(`⚠️ MinIO返回非200: ${minioUrl} -> ${response.status} ${response.statusText}`);
+      } else {
+        const imageBuffer = await response.arrayBuffer();
+        return new Response(imageBuffer, {
+          headers: {
+            'Content-Type': response.headers.get('Content-Type') || 'image/png',
+            'Cache-Control': 'public, max-age=86400',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      }
+    } catch (error) {
+      lastError = error;
+      console.error(`❌ MinIO请求异常 (尝试 ${attempt}/${maxAttempts}):`, error);
     }
 
-    // 获取图片数据
-    const imageBuffer = await response.arrayBuffer();
-
-    // 转发响应
-    return new Response(imageBuffer, {
-      headers: {
-        'Content-Type': response.headers.get('Content-Type') || 'image/png',
-        'Cache-Control': 'public, max-age=86400',
-        'Access-Control-Allow-Origin': '*'  // 允许CORS
-      }
-    });
-  } catch (error) {
-    console.error('❌ MinIO图片代理失败:', error);
-    return c.text('Internal server error', 500);
+    if (attempt < maxAttempts) {
+      const backoff = attempt * 1000;
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
   }
+
+  console.error('❌ MinIO图片代理失败，已达到最大重试次数:', lastError);
+  return c.text('Internal server error', 500);
 });
 
 // 集成标注API

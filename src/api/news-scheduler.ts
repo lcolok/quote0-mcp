@@ -1,5 +1,6 @@
 import { processNews, computeNewsFingerprint } from './news-processing-service.js';
 import type {
+  FullNewsProcessingResult,
   NewsProcessRequest,
   NewsPushContext,
   NewsSchedulerJobConfig,
@@ -429,7 +430,51 @@ export class NewsScheduler {
       console.log(`🕒 定时任务 ${job.config.id} 准备推送 layer=${selection.layer} source=${currentRssSource} fingerprint=${candidate.fingerprint} index=${candidate.index}`);
 
       const processStart = Date.now();
-      const result = await processNews(request);
+      let result: FullNewsProcessingResult;
+      try {
+        result = await processNews(request);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`❌ 首次新闻处理失败: ${message}`);
+
+        if (job.config.renderer === 'device') {
+          console.warn('⚠️ 尝试回退至JSON渲染以避免阻塞推送流水');
+          const fallbackRequest: NewsProcessRequest = {
+            ...request,
+            renderer: 'json',
+            options: {
+              ...(request.options || {}),
+              force: false,
+            },
+          };
+
+          try {
+            const fallbackResult = await processNews(fallbackRequest);
+            const fallbackBase =
+              fallbackResult.result && typeof fallbackResult.result === 'object'
+                ? fallbackResult.result
+                : { value: fallbackResult.result };
+            result = {
+              ...fallbackResult,
+              params: {
+                ...fallbackResult.params,
+                renderer: 'json',
+              },
+              result: {
+                ...fallbackBase,
+                deviceResult: `回退文本推送: ${message}`,
+                fallback: true,
+              },
+            };
+            console.warn('⚠️ 已使用文本回退完成当前推送。');
+          } catch (fallbackError) {
+            console.error('❌ 文本回退同样失败:', fallbackError);
+            throw error;
+          }
+        } else {
+          throw error;
+        }
+      }
       const processingDurationMs = Date.now() - processStart;
 
       console.log(`✅ 定时任务 ${job.config.id} 推送成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);

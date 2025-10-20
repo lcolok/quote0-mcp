@@ -30,11 +30,15 @@ const SERVICES: ServiceConfig[] = [
   },
 ];
 
-interface DeployOptions {
+interface ImageBuildOptions {
   containerName: string;
   imageTag: string;
   dockerfile: string;
   contextPath: string;
+}
+
+interface DeployOptions extends ImageBuildOptions {
+  serviceKey: string;
 }
 
 interface ServiceConfig {
@@ -89,7 +93,7 @@ function createTarStream(contextPath: string): tar.Pack {
   });
 }
 
-async function buildDockerImage(docker: Docker, options: DeployOptions): Promise<void> {
+async function buildDockerImage(docker: Docker, options: ImageBuildOptions): Promise<void> {
   console.log(`
 🚢 Building Docker image ${options.imageTag} ...`);
 
@@ -192,14 +196,37 @@ async function recreateContainer(docker: Docker, opts: DeployOptions): Promise<v
     const newContainer = await docker.createContainer(createOptions);
 
     console.log('🚀 Starting container');
-    await newContainer.start();
-
-    console.log('✅ Container recreated successfully');
+    try {
+      await newContainer.start();
+      console.log('✅ Container recreated successfully');
+    } catch (startError: any) {
+      const message = startError instanceof Error ? startError.message : String(startError);
+      if (message.includes('port is already allocated')) {
+        console.warn('⚠️ Port allocation failed while starting container. Falling back to docker compose up.');
+        try {
+          await newContainer.remove({ force: true });
+        } catch (cleanupError) {
+          console.warn('⚠️ Failed to remove temporary container:', cleanupError);
+        }
+        await runCommand('docker', ['compose', 'up', '-d', '--no-deps', '--force-recreate', opts.serviceKey]);
+        console.log(`✅ Container ${opts.containerName} started via docker compose`);
+      } else {
+        try {
+          await newContainer.remove({ force: true });
+        } catch {
+          /* ignore */
+        }
+        throw startError;
+      }
+    }
   } catch (error: any) {
     if (error?.statusCode === 404) {
-      throw new Error(
-        `Container ${opts.containerName} not found. Please run "docker compose up -d news-api" once before using the deployer.`,
+      console.warn(
+        `⚠️ Container ${opts.containerName} not found. Attempting initial startup via docker compose...`,
       );
+      await runCommand('docker', ['compose', 'up', '-d', '--no-build', opts.serviceKey]);
+      console.log(`✅ Container ${opts.containerName} started with docker compose`);
+      return;
     }
     throw error;
   }
@@ -302,6 +329,7 @@ async function main() {
       imageTag,
       dockerfile,
       contextPath,
+      serviceKey: service.key,
     });
   }
 

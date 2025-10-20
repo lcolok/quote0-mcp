@@ -644,6 +644,7 @@ app.get('/api/annotation/statistics', async (c) => {
           COUNT(*)::INTEGER as total_count,
           COUNT(*) FILTER (WHERE annotation_status = 'pending')::INTEGER as pending_count,
           COUNT(*) FILTER (WHERE annotation_status = 'completed')::INTEGER as completed_count,
+          COUNT(*) FILTER (WHERE annotation_status = 'skipped')::INTEGER as skipped_count,
           ROUND(
             100.0 * COUNT(*) FILTER (WHERE annotation_status = 'completed') / NULLIF(COUNT(*), 0),
             1

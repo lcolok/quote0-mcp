@@ -81,6 +81,7 @@ export interface AnnotationProgress {
   total_count: number;
   pending_count: number;
   completed_count: number;
+  skipped_count?: number;
   completion_rate: number;
   high_quality_count: number;
   medium_quality_count: number;

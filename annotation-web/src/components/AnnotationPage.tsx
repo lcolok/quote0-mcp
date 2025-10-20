@@ -80,11 +80,42 @@ function AnnotationPage() {
     };
   }, [leftWidth]);
 
-  // 只获取推送历史（包含所有新闻记录）
+  // 获取标注总览统计（用于显示真实总数/状态）
+  const { data: statisticsData } = useQuery({
+    queryKey: ['statistics'],
+    queryFn: () => apiClient.getStatistics(),
+    refetchInterval: 30000,
+  });
+
+  // 只获取推送历史（包含所有新闻记录），分批抓取直到没有更多
   const { data: newsData, isLoading } = useQuery({
     queryKey: ['push-history-all'],
-    queryFn: () => apiClient.getPushHistory({ limit: 10000 }),
-    refetchInterval: 10000,
+    queryFn: async () => {
+      const pageSize = 2000;
+      let offset = 0;
+      let hasMore = true;
+      let allRecords: any[] = [];
+      let lastPagination = undefined;
+
+      while (hasMore) {
+        const response = await apiClient.getPushHistory({ limit: pageSize, offset });
+        const records = response.data || [];
+        allRecords = allRecords.concat(records);
+        lastPagination = response.pagination;
+
+        if (!response.pagination?.hasMore) {
+          hasMore = false;
+        } else {
+          offset += pageSize;
+        }
+      }
+
+      return {
+        data: allRecords,
+        pagination: lastPagination,
+      };
+    },
+    refetchInterval: 30000,
   });
 
   // 处理数据并排序
@@ -122,6 +153,33 @@ function AnnotationPage() {
       };
     }).sort((a, b) => b.pushedAt.getTime() - a.pushedAt.getTime());
   }, [newsData]);
+
+  const progress = statisticsData?.data?.progress;
+  const overallTotal = newsData?.pagination?.total ?? progress?.total_count ?? newsList.length;
+  const statusCounts = useMemo(() => {
+    return newsList.reduce(
+      (acc, record) => {
+        if (record.annotationStatus === 'completed') {
+          acc.completed += 1;
+        } else if (record.annotationStatus === 'skipped') {
+          acc.skipped += 1;
+        } else {
+          acc.pending += 1;
+        }
+        return acc;
+      },
+      { pending: 0, completed: 0, skipped: 0 }
+    );
+  }, [newsList]);
+  const pendingTotal = newsList.length > 0
+    ? statusCounts.pending
+    : (progress?.pending_count ?? 0);
+  const completedTotal = newsList.length > 0
+    ? statusCounts.completed
+    : (progress?.completed_count ?? 0);
+  const skippedTotal = newsList.length > 0
+    ? statusCounts.skipped
+    : (progress?.skipped_count ?? 0);
 
   // 根据搜索关键词筛选数据
   const filteredList = useMemo(() => {
@@ -367,10 +425,15 @@ function AnnotationPage() {
               </>
             ) : (
               <>
-                共 {newsList.length} 条 ·
-                <span className="text-green-600 ml-1">{newsList.filter(r => r.annotationStatus === 'pending').length} 待标注</span> ·
-                <span className="text-blue-600 ml-1">{newsList.filter(r => r.annotationStatus === 'completed').length} 已标注</span> ·
-                <span className="text-gray-600 ml-1">{newsList.filter(r => r.annotationStatus === 'skipped').length} 已跳过</span>
+                共 {overallTotal} 条 ·
+                <span className="text-green-600 ml-1">{pendingTotal} 待标注</span> ·
+                <span className="text-blue-600 ml-1">{completedTotal} 已标注</span> ·
+                <span className="text-gray-600 ml-1">{skippedTotal} 已跳过</span>
+                {overallTotal > newsList.length && (
+                  <span className="ml-1 text-orange-600">
+                    （当前已加载 {newsList.length} 条最新记录）
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -403,6 +466,8 @@ function AnnotationPage() {
                             src={`/api/minio-proxy${record.imagePath}`}
                             alt=""
                             className="w-full h-full object-cover"
+                            loading="lazy"
+                            decoding="async"
                             onError={(e) => {
                               e.currentTarget.style.display = 'none';
                             }}
