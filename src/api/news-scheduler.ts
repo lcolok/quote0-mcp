@@ -874,6 +874,10 @@ export class NewsScheduler {
 
       skipped.push({ source: currentSource, failureCount });
       console.warn(`⚠️ 源 ${currentSource} 因连续失败 ${failureCount} 次，将尝试跳过`);
+      if (threshold > 0) {
+        const reduced = Math.max(0, threshold - 1);
+        this.reduceFailureCount(job, currentSource, reduced);
+      }
       await this.rotateRssSource(job);
       currentSource = this.getCurrentRssSource(job);
     }
@@ -1014,6 +1018,18 @@ export class NewsScheduler {
     }
     this.ensureIndexState(job);
     job.state.failureCount[source] = 0;
+  }
+
+  private reduceFailureCount(job: SchedulerJobInstance, source: string | undefined, target?: number): void {
+    if (!source) {
+      return;
+    }
+    this.ensureIndexState(job);
+    const current = this.getFailureCount(job, source);
+    const next = target !== undefined ? Math.max(0, target) : Math.max(0, current - 1);
+    if (current !== next) {
+      job.state.failureCount[source] = next;
+    }
   }
 
   private getFailureCount(job: SchedulerJobInstance, source: string | undefined): number {
