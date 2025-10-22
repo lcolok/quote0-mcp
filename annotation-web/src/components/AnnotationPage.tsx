@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
 import { ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Send, Search, GripVertical } from 'lucide-react';
@@ -87,34 +87,21 @@ function AnnotationPage() {
     refetchInterval: 30000,
   });
 
-  // 只获取推送历史（包含所有新闻记录），分批抓取直到没有更多
-  const { data: newsData, isLoading } = useQuery({
+  const PAGE_SIZE = 2000;
+
+  const {
+    data: newsData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['push-history-all'],
-    queryFn: async () => {
-      const pageSize = 2000;
-      let offset = 0;
-      let hasMore = true;
-      let allRecords: any[] = [];
-      let lastPagination = undefined;
-
-      while (hasMore) {
-        const response = await apiClient.getPushHistory({ limit: pageSize, offset });
-        const records = response.data || [];
-        allRecords = allRecords.concat(records);
-        lastPagination = response.pagination;
-
-        if (!response.pagination?.hasMore) {
-          hasMore = false;
-        } else {
-          offset += pageSize;
-        }
-      }
-
-      return {
-        data: allRecords,
-        pagination: lastPagination,
-      };
-    },
+    initialPageParam: 0,
+    queryFn: ({ pageParam = 0 }) =>
+      apiClient.getPushHistory({ limit: PAGE_SIZE, offset: pageParam }),
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.pagination?.hasMore ? pages.length * PAGE_SIZE : undefined,
     refetchInterval: 30000,
   });
 
@@ -135,8 +122,11 @@ function AnnotationPage() {
     return { date: new Date() };
   };
 
+  const allPages = newsData?.pages ?? [];
+
   const newsList = useMemo(() => {
-    return (newsData?.data || []).map((item: any): NewsRecord => {
+    const combined = allPages.flatMap((page: any) => page?.data || []);
+    return combined.map((item: any): NewsRecord => {
       const { date: pushedAtDate, utc: pushedAtUtc } = parsePushedAt(item);
       return {
         id: item.id,
@@ -152,10 +142,11 @@ function AnnotationPage() {
         processedContent: item.processedContent,
       };
     }).sort((a, b) => b.pushedAt.getTime() - a.pushedAt.getTime());
-  }, [newsData]);
+  }, [allPages]);
 
   const progress = statisticsData?.data?.progress;
-  const overallTotal = newsData?.pagination?.total ?? progress?.total_count ?? newsList.length;
+  const firstPageTotal = allPages[0]?.pagination?.total;
+  const overallTotal = progress?.total_count ?? firstPageTotal ?? newsList.length;
   const statusCounts = useMemo(() => {
     return newsList.reduce(
       (acc, record) => {
@@ -421,7 +412,7 @@ function AnnotationPage() {
             {searchQuery ? (
               <>
                 找到 <span className="font-medium text-primary-600">{filteredList.length}</span> 条结果
-                <span className="ml-1">（共 {newsList.length} 条）</span>
+                <span className="ml-1">（已加载 {newsList.length} / 总 {overallTotal}）</span>
               </>
             ) : (
               <>
@@ -523,6 +514,18 @@ function AnnotationPage() {
             </div>
           )}
         </div>
+
+        {hasNextPage && (
+          <div className="p-3 border-t border-gray-200 flex items-center justify-center bg-gray-50">
+            <button
+              onClick={() => fetchNextPage()}
+              disabled={isFetchingNextPage}
+              className="px-3 py-1.5 text-xs rounded border border-primary-200 text-primary-600 hover:bg-primary-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isFetchingNextPage ? '加载中...' : '加载更多'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 左侧拖动分隔条 */}
