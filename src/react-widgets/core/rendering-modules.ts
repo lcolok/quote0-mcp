@@ -595,6 +595,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
         
           return {
             imageUrl,
+            localImagePath: `/${objectKey}`, // 添加localImagePath，即使推送失败也要保存图片路径
             deviceResult: enhancedErrorMessage,
             // 即使推送失败，也返回文本数据
             title: data.title,
@@ -610,6 +611,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       // 如果到达这里，说明所有重试都失败了
       return {
         imageUrl,
+        localImagePath: `/${objectKey}`, // 添加localImagePath，即使推送失败也要保存图片路径
         deviceResult: '推送失败: 超过最大重试次数',
         // 即使推送失败，也返回文本数据
         title: data.title,
