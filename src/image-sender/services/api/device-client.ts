@@ -1,4 +1,4 @@
-import { fetch } from "undici";
+// 使用全局fetch (Bun内置) 而不是undici,避免兼容性问题
 import { DeviceConfig, ImagePayload, ApiResponse, ImageSendOptions } from '../../core/types/index.js';
 
 export class MindResetDeviceClient {
@@ -29,11 +29,15 @@ export class MindResetDeviceClient {
       "User-Agent": "mindreset-image-sender/1.0.0",
       "X-Device-ID": this.config.deviceId,
       "X-Device-Secret": this.config.deviceSecret,
+      "Accept-Encoding": "identity",  // 禁用gzip压缩,避免Z_DATA_ERROR
     };
   }
 
   async sendImage(base64Image: string, options: ImageSendOptions = {}): Promise<ApiResponse> {
     try {
+      console.log(`📡 准备发送图片到MindReset API...`);
+      console.log(`📊 Base64长度: ${base64Image.length} 字符`);
+
       const payload: ImagePayload = {
         deviceId: this.config.deviceId,
         image: base64Image,
@@ -57,17 +61,43 @@ export class MindResetDeviceClient {
         payload.ditherKernel = options.ditherKernel;
       }
 
+      console.log(`🔗 API端点: ${this.baseUrl}/open/image`);
+      console.log(`🔑 设备ID: ${this.config.deviceId}`);
+
+      // 禁用自动解压缩,避免gzip解压错误 (Z_DATA_ERROR)
+      // @ts-ignore - decompress选项在标准fetch中不存在,但undici支持
       const response = await fetch(`${this.baseUrl}/open/image`, {
         method: "POST",
         headers: this.getAuthHeaders(),
         body: JSON.stringify(payload),
+        decompress: false,  // 禁用自动gzip解压,由我们手动处理
       });
 
+      console.log(`📥 收到响应: ${response.status} ${response.statusText}`);
+
       if (response.ok) {
-        const result = await response.text();
+        // 手动读取响应体,避免自动解压导致的Z_DATA_ERROR
+        let result: string;
+        try {
+          // 尝试以文本方式读取
+          result = await response.text();
+          console.log(`✅ 响应内容读取成功: ${result.substring(0, 100)}...`);
+        } catch (textError) {
+          console.warn(`⚠️ 文本读取失败,尝试使用buffer: ${textError}`);
+          // 如果text()失败,尝试用buffer读取
+          const buffer = await response.arrayBuffer();
+          result = new TextDecoder().decode(buffer);
+          console.log(`✅ Buffer读取成功: ${result.substring(0, 100)}...`);
+        }
         return { success: true, data: result };
       } else {
-        const error = await response.text();
+        let error: string;
+        try {
+          error = await response.text();
+        } catch (textError) {
+          const buffer = await response.arrayBuffer();
+          error = new TextDecoder().decode(buffer);
+        }
         let enhancedError = `${response.status} ${response.statusText} - ${error}`;
         
         // 根据HTTP状态码提供更详细的错误信息和解决建议
@@ -130,8 +160,14 @@ export class MindResetDeviceClient {
         };
       }
     } catch (error) {
+      console.error(`❌ Fetch请求异常:`, error);
+      console.error(`错误类型: ${error?.constructor?.name}`);
+      if (error instanceof Error) {
+        console.error(`错误栈:`, error.stack);
+      }
+
       let enhancedError = error instanceof Error ? error.message : String(error);
-      
+
       // 网络连接相关错误的特殊处理
       if (enhancedError.includes('ECONNREFUSED')) {
         enhancedError += `

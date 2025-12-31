@@ -242,16 +242,35 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
                   client.get(imageUrl, (response) => {
                     response.pipe(file);
-                    file.on('finish', () => resolve());
-                    file.on('error', reject);
-                  }).on('error', reject);
+                    file.on('finish', () => {
+                      // 等待文件流完全关闭后再resolve
+                      file.close(() => {
+                        console.log(`✅ 文件下载并关闭完成: ${tempFilePath}`);
+                        resolve();
+                      });
+                    });
+                    file.on('error', (err) => {
+                      file.close();
+                      reject(err);
+                    });
+                  }).on('error', (err) => {
+                    file.close();
+                    reject(err);
+                  });
                 });
+
+                // 验证文件确实存在且可读
+                const fsModule = await import('fs');
+                const fileStats = await fsModule.promises.stat(tempFilePath);
+                console.log(`📊 临时文件信息: 大小=${fileStats.size} bytes, 路径=${tempFilePath}`);
 
                 const { exec } = await import('child_process');
                 const { promisify } = await import('util');
                 const execAsync = promisify(exec);
 
                 const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${tempFilePath}" "0" "" "ORDERED"`;
+                console.log(`🔧 执行设备推送命令: ${deviceCommand}`);
+
                 const { stdout, stderr } = await execAsync(deviceCommand, {
                   cwd: process.cwd(),
                   env: process.env
@@ -261,7 +280,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                 if (stderr) console.error(stderr);
 
                 try {
-                  await fs.unlink(tempFilePath);
+                  await fsModule.promises.unlink(tempFilePath);
                 } catch (cleanupError) {
                   console.warn('⚠️ 清理临时文件失败:', cleanupError);
                 }
