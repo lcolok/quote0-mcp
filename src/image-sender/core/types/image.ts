@@ -14,10 +14,10 @@ export interface ImageSendOptions {
 }
 
 export interface ImagePayload {
-  deviceId: string;
+  deviceId?: string;  // 可选，新API通过URL路径传递设备ID
   image: string;
   refreshNow?: boolean;  // 是否立即显示内容
-  border?: "0" | "1";
+  border?: "0" | "1" | number;
   link?: string;
   // 官方抖动参数
   ditherType?: string;

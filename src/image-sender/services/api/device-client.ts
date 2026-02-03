@@ -3,6 +3,7 @@ import { DeviceConfig, ImagePayload, ApiResponse, ImageSendOptions } from '../..
 
 export class MindResetDeviceClient {
   private readonly baseUrl = "https://dot.mindreset.tech/api";
+  private readonly authV2Url = "https://dot.mindreset.tech/api/authV2";
   private config: DeviceConfig;
 
   constructor(config: DeviceConfig) {
@@ -39,7 +40,6 @@ export class MindResetDeviceClient {
       console.log(`📊 Base64长度: ${base64Image.length} 字符`);
 
       const payload: ImagePayload = {
-        deviceId: this.config.deviceId,
         image: base64Image,
         refreshNow: true  // 立即显示新内容
       };
@@ -61,12 +61,14 @@ export class MindResetDeviceClient {
         payload.ditherKernel = options.ditherKernel;
       }
 
-      console.log(`🔗 API端点: ${this.baseUrl}/open/image`);
+      // 使用新的 authV2 API 端点
+      const apiUrl = `${this.authV2Url}/open/device/${this.config.deviceId}/image`;
+      console.log(`🔗 API端点: ${apiUrl}`);
       console.log(`🔑 设备ID: ${this.config.deviceId}`);
 
       // 禁用自动解压缩,避免gzip解压错误 (Z_DATA_ERROR)
       // @ts-ignore - decompress选项在标准fetch中不存在,但undici支持
-      const response = await fetch(`${this.baseUrl}/open/image`, {
+      const response = await fetch(apiUrl, {
         method: "POST",
         headers: this.getAuthHeaders(),
         body: JSON.stringify(payload),
