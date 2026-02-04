@@ -32,13 +32,13 @@ BEGIN
         ) VALUES (
             'technology-solidot-default',
             '默认科技资讯轮播',
-            '默认的Solidot科技资讯定时推送任务',
+            '默认的Solidot科技资讯定时推送任务（1分钟）',
             'technology',
             'rss',
             'solidot',
             'ax-optimized',
             'device',
-            1800000,  -- 30分钟
+            60000,  -- 1分钟
             0,
             '{"border": "0"}'::jsonb,
             '{"type": "fair-rotation", "poolSize": 10, "startIndex": 0, "cooldownHours": 24, "maxPushCount": 5, "rotateAfterEachPush": true, "skipEmptySource": true}'::jsonb,
@@ -58,13 +58,13 @@ BEGIN
         ) VALUES (
             'multi-source-rotation',
             '多源RSS轮播',
-            '每5分钟轮播Solidot、36kr、sspai、hackernews四个RSS源',
+            '每1分钟轮播Solidot、36kr、sspai、hackernews四个RSS源',
             'news',
             'rss',
             'solidot',
             'ax-optimized',
             'device',
-            300000,  -- 5分钟
+            60000,  -- 1分钟
             0,
             '{"border": "0"}'::jsonb,
             '{"type": "fair-rotation", "poolSize": 4, "startIndex": 0, "cooldownHours": 24, "maxPushCount": 5, "rotateAfterEachPush": true, "skipEmptySource": true}'::jsonb,

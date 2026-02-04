@@ -249,24 +249,24 @@ export class NewsScheduler {
         rssSource: 'solidot',
         processor: 'ax-optimized',
         renderer: 'device',
-        intervalMs: 30 * 60 * 1000,
+        intervalMs: 60 * 1000,
         initialDelayMs: 0,
         options: { border: '0' },
         indexStrategy: { type: 'fair-rotation', poolSize: 10, startIndex: 0, cooldownHours: 24, maxPushCount: 5, rotateAfterEachPush: true, skipEmptySource: true },
         enabled: true
       });
       
-      // 创建多源RSS轮播任务（5分钟）
+      // 创建多源RSS轮播任务（1分钟）
       await this.postgres.upsertSchedulerJob({
         id: 'multi-source-rotation',
         name: '多源RSS轮播',
-        description: '每5分钟轮播Solidot、36kr、sspai、hackernews四个RSS源',
+        description: '每1分钟轮播Solidot、36kr、sspai、hackernews四个RSS源',
         category: 'news',
         dataSource: 'rss',
         rssSource: 'solidot',
         processor: 'ax-optimized',
         renderer: 'device',
-        intervalMs: 5 * 60 * 1000,
+        intervalMs: 60 * 1000,
         initialDelayMs: 0,
         options: { border: '0' },
         indexStrategy: { type: 'fair-rotation', poolSize: 4, startIndex: 0, cooldownHours: 24, maxPushCount: 5, rotateAfterEachPush: true, skipEmptySource: true },
