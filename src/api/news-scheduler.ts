@@ -237,10 +237,13 @@ export class NewsScheduler {
   async reloadJobs(): Promise<void> {
     const jobRecords = await this.postgres.getSchedulerJobs();
     if (jobRecords.length === 0) {
+      console.log('🆕 数据库中没有调度任务，创建默认任务...');
+      
+      // 创建默认科技资讯任务（30分钟）
       await this.postgres.upsertSchedulerJob({
         id: 'technology-solidot-default',
         name: '默认科技资讯轮播',
-        description: '默认的Solidot科技资讯定时推送任务',
+        description: '默认的Solidot科技资讯定时推送任务（30分钟）',
         category: 'technology',
         dataSource: 'rss',
         rssSource: 'solidot',
@@ -249,9 +252,28 @@ export class NewsScheduler {
         intervalMs: 30 * 60 * 1000,
         initialDelayMs: 0,
         options: { border: '0' },
-        indexStrategy: { type: 'shuffle', poolSize: 10, startIndex: 0 },
+        indexStrategy: { type: 'fair-rotation', poolSize: 10, startIndex: 0, cooldownHours: 24, maxPushCount: 5, rotateAfterEachPush: true, skipEmptySource: true },
         enabled: true
       });
+      
+      // 创建多源RSS轮播任务（5分钟）
+      await this.postgres.upsertSchedulerJob({
+        id: 'multi-source-rotation',
+        name: '多源RSS轮播',
+        description: '每5分钟轮播Solidot、36kr、sspai、hackernews四个RSS源',
+        category: 'news',
+        dataSource: 'rss',
+        rssSource: 'solidot',
+        processor: 'ax-optimized',
+        renderer: 'device',
+        intervalMs: 5 * 60 * 1000,
+        initialDelayMs: 0,
+        options: { border: '0' },
+        indexStrategy: { type: 'fair-rotation', poolSize: 4, startIndex: 0, cooldownHours: 24, maxPushCount: 5, rotateAfterEachPush: true, skipEmptySource: true },
+        enabled: true
+      });
+      
+      console.log('✅ 默认任务创建完成');
       return this.reloadJobs();
     }
     const enabledJobs = jobRecords.filter((record) => record.enabled !== false);

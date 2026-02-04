@@ -279,7 +279,8 @@ export class PostgresDatabase {
           strategy_snapshot JSONB,
           raw_content JSONB,
           processed_content JSONB,
-          image_path TEXT
+          image_path TEXT,
+          annotation_status VARCHAR(20) DEFAULT 'pending'
       );
 
       CREATE TABLE IF NOT EXISTS scheduler_run_history (

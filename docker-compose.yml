@@ -70,6 +70,8 @@ services:
       context: .
       dockerfile: Dockerfile.api
     container_name: quote0-news-api
+    ports:
+      - "3001:3001"
     env_file:
       - .env
     environment:
