@@ -12,8 +12,8 @@ services:
     ports:
       - "25432:5432"  # 使用非冲突端口
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+      - "/Volumes/Mac Mini M4 Plus APFS/DockerOrigData/quote0-mcp/postgres:/var/lib/postgresql/data"
+      - ./docker/postgres/init:/docker-entrypoint-init-db.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U quote0_user -d quote0_cache"]
       interval: 10s
@@ -34,7 +34,7 @@ services:
       - "29000:9000"  # API端口使用非冲突端口
       - "29001:9001"  # Web控制台端口
     volumes:
-      - minio_data:/data
+      - "/Volumes/Mac Mini M4 Plus APFS/DockerOrigData/quote0-mcp/minio:/data"
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -52,7 +52,7 @@ services:
     ports:
       - "26379:6379"  # 使用非冲突端口
     volumes:
-      - redis_data:/data
+      - "/Volumes/Mac Mini M4 Plus APFS/DockerOrigData/quote0-mcp/redis:/data"
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -165,13 +165,15 @@ services:
     profiles:
       - dev
 
-volumes:
-  postgres_data:
-    driver: local
-  minio_data:
-    driver: local
-  redis_data:
-    driver: local
+# 注意：已改用绑定挂载，数据存储在 /Volumes/Mac Mini M4 Plus APFS/DockerOrigData/quote0-mcp/
+# 如需使用命名卷，请取消下面注释并修改服务配置
+# volumes:
+#   postgres_data:
+#     driver: local
+#   minio_data:
+#     driver: local
+#   redis_data:
+#     driver: local
 
 networks:
   quote0-network:
