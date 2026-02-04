@@ -133,37 +133,14 @@ async function buildDockerImage(docker: Docker, options: ImageBuildOptions): Pro
   console.log('✅ Docker image build complete');
 }
 
-function buildNetworkingConfig(networks: Record<string, any> | undefined) {
-  if (!networks) {
-    return undefined;
-  }
-  const endpoints: Record<string, any> = {};
-  for (const [name, config] of Object.entries(networks)) {
-    endpoints[name] = {
-      Aliases: config.Aliases,
-      Links: config.Links,
-      IPAMConfig: config.IPAMConfig,
-      IPv4Address: config.IPAddress,
-      IPv6Address: config.GlobalIPv6Address,
-    };
-  }
-  if (Object.keys(endpoints).length === 0) {
-    return undefined;
-  }
-  return { EndpointsConfig: endpoints };
-}
-
 async function recreateContainer(docker: Docker, opts: DeployOptions): Promise<void> {
   const container = docker.getContainer(opts.containerName);
   try {
-    const inspect = await container.inspect();
+    // 检查容器是否存在
+    await container.inspect();
+    
     console.log(`
 🔄 Recreating container ${opts.containerName} ...`);
-
-    const config = JSON.parse(JSON.stringify(inspect.Config));
-    const hostConfig = JSON.parse(JSON.stringify(inspect.HostConfig));
-    const networkingConfig = buildNetworkingConfig(inspect.NetworkSettings?.Networks);
-
     console.log('⏹️  Stopping current container');
     try {
       await container.stop();
@@ -176,55 +153,17 @@ async function recreateContainer(docker: Docker, opts: DeployOptions): Promise<v
     console.log('🧹 Removing current container');
     await container.remove({ force: true });
 
-    const createOptions: ContainerCreateOptions = {
-      name: opts.containerName,
-      Image: opts.imageTag,
-      Env: config.Env,
-      Cmd: config.Cmd,
-      Entrypoint: config.Entrypoint,
-      WorkingDir: config.WorkingDir,
-      Labels: config.Labels,
-      ExposedPorts: config.ExposedPorts,
-      HostConfig: hostConfig,
-    };
-
-    if (networkingConfig) {
-      createOptions.NetworkingConfig = networkingConfig;
-    }
-
-    console.log('📦 Creating new container instance');
-    const newContainer = await docker.createContainer(createOptions);
-
-    console.log('🚀 Starting container');
-    try {
-      await newContainer.start();
-      console.log('✅ Container recreated successfully');
-    } catch (startError: any) {
-      const message = startError instanceof Error ? startError.message : String(startError);
-      if (message.includes('port is already allocated')) {
-        console.warn('⚠️ Port allocation failed while starting container. Falling back to docker compose up.');
-        try {
-          await newContainer.remove({ force: true });
-        } catch (cleanupError) {
-          console.warn('⚠️ Failed to remove temporary container:', cleanupError);
-        }
-        await runCommand('docker', ['compose', 'up', '-d', '--no-deps', '--force-recreate', opts.serviceKey]);
-        console.log(`✅ Container ${opts.containerName} started via docker compose`);
-      } else {
-        try {
-          await newContainer.remove({ force: true });
-        } catch {
-          /* ignore */
-        }
-        throw startError;
-      }
-    }
+    // 总是使用 docker compose up 来启动，确保从 docker-compose.yml 读取最新配置
+    console.log('🚀 Starting container via docker compose (to use latest docker-compose.yml config)');
+    await runCommand('docker-compose', ['up', '-d', '--no-deps', '--force-recreate', opts.serviceKey]);
+    console.log(`✅ Container ${opts.containerName} started with docker compose`);
+    
   } catch (error: any) {
     if (error?.statusCode === 404) {
       console.warn(
         `⚠️ Container ${opts.containerName} not found. Attempting initial startup via docker compose...`,
       );
-      await runCommand('docker', ['compose', 'up', '-d', '--no-build', opts.serviceKey]);
+      await runCommand('docker-compose', ['up', '-d', '--no-build', opts.serviceKey]);
       console.log(`✅ Container ${opts.containerName} started with docker compose`);
       return;
     }
