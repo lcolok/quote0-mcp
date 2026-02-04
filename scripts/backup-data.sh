@@ -7,8 +7,8 @@
 
 set -e
 
-# 数据目录
-DATA_DIR="/Volumes/Mac Mini M4 Plus APFS/DockerOrigData/quote0-mcp"
+# 数据目录 (NAS 存储)
+DATA_DIR="/Volumes/团队文件-服务器储存/quote0-mcp-data"
 BACKUP_DIR="$DATA_DIR/backup"
 DATE=$(date +%Y%m%d_%H%M%S)
 
