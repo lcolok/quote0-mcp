@@ -78,29 +78,25 @@ services:
       NODE_ENV: production
       PORT: 3001
       HOST: 0.0.0.0
-      # 数据库配置（容器间通信使用service名）
-      DATABASE_URL: postgresql://quote0_user:quote0_password@postgres:5432/quote0_cache
-      # MinIO配置（容器间通信使用service名）
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: 9000
-      # Redis配置（容器间通信使用service名）
-      REDIS_URL: redis://redis:6379
+      # 数据库配置（host网络模式下使用localhost）
+      DATABASE_URL: postgresql://quote0_user:quote0_password@localhost:25432/quote0_cache
+      # MinIO配置（host网络模式下使用localhost）
+      MINIO_ENDPOINT: localhost
+      MINIO_PORT: 29000
+      # Redis配置（host网络模式下使用localhost）
+      REDIS_URL: redis://localhost:26379
       # 时区配置
       TZ: Asia/Shanghai
+    network_mode: host
     depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - minio
+      - redis
     volumes:
       - ./.env:/app/.env
       - ./processed-images:/app/processed-images
       - ./src:/app/src
       - ./scripts:/app/scripts
-    networks:
-      - quote0-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
