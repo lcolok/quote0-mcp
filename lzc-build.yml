@@ -1,0 +1,15 @@
+# 懒猫微服应用构建配置
+# 用于将 Quote0-MCP 封装为懒猫微服应用
+
+# LPK 包输出位置
+pkgout: ./
+
+# 应用图标路径
+icon: ./icon.png
+
+# 应用清单文件路径
+manifest: ./lzc-manifest.yml
+
+# 构建钩子（可选）
+# prebuild: ./scripts/lazycat-prebuild.sh
+# postbuild: ./scripts/lazycat-postbuild.sh

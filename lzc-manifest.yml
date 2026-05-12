@@ -1,0 +1,202 @@
+# 懒猫微服应用清单配置
+# Quote0-MCP 智能新闻服务
+
+lzc-sdk-version: "0.1"
+
+# 应用唯一标识符（建议用您的域名）
+package: me.friday.quote0-mcp
+
+# 应用版本号（遵循 SemVer）
+version: 1.0.3
+
+# 应用名称
+name: Quote0 新闻服务
+
+# 应用描述
+description: 智能新闻 MCP 服务系统，支持 RSS 聚合、AI 内容处理和 MindReset 设备推送
+
+# 应用主页
+homepage: https://github.com/yourname/quote0-mcp
+
+# 作者信息
+author: Friday
+
+# 应用路由配置
+application:
+  subdomain: quote0
+  
+  # 主入口路由 - 新闻 API 服务
+  routes:
+    - /=http://news-api.me.friday.quote0-mcp.lzcapp:3001
+    - /api=http://news-api.me.friday.quote0-mcp.lzcapp:3001/api
+    - /images=http://news-api.me.friday.quote0-mcp.lzcapp:3001/images
+  
+  # 多入口配置
+  entries:
+    - id: api
+      title: API 服务
+      path: /
+    - id: annotation
+      title: 新闻标注系统
+      path: /
+      prefix_domain: annotation
+  
+  upstreams:
+    - location: /
+      domain_prefix: annotation
+      backend: http://annotation-web.me.friday.quote0-mcp.lzcapp:80
+
+  depends_on:
+    - postgres
+    - minio
+    - redis
+  
+  # 环境变量
+  environment:
+    NODE_ENV: production
+    PORT: "3001"
+    HOST: "0.0.0.0"
+    TZ: Asia/Shanghai
+    # 数据库连接（使用服务名）
+    DATABASE_URL: postgresql://quote0_user:quote0_password@postgres:5432/quote0_cache
+    # MinIO 配置
+    MINIO_ENDPOINT: minio
+    MINIO_PORT: "9000"
+    MINIO_ACCESS_KEY: quote0_minio
+    MINIO_SECRET_KEY: quote0_minio_password
+    MINIO_BUCKET: quote0-images
+    MINIO_USE_SSL: "false"
+    # Redis 配置
+    REDIS_URL: redis://redis:6379
+    MINDRESET_BASE_URL: https://dot.mindreset.tech/api
+    MINDRESET_DEVICE_ID: E4B063CC0F10
+    MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
+    LLM_PROVIDER: custom
+    LLM_BASE_URL: https://token-plan-cn.xiaomimimo.com/v1
+    LLM_API_KEY: tp-cfrkbuyhoniwfcf0dt4dr4tj1v64ughfivfzjhxcl8bmuz5l
+    LLM_MODEL: mimo-v2.5-pro
+    LLM_FAST_MODEL: mimo-v2.5
+    LLM_MAX_TOKENS: "1000"
+    LLM_TEMPERATURE: "0.7"
+    # 新闻调度器
+    NEWS_SCHEDULER_ENABLED: "true"
+    # 懒猫环境标记
+    LZC_APP: "true"
+
+  # 健康检查
+  health_check:
+    test_url: http://news-api.me.friday.quote0-mcp.lzcapp:3001/api/health
+    timeout: 10s
+    start_period: 120s
+
+# 服务定义
+services:
+  # PostgreSQL 主数据库
+  postgres:
+    image: dev.logic.heiyu.space/library/postgres:15-alpine
+    environment:
+      POSTGRES_DB: quote0_cache
+      POSTGRES_USER: quote0_user
+      POSTGRES_PASSWORD: quote0_password
+      TZ: Asia/Shanghai
+    binds:
+      - /lzcapp/var/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quote0_user -d quote0_cache"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 512m
+
+  # MinIO 对象存储
+  minio:
+    image: dev.logic.heiyu.space/minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: quote0_minio
+      MINIO_ROOT_PASSWORD: quote0_minio_password
+    command: server /data --console-address ":9001"
+    binds:
+      - /lzcapp/var/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 256m
+
+  # Redis 内存缓存
+  redis:
+    image: dev.logic.heiyu.space/library/redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    binds:
+      - /lzcapp/var/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    mem_limit: 256m
+
+  # 标注系统 Web 应用（React SPA + Nginx）
+  annotation-web:
+    image: dev.logic.heiyu.space/friday/quote0-annotation-web:latest
+    depends_on:
+      - news-api
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 128m
+
+  # 新闻 API 服务
+  news-api:
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.3
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      HOST: "0.0.0.0"
+      TZ: Asia/Shanghai
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+      DATABASE_URL: postgresql://quote0_user:quote0_password@postgres:5432/quote0_cache
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: quote0_minio
+      MINIO_SECRET_KEY: quote0_minio_password
+      MINIO_BUCKET: quote0-images
+      REDIS_URL: redis://redis:6379
+      NEWS_SCHEDULER_ENABLED: "true"
+      LZC_APP: "true"
+      MINDRESET_BASE_URL: https://dot.mindreset.tech/api
+      MINDRESET_DEVICE_ID: E4B063CC0F10
+      MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
+      LLM_PROVIDER: custom
+      LLM_BASE_URL: https://token-plan-cn.xiaomimimo.com/v1
+      LLM_API_KEY: tp-cfrkbuyhoniwfcf0dt4dr4tj1v64ughfivfzjhxcl8bmuz5l
+      LLM_MODEL: mimo-v2.5-pro
+      LLM_FAST_MODEL: mimo-v2.5
+      LLM_MAX_TOKENS: "1000"
+      LLM_TEMPERATURE: "0.7"
+    depends_on:
+      - postgres
+      - minio
+      - redis
+    binds:
+      - /lzcapp/var/images:/app/processed-images
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    mem_limit: 1024m
+
+# 扩展配置
+ext_config:
+  enable_document_access: false
+  enable_media_access: false

@@ -1,0 +1,27 @@
+FROM node:22-slim
+
+USER root
+
+RUN apt-get update && apt-get install -y \
+    fonts-noto-cjk \
+    python3 \
+    make \
+    g++ \
+    libcairo2-dev \
+    libjpeg-dev \
+    libpango1.0-dev \
+    libgif-dev \
+    ca-certificates \
+    curl \
+    wget \
+    unzip \
+    --no-install-recommends \
+    && update-ca-certificates \
+    && curl -fsSL https://bun.sh/install | bash \
+    && apt-get remove -y unzip \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.bun/bin:${PATH}"
+
+WORKDIR /app

@@ -1,0 +1,42 @@
+# Satori 优化版 - 新闻 API 构建
+FROM dev.logic.heiyu.space/library/node:22-slim-bun-satori as builder
+
+WORKDIR /app
+
+# 复制精简版 package.json
+COPY package.satori.json package.json
+COPY bun.lock ./
+
+# 只安装生产依赖
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+RUN bun install --frozen-lockfile --production
+
+# 复制静态资源
+COPY assets/ ./assets/
+COPY config/ ./config/
+
+# 复制源代码
+COPY src/ ./src/
+COPY ax-framework/ ./ax-framework/
+COPY scripts/ ./scripts/
+
+# 创建必要的目录
+RUN mkdir -p processed-images/widgets/news
+
+# 设置时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 生产阶段
+FROM builder as production
+
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV HOST=0.0.0.0
+
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3001/api/health || exit 1
+
+CMD ["bun", "src/api/server.ts"]

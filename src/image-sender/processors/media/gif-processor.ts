@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 
 import { createCanvas, loadImage } from 'canvas';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import fs from 'fs';
-
-const execAsync = promisify(exec);
 
 /**
  * GIF处理工具 - 提取第一帧并优化
@@ -21,9 +17,13 @@ export class GifProcessor {
     try {
       console.log('正在提取GIF第一帧...');
       
-      // 使用sips提取第一帧 (macOS)
-      const command = `sips -s format png "${gifPath}" --out "${outputPath}"`;
-      await execAsync(command);
+      const image = await loadImage(gifPath);
+      const canvas = createCanvas(image.width, image.height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
+      
+      const buffer = canvas.toBuffer('image/png');
+      await fs.promises.writeFile(outputPath, buffer);
       
       console.log(`✅ 第一帧已提取: ${outputPath}`);
       return true;

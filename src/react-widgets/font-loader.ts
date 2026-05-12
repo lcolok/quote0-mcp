@@ -1,3 +1,5 @@
+import { getFontServerUrl } from './core/lazycat-adapter.js';
+
 /**
  * 字体加载器 - 支持得意黑字体和Ark Pixel中文像素字体
  */
@@ -94,10 +96,11 @@ export class FontLoader {
    * 为Puppeteer环境加载Fusion Pixel中文像素字体 - 使用本地服务器
    */
   static getFusionPixelCSS(): string {
+    const fontUrl = `${getFontServerUrl()}/fusion-pixel.woff2`;
     return `
       @font-face {
         font-family: 'FusionPixelFont';
-        src: url('http://localhost:3001/fusion-pixel.woff2') format('woff2');
+        src: url('${fontUrl}') format('woff2');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -109,10 +112,11 @@ export class FontLoader {
    * 为Puppeteer环境加载指定大小的Fusion Pixel中文像素字体
    */
   static getFusionPixelCSSForSize(fontSize: number): string {
+    const fontUrl = `${getFontServerUrl()}/fusion-pixel-${fontSize}px.woff2`;
     return `
       @font-face {
         font-family: 'FusionPixelFont';
-        src: url('http://localhost:3001/fusion-pixel-${fontSize}px.woff2') format('woff2');
+        src: url('${fontUrl}') format('woff2');
         font-weight: normal;
         font-style: normal;
         font-display: swap;

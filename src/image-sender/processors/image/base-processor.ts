@@ -1,11 +1,8 @@
 import fs from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { ImageDimensions, ImageProcessingOptions } from '../../core/types/index.js';
 import { DEVICE_SCREEN_SIZE, OUTPUT_DIRECTORIES } from '../../core/config/index.js';
 import { EinkOptimizer } from '../optimization/dithering-optimizer.js';
-
-const execAsync = promisify(exec);
+import { createCanvas, loadImage } from 'canvas';
 
 export class ImageProcessor {
   private einkOptimizer: EinkOptimizer;
@@ -29,17 +26,14 @@ export class ImageProcessor {
     }
 
     try {
-      const { stdout } = await execAsync(`file "${imagePath}"`);
-      const match = stdout.match(/(\d+) x (\d+)/);
-      if (match) {
-        return {
-          dimensions: {
-            width: parseInt(match[1], 10),
-            height: parseInt(match[2], 10)
-          },
-          exists: true
-        };
-      }
+      const image = await loadImage(imagePath);
+      return {
+        dimensions: {
+          width: image.width,
+          height: image.height
+        },
+        exists: true
+      };
     } catch (error) {
       console.warn('获取图片信息失败:', error);
     }
@@ -49,16 +43,25 @@ export class ImageProcessor {
 
   async resizeImage(inputPath: string, outputPath: string, targetSize: ImageDimensions = DEVICE_SCREEN_SIZE): Promise<boolean> {
     try {
-      // 使用 sips -Z 保持宽高比缩放到目标尺寸，可能会有留白但不会丢失内容
-      const maxDimension = Math.max(targetSize.width, targetSize.height);
-      const command = `sips -Z ${maxDimension} "${inputPath}" --out "${outputPath}"`;
       console.log(`正在保持宽高比调整图片（避免拉伸和裁剪内容）...`);
       
-      await execAsync(command);
+      const image = await loadImage(inputPath);
       
-      // 检查调整后的实际尺寸
-      const { dimensions } = await this.getImageInfo(outputPath);
-      console.log(`图片已调整为: ${dimensions.width}x${dimensions.height} (目标: ${targetSize.width}x${targetSize.height})`);
+      const scale = Math.min(
+        targetSize.width / image.width,
+        targetSize.height / image.height
+      );
+      const newWidth = Math.round(image.width * scale);
+      const newHeight = Math.round(image.height * scale);
+      
+      const canvas = createCanvas(newWidth, newHeight);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0, newWidth, newHeight);
+      
+      const buffer = canvas.toBuffer('image/png');
+      await fs.promises.writeFile(outputPath, buffer);
+      
+      console.log(`图片已调整为: ${newWidth}x${newHeight} (目标: ${targetSize.width}x${targetSize.height})`);
       
       return true;
     } catch (error) {

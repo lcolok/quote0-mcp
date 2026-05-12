@@ -139,17 +139,13 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
     
     try {
       // 动态导入所需的模块
-      const { NewsWidget } = await import('../components/NewsWidget.js');
-      const { minioWidgetRenderer } = await import('./minio-widget-renderer.js');
+      const { SatoriNewsWidget } = await import('../components/SatoriNewsWidget.js');
+      const { satoriRenderer } = await import('./satori-renderer.js');
       const { getImageStorage } = await import('./image-storage.js');
       const React = await import('react');
       
       // 初始化渲染器
-      await minioWidgetRenderer.initialize();
-      
-      // 初始化字体存储服务（检验并上传字体到MinIO）
-      const { fontStorageService } = await import('./font-storage.js');
-      await fontStorageService.initialize();
+      await satoriRenderer.initialize();
       
       // 创建新闻数据对象
       const newsData = {
@@ -166,8 +162,8 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       // 渲染组件为图片
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
       
-      const imageBuffer = await minioWidgetRenderer.renderToImage(
-        React.createElement(NewsWidget, { 
+      const imageBuffer = await satoriRenderer.renderToImage(
+        React.createElement(SatoriNewsWidget, { 
           data: newsData,
           border: borderColor 
         }),
@@ -387,13 +383,13 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
     console.log(`📱 渲染并推送到设备: ${data.title}`);
     
     // 声明渲染器变量，以便在错误处理中使用
-    let minioWidgetRenderer: any = null;
+    let satoriRenderer: any = null;
     
     try {
       // 直接使用传入的数据进行渲染，而不是调用CLI工具
-      const { NewsWidget } = await import('../components/NewsWidget.js');
-      const { minioWidgetRenderer: renderer } = await import('./minio-widget-renderer.js');
-      minioWidgetRenderer = renderer;
+      const { SatoriNewsWidget } = await import('../components/SatoriNewsWidget.js');
+      const { satoriRenderer: renderer } = await import('./satori-renderer.js');
+      satoriRenderer = renderer;
       const { getImageStorage } = await import('./image-storage.js');
       const React = await import('react');
       const { exec } = await import('child_process');
@@ -403,7 +399,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       const execAsync = promisify(exec);
       
       // 初始化渲染器
-      await minioWidgetRenderer.initialize();
+      await satoriRenderer.initialize();
       
       // 创建新闻数据对象，使用传入的处理后数据
       const newsData = {
@@ -427,8 +423,8 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       // 渲染组件为图片
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
       
-      const imageBuffer = await minioWidgetRenderer.renderToImage(
-        React.createElement(NewsWidget, { 
+      const imageBuffer = await satoriRenderer.renderToImage(
+        React.createElement(SatoriNewsWidget, { 
           data: newsData,
           border: borderColor 
         }),
@@ -627,9 +623,9 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       throw new Error(`设备推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       // 确保渲染器资源被清理
-      if (minioWidgetRenderer) {
+      if (satoriRenderer) {
         try {
-          await minioWidgetRenderer.close();
+          await satoriRenderer.close();
         } catch (cleanupError) {
           console.warn('⚠️ 渲染器清理失败:', cleanupError);
         }

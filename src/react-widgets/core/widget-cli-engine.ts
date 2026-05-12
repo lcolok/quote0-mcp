@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { WidgetPluginRegistry, WidgetExecutionContext, WidgetExecutionResult, WidgetConfig } from './widget-plugin.js';
-import { minioWidgetRenderer } from './minio-widget-renderer.js';
+import { satoriRenderer } from './satori-renderer.js';
 import { stagedCacheManager } from './staged-cache-manager.js';
 import { EnvLoader } from '../../image-sender/index.js';
 import { exec } from 'child_process';
@@ -109,7 +109,7 @@ export class WidgetCLIEngine {
           const outputPath = `${componentOutputDir}/${this.generateFileName(params)}_${context.timestamp}.png`;
           
           // 渲染为图片
-          await minioWidgetRenderer.renderToFile(widgetComponent, outputPath);
+          await satoriRenderer.renderToFile(widgetComponent, outputPath);
           
           if (!existsSync(outputPath)) {
             throw new Error('组件渲染失败，图片文件未生成');
@@ -189,7 +189,7 @@ export class WidgetCLIEngine {
     } finally {
       // 清理资源
       try {
-        await minioWidgetRenderer.close();
+        await satoriRenderer.close();
         await stagedCacheManager.close();
       } catch (error) {
         // 忽略清理错误

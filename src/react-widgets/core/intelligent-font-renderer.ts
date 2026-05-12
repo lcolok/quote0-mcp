@@ -4,6 +4,7 @@
  */
 
 import { selectOptimalFont, FontSelection } from '../smart-font-selector.js';
+import { getFontServerUrl } from './lazycat-adapter.js';
 
 /**
  * 智能字体渲染配置
@@ -39,8 +40,6 @@ export interface FontRenderResult extends FontSelection {
  * 智能字体渲染器
  */
 export class IntelligentFontRenderer {
-  private static fontServerBaseUrl = 'http://localhost:3001';
-
   /**
    * 获取最优字体渲染方案
    */
@@ -67,7 +66,7 @@ export class IntelligentFontRenderer {
       ...selection,
       cssSize: `${targetSize}px`,
       cssLineHeight: `${targetSize + 2}px`, // 建议行高为字体大小+2px
-      fontUrl: `${this.fontServerBaseUrl}/fusion-pixel-${targetSize}px.woff2`,
+      fontUrl: `${getFontServerUrl()}/fusion-pixel-${targetSize}px.woff2`,
       quality,
       recommendations
     };

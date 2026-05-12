@@ -5,6 +5,7 @@
 
 import { fontStorageService } from './font-storage.js';
 import { selectOptimalFont } from '../smart-font-selector.js';
+import { getFontServerUrl } from './lazycat-adapter.js';
 
 export interface MinIOFontRenderResult {
   fontUrl: string;
@@ -80,7 +81,7 @@ export class MinIOFontRenderer {
     } catch (error) {
       console.warn(`⚠️ 获取字体URL失败 (${baseFontSize}px), 使用本地回退:`, error);
       // 回退到本地字体服务器
-      return `http://localhost:3001/fusion-pixel-${baseFontSize}px.woff2`;
+      return `${getFontServerUrl()}/fusion-pixel-${baseFontSize}px.woff2`;
     }
   }
 
@@ -154,10 +155,11 @@ export class MinIOFontRenderer {
       `);
     } catch (error) {
       console.warn('⚠️ 获取默认字体失败，使用本地回退');
+      const fallbackUrl = `${getFontServerUrl()}/fusion-pixel-12px.woff2`;
       cssParts.push(`
         @font-face {
           font-family: 'FusionPixelFont';
-          src: url('http://localhost:3001/fusion-pixel-12px.woff2') format('woff2');
+          src: url('${fallbackUrl}') format('woff2');
           font-weight: normal;
           font-style: normal;
           font-display: swap;

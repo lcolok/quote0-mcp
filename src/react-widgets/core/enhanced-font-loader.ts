@@ -5,6 +5,7 @@
 
 import { FontLoader } from '../font-loader.js';
 import { IntelligentFontRenderer, IntelligentFontConfig, FontRenderResult } from './intelligent-font-renderer.js';
+import { getFontServerUrl } from './lazycat-adapter.js';
 
 /**
  * 增强字体加载器
@@ -84,10 +85,11 @@ export class EnhancedFontLoader extends FontLoader {
     }
     
     // 默认字体族
+    const defaultFontUrl = `${getFontServerUrl()}/fusion-pixel-12px.woff2`;
     css += `
       @font-face {
         font-family: 'FusionPixelFont';
-        src: url('http://localhost:3001/fusion-pixel-12px.woff2') format('woff2');
+        src: url('${defaultFontUrl}') format('woff2');
         font-weight: normal;
         font-style: normal;
         font-display: swap;

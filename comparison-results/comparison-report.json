@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-05-11T17:05:19.300Z",
+  "testData": {
+    "title": "AI技术突破：新型语言模型在多个基准测试中表现优异",
+    "messageLength": 76
+  },
+  "results": {
+    "totalPixels": 44992,
+    "differentPixels": 4619,
+    "percentage": 10.266269559032718,
+    "maxDifference": 441.6729559300637,
+    "avgDifference": 340.82740065148073,
+    "identicalRegions": 106,
+    "similarRegions": 7,
+    "differentRegions": 77
+  },
+  "similarityScore": 89.73373044096728,
+  "files": {
+    "puppeteer": "comparison-results/puppeteer.png",
+    "satori": "comparison-results/satori.png",
+    "diff": "comparison-results/diff-comparison.png"
+  }
+}

@@ -304,6 +304,7 @@ export class PostgresDatabase {
       );
 
       -- 数据库迁移：为兼容旧结构补齐缺失字段
+      ALTER TABLE news_cache ADD COLUMN IF NOT EXISTS image_path TEXT;
       ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS rss_sources JSONB;
       ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS disabled_sources JSONB DEFAULT '[]'::jsonb;
       ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS current_source_index INTEGER DEFAULT 0;
