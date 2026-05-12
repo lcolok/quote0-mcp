@@ -211,6 +211,49 @@ curl -s http://localhost:3001/api/health/modules
 - MinIO Console: 29001 (映射到容器内9001)
 - Redis: 26379 (映射到容器内6379)
 
+## ⚠️ 懒猫微服部署重要注意事项
+
+### 🚫 禁止手动启动容器
+**绝对不要**在懒猫微服上使用 `docker run` 手动启动容器！
+
+```bash
+# ❌ 错误做法 - 手动启动容器
+lcctl remote docker run -d --name mefridayquote0-mcp-news-api-1 ...
+
+# ✅ 正确做法 - 通过懒猫正式部署
+lcctl project release --version 1.0.4 --install
+```
+
+### 为什么必须通过懒猫部署？
+
+| 功能 | 手动 docker run | 懒猫正式部署 |
+|------|-----------------|--------------|
+| 服务发现 | ❌ 懒猫不认识 | ✅ 自动注册 |
+| 健康检查 | ❌ 不经过懒猫 | ✅ 统一监控 |
+| 网络管理 | ❌ 独立网络 | ✅ 懒猫管理 |
+| 配置管理 | ❌ 手动传入 | ✅ lzc-manifest.yml |
+| 状态显示 | ❌ 显示"状态错误" | ✅ 正常显示 |
+
+### 正确的部署流程
+
+```bash
+# 1. 构建镜像（本地或远程）
+docker build --platform linux/amd64 -t dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.4 .
+
+# 2. 推送镜像到 LC03 registry
+docker push dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.4
+
+# 3. 更新 lzc-manifest.yml 中的镜像版本
+# 4. 通过懒猫正式部署
+lcctl project release --version 1.0.4 --install
+```
+
+### 教训记录
+- **日期**: 2026-05-12
+- **问题**: 手动启动容器导致懒猫显示"状态错误"
+- **原因**: 懒猫的服务发现机制不认识手动启动的容器
+- **解决**: 通过 `lcctl project release` 正式部署
+
 ## 开发规范
 
 ### 新组件开发流程
