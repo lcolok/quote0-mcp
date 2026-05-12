@@ -27,6 +27,9 @@ scripts/*.d.ts.map
 .env.test.local
 .env.production.local
 
+# E-Ink device config (contains tokens)
+config/eink-devices.json
+
 # Runtime data
 pids
 *.pid

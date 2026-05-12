@@ -689,6 +689,202 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
 }
 
 /**
+ * 本地 E-Ink 推送渲染模块
+ * 渲染 PNG → 转换 1-bit bitmap → POST 到局域网 e-ink 设备
+ */
+export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: string; pushResults: Array<{ device: string; ok: boolean; error?: string }> }> {
+  name = '本地E-Ink推送渲染器';
+  version = '1.0.0';
+  description = '将新闻渲染为图片并推送到局域网 e-ink 设备（bitmap 直推）';
+
+  transformToRenderable(processedData: ProcessedDataItem, params: RenderingParams): RenderableDataItem {
+    const sourceMapping: Record<string, string> = {
+      'rss': 'RSS智能',
+      'mock': 'Mock演示',
+      'api': 'API实时'
+    };
+
+    let signature = '';
+    const processorName = processedData.processingMetadata?.processor || 'unknown';
+    if (processorName.includes('AX')) {
+      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+    } else if (processorName.includes('LLM')) {
+      signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
+    } else {
+      signature = sourceMapping[processedData.rawData?.source || 'unknown'] || '智能处理';
+    }
+
+    return {
+      id: processedData.id,
+      title: processedData.optimizedTitle,
+      message: processedData.summary || processedData.processedContent,
+      signature,
+      source: processedData.rawData?.source || 'unknown',
+      publishTime: processedData.rawData?.publishTime || new Date().toISOString(),
+      category: processedData.rawData?.category || '新闻',
+      link: processedData.rawData?.link,
+      highlights: processedData.highlights,
+      metadata: {
+        originalTitle: processedData.originalTitle,
+        processingMetadata: processedData.processingMetadata,
+        qualityScore: processedData.qualityScore
+      }
+    };
+  }
+
+  async render(data: RenderableDataItem, config: RenderingConfig): Promise<{ imageUrl: string; pushResults: Array<{ device: string; ok: boolean; error?: string }> }> {
+    console.log(`🖥️ 渲染并推送到本地 e-ink 设备: ${data.title}`);
+
+    let satoriRenderer: any = null;
+
+    try {
+      // 1. Satori 渲染 PNG（与 DevicePushRenderingModule 相同流程）
+      const { SatoriNewsWidget } = await import('../components/SatoriNewsWidget.js');
+      const { satoriRenderer: renderer } = await import('./satori-renderer.js');
+      satoriRenderer = renderer;
+      const { getImageStorage } = await import('./image-storage.js');
+      const React = await import('react');
+      const fs = await import('fs/promises');
+
+      await satoriRenderer.initialize();
+
+      const newsData = {
+        title: data.title,
+        message: data.message,
+        signature: data.signature,
+        source: data.source,
+        publishTime: data.publishTime,
+        category: data.category,
+        link: data.link,
+        highlights: data.highlights?.map(word => ({ word, color: '#ff0000' }))
+      };
+
+      const borderColor = config.border === '1' ? '#000000' : '#ffffff';
+      const imageBuffer = await satoriRenderer.renderToImage(
+        React.createElement(SatoriNewsWidget, {
+          data: newsData,
+          border: borderColor
+        }),
+        {
+          format: 'png',
+          quality: 100,
+          backgroundColor: config.backgroundColor || '#ffffff'
+        }
+      );
+
+      // 2. 保存到本地临时文件 + 上传 MinIO
+      const timestamp = Date.now();
+      const filename = `modular_${data.id}_${timestamp}.png`;
+      const localImagePath = `./processed-images/widgets/news/${filename}`;
+      const dirPath = './processed-images/widgets/news';
+      await fs.mkdir(dirPath, { recursive: true });
+      await fs.writeFile(localImagePath, imageBuffer);
+
+      const imageStorage = getImageStorage();
+      const metadata = {
+        widgetType: 'news',
+        cacheKey: `modular_${data.id}_${timestamp}`,
+        renderConfig: { border: config.border, width: config.width || 640, height: config.height || 384 }
+      };
+      const uploadResult = await imageStorage.uploadImage(localImagePath, metadata);
+      const imageUrl = uploadResult.url;
+      console.log(`✅ PNG 已上传 MinIO: ${imageUrl}`);
+
+      // 3. PNG → 1-bit bitmap
+      const { pngTo1BitBitmap } = await import('../../api/eink-converter.js');
+      const bitmap = await pngTo1BitBitmap(imageBuffer);
+      console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
+
+      // 4. 读取设备清单并逐个推送
+      const { readFile } = await import('fs/promises');
+      const { join } = await import('path');
+
+      let devices: Array<{ id: string; name: string; baseUrl: string; token: string }> = [];
+      try {
+        const configPath = join(process.cwd(), 'config', 'eink-devices.json');
+        const configRaw = await readFile(configPath, 'utf-8');
+        devices = JSON.parse(configRaw);
+      } catch (configError) {
+        console.warn('⚠️ 无法读取 eink-devices.json，跳过设备推送:', configError);
+        return { imageUrl, pushResults: [] };
+      }
+
+      const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
+
+      for (const device of devices) {
+        try {
+          console.log(`📤 推送到 ${device.name} (${device.baseUrl})...`);
+          const resp = await fetch(`${device.baseUrl}/display/bitmap`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${device.token}`,
+              'Content-Type': 'application/octet-stream',
+            },
+            body: bitmap,
+            signal: AbortSignal.timeout(15000),
+          });
+
+          if (resp.ok) {
+            const body = await resp.json();
+            console.log(`✅ ${device.name} 推送成功:`, body);
+            pushResults.push({ device: device.id, ok: true });
+          } else {
+            const errText = await resp.text();
+            console.error(`❌ ${device.name} 推送失败 (${resp.status}): ${errText}`);
+            pushResults.push({ device: device.id, ok: false, error: `HTTP ${resp.status}: ${errText}` });
+          }
+        } catch (pushError: any) {
+          console.error(`❌ ${device.name} 推送异常:`, pushError.message);
+          pushResults.push({ device: device.id, ok: false, error: pushError.message });
+        }
+      }
+
+      return { imageUrl, pushResults };
+
+    } catch (error) {
+      console.error('本地 E-Ink 推送渲染失败:', error);
+      throw new Error(`本地 E-Ink 推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      if (satoriRenderer) {
+        try {
+          await satoriRenderer.close();
+        } catch (cleanupError) {
+          console.warn('⚠️ 渲染器清理失败:', cleanupError);
+        }
+      }
+    }
+  }
+
+  getSupportedParams(): RenderingParamDefinition[] {
+    return [
+      {
+        name: 'signatureStyle',
+        type: 'string',
+        required: false,
+        defaultValue: 'auto',
+        description: '签名样式：auto, simple, detailed',
+        choices: ['auto', 'simple', 'detailed']
+      }
+    ];
+  }
+
+  async getHealthStatus(): Promise<RenderingHealthStatus> {
+    return {
+      healthy: true,
+      message: '本地 E-Ink 推送渲染器正常',
+      lastChecked: new Date().toISOString(),
+      responseTime: 100,
+      renderingCapacity: 5,
+      fontStatus: 'loaded',
+      additionalInfo: {
+        targetResolution: '296x152',
+        bitmapFormat: '1-bit MSB-first'
+      }
+    };
+  }
+}
+
+/**
  * 渲染模块注册表
  */
 export class RenderingRegistry {
@@ -700,6 +896,7 @@ export class RenderingRegistry {
     this.register('news', new NewsRenderingModule());
     this.register('json', new JSONRenderingModule());
     this.register('device', new DevicePushRenderingModule());
+    this.register('local-eink', new LocalEinkRenderingModule());
   }
   
   register(name: string, module: RenderingModule): void {

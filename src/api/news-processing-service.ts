@@ -97,7 +97,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     };
   };
 
-  if (!params.force && (params.renderer === 'json' || params.renderer === 'device')) {
+  if (!params.force && (params.renderer === 'json' || params.renderer === 'device' || params.renderer === 'local-eink')) {
     try {
       if (params.renderer === 'json') {
         console.log('🔍 JSON渲染器 - 检查数据缓存...');
@@ -114,8 +114,8 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         result = newsResult.data;
         cacheHit = newsResult.source !== 'original';
         cacheSource = newsResult.source;
-      } else if (params.renderer === 'device') {
-        console.log('📱 设备推送渲染器 - 启用MinIO直接缓存...');
+      } else if (params.renderer === 'device' || params.renderer === 'local-eink') {
+        console.log(`📱 设备推送渲染器 (${params.renderer}) - 启用MinIO直接缓存...`);
 
         let newsFingerprint: string;
         let cachedTextData: any = null;
@@ -264,28 +264,67 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                 const fileStats = await fsModule.promises.stat(tempFilePath);
                 console.log(`📊 临时文件信息: 大小=${fileStats.size} bytes, 路径=${tempFilePath}`);
 
-                const { exec } = await import('child_process');
-                const { promisify } = await import('util');
-                const execAsync = promisify(exec);
+                if (params.renderer === 'local-eink') {
+                  // local-eink: 转换为 bitmap 并推送到 ESP32 设备
+                  const pngBuffer = await fsModule.promises.readFile(tempFilePath);
+                  const { pngTo1BitBitmap } = await import('./eink-converter.js');
+                  const bitmap = await pngTo1BitBitmap(pngBuffer);
+                  console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
 
-                const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${tempFilePath}" "0" "" "ORDERED"`;
-                console.log(`🔧 执行设备推送命令: ${deviceCommand}`);
+                  let devices: Array<{ id: string; name: string; baseUrl: string; token: string }> = [];
+                  try {
+                    const configPath = path.join(process.cwd(), 'config', 'eink-devices.json');
+                    const configRaw = await fsModule.promises.readFile(configPath, 'utf-8');
+                    devices = JSON.parse(configRaw);
+                  } catch (configError) {
+                    console.warn('⚠️ 无法读取 eink-devices.json:', configError);
+                  }
 
-                const { stdout, stderr } = await execAsync(deviceCommand, {
-                  cwd: process.cwd(),
-                  env: process.env
-                });
+                  for (const device of devices) {
+                    try {
+                      const resp = await fetch(`${device.baseUrl}/display/bitmap`, {
+                        method: 'POST',
+                        headers: {
+                          'Authorization': `Bearer ${device.token}`,
+                          'Content-Type': 'application/octet-stream',
+                        },
+                        body: bitmap,
+                        signal: AbortSignal.timeout(15000),
+                      });
+                      if (resp.ok) {
+                        console.log(`✅ ${device.name} 推送成功`);
+                      } else {
+                        console.error(`❌ ${device.name} 推送失败: HTTP ${resp.status}`);
+                      }
+                    } catch (e: any) {
+                      console.error(`❌ ${device.name} 推送异常: ${e.message}`);
+                    }
+                  }
+                  devicePushResult = '缓存图片 e-ink 推送完成';
+                } else {
+                  // device: 使用 MindReset CLI 推送
+                  const { exec } = await import('child_process');
+                  const { promisify } = await import('util');
+                  const execAsync = promisify(exec);
 
-                if (stdout) console.log(stdout);
-                if (stderr) console.error(stderr);
+                  const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${tempFilePath}" "0" "" "ORDERED"`;
+                  console.log(`🔧 执行设备推送命令: ${deviceCommand}`);
+
+                  const { stdout, stderr } = await execAsync(deviceCommand, {
+                    cwd: process.cwd(),
+                    env: process.env
+                  });
+
+                  if (stdout) console.log(stdout);
+                  if (stderr) console.error(stderr);
+                  devicePushResult = '缓存图片推送成功';
+                }
 
                 try {
                   await fsModule.promises.unlink(tempFilePath);
                 } catch (cleanupError) {
                   console.warn('⚠️ 清理临时文件失败:', cleanupError);
                 }
-
-                devicePushResult = '缓存图片推送成功';
               } catch (pushError: any) {
                 console.error('❌ 缓存图片推送失败:', pushError);
                 devicePushResult = `缓存图片推送失败: ${pushError.message}`;
@@ -309,7 +348,14 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             deviceResultData = deviceResult;
             imageUrl = deviceResult.imageUrl;
             localImagePath = deviceResult.localImagePath;  // 保存localImagePath
-            devicePushResult = deviceResult.deviceResult || '推送完成';
+            // local-eink 返回 pushResults 数组，device 返回 deviceResult 字符串
+            if (params.renderer === 'local-eink' && Array.isArray(deviceResult.pushResults)) {
+              const ok = deviceResult.pushResults.filter((r: any) => r.ok).length;
+              const total = deviceResult.pushResults.length;
+              devicePushResult = `e-ink 推送完成: ${ok}/${total} 成功`;
+            } else {
+              devicePushResult = deviceResult.deviceResult || '推送完成';
+            }
 
             try {
               console.log('💾 保存渲染结果到MinIO缓存...');
