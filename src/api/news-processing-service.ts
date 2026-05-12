@@ -267,37 +267,21 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                 if (params.renderer === 'local-eink') {
                   // local-eink: 转换为 bitmap 并推送到 ESP32 设备
                   const pngBuffer = await fsModule.promises.readFile(tempFilePath);
-                  const { pngTo1BitBitmap } = await import('./eink-converter.js');
+                  const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
                   const bitmap = await pngTo1BitBitmap(pngBuffer);
                   console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
 
-                  let devices: Array<{ id: string; name: string; baseUrl: string; token: string }> = [];
-                  try {
-                    const configPath = path.join(process.cwd(), 'config', 'eink-devices.json');
-                    const configRaw = await fsModule.promises.readFile(configPath, 'utf-8');
-                    devices = JSON.parse(configRaw);
-                  } catch (configError) {
-                    console.warn('⚠️ 无法读取 eink-devices.json:', configError);
-                  }
-
-                  for (const device of devices) {
-                    try {
-                      const resp = await fetch(`${device.baseUrl}/display/bitmap`, {
-                        method: 'POST',
-                        headers: {
-                          'Authorization': `Bearer ${device.token}`,
-                          'Content-Type': 'application/octet-stream',
-                        },
-                        body: bitmap,
-                        signal: AbortSignal.timeout(15000),
-                      });
-                      if (resp.ok) {
+                  const devices = await getEinkDevices();
+                  if (devices.length === 0) {
+                    console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
+                  } else {
+                    for (const device of devices) {
+                      const result = await pushToEinkDevice(device, bitmap);
+                      if (result.ok) {
                         console.log(`✅ ${device.name} 推送成功`);
                       } else {
-                        console.error(`❌ ${device.name} 推送失败: HTTP ${resp.status}`);
+                        console.error(`❌ ${device.name} 推送失败: ${result.error}`);
                       }
-                    } catch (e: any) {
-                      console.error(`❌ ${device.name} 推送异常: ${e.message}`);
                     }
                   }
                   devicePushResult = '缓存图片 e-ink 推送完成';
