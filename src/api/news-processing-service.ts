@@ -223,69 +223,50 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
               localCacheHit = true;
               console.log(`✅ MinIO缓存命中: ${imageUrl}`);
 
-              console.log('📤 使用缓存图片执行设备推送...');
+              if (params.renderer === 'local-eink') {
+                // local-eink: LocalEinkRenderingModule.render() 在 cache miss 时已推送，跳过重复推送
+                console.log('ℹ️ local-eink cache hit，跳过推送（渲染模块已处理）');
+                devicePushResult = 'local-eink cache hit, push skipped';
+              } else {
+                console.log('📤 使用缓存图片执行设备推送...');
 
-              try {
-                const fs = await import('fs/promises');
-                const path = await import('path');
-                const { tmpdir } = await import('os');
-                const https = await import('https');
-                const http = await import('http');
+                try {
+                  const fs = await import('fs/promises');
+                  const path = await import('path');
+                  const { tmpdir } = await import('os');
+                  const https = await import('https');
+                  const http = await import('http');
 
-                const tempFileName = `cached_${Date.now()}.png`;
-                const tempFilePath = path.join(tmpdir(), tempFileName);
+                  const tempFileName = `cached_${Date.now()}.png`;
+                  const tempFilePath = path.join(tmpdir(), tempFileName);
 
-                const { createWriteStream } = await import('fs');
-                await new Promise<void>((resolve, reject) => {
-                  const client = imageUrl.startsWith('https:') ? https : http;
-                  const file = createWriteStream(tempFilePath);
+                  const { createWriteStream } = await import('fs');
+                  await new Promise<void>((resolve, reject) => {
+                    const client = imageUrl.startsWith('https:') ? https : http;
+                    const file = createWriteStream(tempFilePath);
 
-                  client.get(imageUrl, (response) => {
-                    response.pipe(file);
-                    file.on('finish', () => {
-                      // 等待文件流完全关闭后再resolve
-                      file.close(() => {
-                        console.log(`✅ 文件下载并关闭完成: ${tempFilePath}`);
-                        resolve();
+                    client.get(imageUrl, (response) => {
+                      response.pipe(file);
+                      file.on('finish', () => {
+                        file.close(() => {
+                          console.log(`✅ 文件下载并关闭完成: ${tempFilePath}`);
+                          resolve();
+                        });
                       });
-                    });
-                    file.on('error', (err) => {
+                      file.on('error', (err) => {
+                        file.close();
+                        reject(err);
+                      });
+                    }).on('error', (err) => {
                       file.close();
                       reject(err);
                     });
-                  }).on('error', (err) => {
-                    file.close();
-                    reject(err);
                   });
-                });
 
-                // 验证文件确实存在且可读
-                const fsModule = await import('fs');
-                const fileStats = await fsModule.promises.stat(tempFilePath);
-                console.log(`📊 临时文件信息: 大小=${fileStats.size} bytes, 路径=${tempFilePath}`);
+                  const fsModule = await import('fs');
+                  const fileStats = await fsModule.promises.stat(tempFilePath);
+                  console.log(`📊 临时文件信息: 大小=${fileStats.size} bytes, 路径=${tempFilePath}`);
 
-                if (params.renderer === 'local-eink') {
-                  // local-eink: 转换为 bitmap 并推送到 ESP32 设备
-                  const pngBuffer = await fsModule.promises.readFile(tempFilePath);
-                  const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
-                  const bitmap = await pngTo1BitBitmap(pngBuffer);
-                  console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
-
-                  const devices = await getEinkDevices();
-                  if (devices.length === 0) {
-                    console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
-                  } else {
-                    for (const device of devices) {
-                      const result = await pushToEinkDevice(device, bitmap);
-                      if (result.ok) {
-                        console.log(`✅ ${device.name} 推送成功`);
-                      } else {
-                        console.error(`❌ ${device.name} 推送失败: ${result.error}`);
-                      }
-                    }
-                  }
-                  devicePushResult = '缓存图片 e-ink 推送完成';
-                } else {
                   // device: 使用 MindReset CLI 推送
                   const { exec } = await import('child_process');
                   const { promisify } = await import('util');
@@ -302,16 +283,16 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                   if (stdout) console.log(stdout);
                   if (stderr) console.error(stderr);
                   devicePushResult = '缓存图片推送成功';
-                }
 
-                try {
-                  await fsModule.promises.unlink(tempFilePath);
-                } catch (cleanupError) {
-                  console.warn('⚠️ 清理临时文件失败:', cleanupError);
+                  try {
+                    await fsModule.promises.unlink(tempFilePath);
+                  } catch (cleanupError) {
+                    console.warn('⚠️ 清理临时文件失败:', cleanupError);
+                  }
+                } catch (pushError: any) {
+                  console.error('❌ 缓存图片推送失败:', pushError);
+                  devicePushResult = `缓存图片推送失败: ${pushError.message}`;
                 }
-              } catch (pushError: any) {
-                console.error('❌ 缓存图片推送失败:', pushError);
-                devicePushResult = `缓存图片推送失败: ${pushError.message}`;
               }
             }
           } catch (cacheCheckError) {
