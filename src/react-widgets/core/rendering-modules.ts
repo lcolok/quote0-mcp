@@ -796,47 +796,23 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
       console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
 
       // 4. 读取设备清单并逐个推送
-      const { readFile } = await import('fs/promises');
-      const { join } = await import('path');
+      const { getEinkDevices, pushToEinkDevice } = await import('../../api/eink-converter.js');
 
-      let devices: Array<{ id: string; name: string; baseUrl: string; token: string }> = [];
-      try {
-        const configPath = join(process.cwd(), 'config', 'eink-devices.json');
-        const configRaw = await readFile(configPath, 'utf-8');
-        devices = JSON.parse(configRaw);
-      } catch (configError) {
-        console.warn('⚠️ 无法读取 eink-devices.json，跳过设备推送:', configError);
+      const devices = await getEinkDevices();
+      if (devices.length === 0) {
+        console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
         return { imageUrl, pushResults: [] };
       }
 
       const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
 
       for (const device of devices) {
-        try {
-          console.log(`📤 推送到 ${device.name} (${device.baseUrl})...`);
-          const resp = await fetch(`${device.baseUrl}/display/bitmap`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${device.token}`,
-              'Content-Type': 'application/octet-stream',
-            },
-            body: bitmap,
-            signal: AbortSignal.timeout(15000),
-          });
-
-          if (resp.ok) {
-            const body = await resp.json();
-            console.log(`✅ ${device.name} 推送成功:`, body);
-            pushResults.push({ device: device.id, ok: true });
-          } else {
-            const errText = await resp.text();
-            console.error(`❌ ${device.name} 推送失败 (${resp.status}): ${errText}`);
-            pushResults.push({ device: device.id, ok: false, error: `HTTP ${resp.status}: ${errText}` });
-          }
-        } catch (pushError: any) {
-          console.error(`❌ ${device.name} 推送异常:`, pushError.message);
-          pushResults.push({ device: device.id, ok: false, error: pushError.message });
-        }
+        const result = await pushToEinkDevice(device, bitmap);
+        pushResults.push({
+          device: device.id,
+          ok: result.ok,
+          error: result.error
+        });
       }
 
       return { imageUrl, pushResults };
@@ -869,18 +845,35 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
   }
 
   async getHealthStatus(): Promise<RenderingHealthStatus> {
-    return {
-      healthy: true,
-      message: '本地 E-Ink 推送渲染器正常',
-      lastChecked: new Date().toISOString(),
-      responseTime: 100,
-      renderingCapacity: 5,
-      fontStatus: 'loaded',
-      additionalInfo: {
-        targetResolution: '296x152',
-        bitmapFormat: '1-bit MSB-first'
-      }
-    };
+    try {
+      // 检查设备配置是否可用
+      const { getEinkDevices } = await import('../../api/eink-converter.js');
+      const devices = await getEinkDevices();
+
+      return {
+        healthy: true,
+        message: `本地 E-Ink 推送渲染器正常，已配置 ${devices.length} 个设备`,
+        lastChecked: new Date().toISOString(),
+        responseTime: 100,
+        renderingCapacity: devices.length > 0 ? 10 : 0,
+        fontStatus: 'loaded',
+        additionalInfo: {
+          targetResolution: '296x152',
+          bitmapFormat: '1-bit MSB-first',
+          deviceCount: devices.length,
+          devices: devices.map(d => ({ id: d.id, name: d.name }))
+        }
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        message: `本地 E-Ink 推送渲染器异常: ${error instanceof Error ? error.message : '未知错误'}`,
+        lastChecked: new Date().toISOString(),
+        responseTime: 1000,
+        renderingCapacity: 0,
+        fontStatus: 'error'
+      };
+    }
   }
 }
 

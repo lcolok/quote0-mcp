@@ -8,7 +8,7 @@ pkgout: ./
 icon: ./icon.png
 
 # 应用清单文件路径
-manifest: ./lazycat/lzc-manifest.yml
+manifest: ./lzc-manifest.yml
 
 # 构建钩子（可选）
 # prebuild: ./scripts/lazycat-prebuild.sh
