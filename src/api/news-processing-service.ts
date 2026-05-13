@@ -224,9 +224,72 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
               console.log(`✅ MinIO缓存命中: ${imageUrl}`);
 
               if (params.renderer === 'local-eink') {
-                // local-eink: LocalEinkRenderingModule.render() 在 cache miss 时已推送，跳过重复推送
-                console.log('ℹ️ local-eink cache hit，跳过推送（渲染模块已处理）');
-                devicePushResult = 'local-eink cache hit, push skipped';
+                // local-eink: 即使缓存命中也要推送到 ESP32
+                console.log('📤 使用缓存图片推送到 ESP32...');
+                try {
+                  const fs = await import('fs/promises');
+                  const path = await import('path');
+                  const { tmpdir } = await import('os');
+                  const https = await import('https');
+                  const http = await import('http');
+                  const fsModule = await import('fs');
+
+                  const tempFileName = `cached_eink_${Date.now()}.png`;
+                  const tempFilePath = path.join(tmpdir(), tempFileName);
+
+                  const { createWriteStream } = await import('fs');
+                  await new Promise<void>((resolve, reject) => {
+                    const client = imageUrl.startsWith('https:') ? https : http;
+                    const file = createWriteStream(tempFilePath);
+
+                    client.get(imageUrl, (response) => {
+                      response.pipe(file);
+                      file.on('finish', () => {
+                        file.close(() => {
+                          console.log(`✅ 文件下载完成: ${tempFilePath}`);
+                          resolve();
+                        });
+                      });
+                      file.on('error', (err) => {
+                        file.close();
+                        reject(err);
+                      });
+                    }).on('error', (err) => {
+                      file.close();
+                      reject(err);
+                    });
+                  });
+
+                  const pngBuffer = await fsModule.promises.readFile(tempFilePath);
+                  const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
+                  const bitmap = await pngTo1BitBitmap(pngBuffer);
+                  console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
+
+                  const devices = await getEinkDevices();
+                  if (devices.length === 0) {
+                    console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
+                  } else {
+                    for (const device of devices) {
+                      const result = await pushToEinkDevice(device, bitmap);
+                      if (result.ok) {
+                        console.log(`✅ ${device.name} 推送成功`);
+                      } else {
+                        console.error(`❌ ${device.name} 推送失败: ${result.error}`);
+                      }
+                    }
+                  }
+
+                  devicePushResult = '缓存图片 e-ink 推送完成';
+
+                  try {
+                    await fsModule.promises.unlink(tempFilePath);
+                  } catch (cleanupError) {
+                    console.warn('⚠️ 清理临时文件失败:', cleanupError);
+                  }
+                } catch (pushError: any) {
+                  console.error('❌ 缓存图片 e-ink 推送失败:', pushError);
+                  devicePushResult = `缓存图片 e-ink 推送失败: ${pushError.message}`;
+                }
               } else {
                 console.log('📤 使用缓存图片执行设备推送...');
 

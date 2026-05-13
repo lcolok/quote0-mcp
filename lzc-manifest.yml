@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.0.4
+version: 1.0.7
 
 # 应用名称
 name: Quote0 新闻服务
@@ -155,7 +155,7 @@ services:
 
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.4
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.7
     environment:
       NODE_ENV: production
       PORT: "3001"
@@ -183,6 +183,7 @@ services:
       LLM_MAX_TOKENS: "1000"
       LLM_TEMPERATURE: "0.7"
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
+      NEWS_SCHEDULER_EXTRA_RENDERERS: 'local-eink'
     depends_on:
       - postgres
       - minio

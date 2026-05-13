@@ -501,6 +501,31 @@ export class NewsScheduler {
 
       console.log(`✅ 定时任务 ${job.config.id} 推送成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
 
+      // Fire-and-forget: 额外渲染器推送（如 local-eink）
+      const extraRenderers = (process.env.NEWS_SCHEDULER_EXTRA_RENDERERS || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (extraRenderers.length > 0) {
+        const extraContext = {
+          title: candidate.context.title,
+          link: candidate.context.link,
+          publishTime: candidate.context.publishTime,
+          source: currentRssSource,
+          category: candidate.context.category || job.config.category,
+          fingerprint: candidate.fingerprint
+        };
+        for (const extraRenderer of extraRenderers) {
+          const extraRequest: NewsProcessRequest = {
+            ...request,
+            renderer: extraRenderer,
+            context: extraContext
+          };
+          processNews(extraRequest).then(extraResult => {
+            console.log(`✅ 额外渲染器 ${extraRenderer} 推送成功`);
+          }).catch(extraError => {
+            console.warn(`⚠️ 额外渲染器 ${extraRenderer} 推送失败:`, extraError instanceof Error ? extraError.message : extraError);
+          });
+        }
+      }
+
       const rawContent = {
         title: candidate.context.title,
         link: candidate.context.link,
