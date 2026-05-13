@@ -3,6 +3,8 @@
  */
 
 import fs from 'fs';
+import { Pool } from 'pg';
+import { LLMCallCache } from './llm-call-cache.js';
 import { 
   ProcessingModule, 
   RawDataItem, 
@@ -263,12 +265,14 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
   private apiKey: string;
   private baseURL: string;
   private model: string;
+  private llmCache: LLMCallCache | null;
   
-  constructor(config: { apiKey: string; baseURL: string; model: string }) {
+  constructor(config: { apiKey: string; baseURL: string; model: string }, pool?: Pool) {
     super();
     this.apiKey = config.apiKey;
     this.baseURL = config.baseURL;
     this.model = config.model;
+    this.llmCache = pool ? new LLMCallCache(pool) : null;
   }
   
   async processData(rawData: RawDataItem, params: ProcessingParams): Promise<ProcessedDataItem> {
@@ -298,15 +302,25 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 4. 只返回优化后的标题，不要其他内容
 
 优化标题:`;
-      
-      const titleResponse = await client.chat.completions.create({
-        model: this.model,
-        messages: [{ role: 'user', content: titlePrompt }],
-        temperature,
-        max_tokens: 100
-      });
-      
-      const optimizedTitle = titleResponse.choices[0]?.message?.content?.trim() || rawData.title;
+
+      let optimizedTitle: string;
+      const titleCacheKey = { prompt: titlePrompt, model: this.model, temperature };
+      const titleCached = this.llmCache ? await this.llmCache.get(titleCacheKey) : null;
+      if (titleCached) {
+        console.log(`💾 标题缓存命中: "${rawData.title}"`);
+        optimizedTitle = titleCached.response;
+      } else {
+        const titleResponse = await client.chat.completions.create({
+          model: this.model,
+          messages: [{ role: 'user', content: titlePrompt }],
+          temperature,
+          max_tokens: 100
+        });
+        optimizedTitle = titleResponse.choices[0]?.message?.content?.trim() || rawData.title;
+        if (this.llmCache) {
+          await this.llmCache.set(titleCacheKey, optimizedTitle);
+        }
+      }
       
       // 优化内容摘要
       const contentPrompt = `请将以下新闻内容提炼为精炼摘要，严格控制在${maxContentLength}个字符以内：
@@ -320,15 +334,25 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 4. 只返回摘要内容，不要其他内容
 
 摘要:`;
-      
-      const contentResponse = await client.chat.completions.create({
-        model: this.model,
-        messages: [{ role: 'user', content: contentPrompt }],
-        temperature,
-        max_tokens: 300
-      });
-      
-      const processedContent = contentResponse.choices[0]?.message?.content?.trim() || rawData.content;
+
+      let processedContent: string;
+      const contentCacheKey = { prompt: contentPrompt, model: this.model, temperature };
+      const contentCached = this.llmCache ? await this.llmCache.get(contentCacheKey) : null;
+      if (contentCached) {
+        console.log(`💾 摘要缓存命中: "${rawData.title}"`);
+        processedContent = contentCached.response;
+      } else {
+        const contentResponse = await client.chat.completions.create({
+          model: this.model,
+          messages: [{ role: 'user', content: contentPrompt }],
+          temperature,
+          max_tokens: 300
+        });
+        processedContent = contentResponse.choices[0]?.message?.content?.trim() || rawData.content;
+        if (this.llmCache) {
+          await this.llmCache.set(contentCacheKey, processedContent);
+        }
+      }
       const processingTime = Date.now() - startTime;
       
       console.log(`✅ 基础LLM处理完成: "${optimizedTitle}" (耗时${processingTime}ms)`);
@@ -451,9 +475,11 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
 
   private processorInstance: any = null;
   private hotReloadManager: any = null;
+  private pool: Pool | undefined;
 
-  constructor(private config: { apiKey: string; baseURL: string; model: string }) {
+  constructor(private config: { apiKey: string; baseURL: string; model: string }, pool?: Pool) {
     super();
+    this.pool = pool;
   }
   
   private async initializeProcessor() {
@@ -479,7 +505,8 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       this.processorInstance = new AxOptimizedNewsProcessorSimplified({
         apiKey: this.config.apiKey,
         baseURL: this.config.baseURL,
-        model: this.config.model
+        model: this.config.model,
+        pool: this.pool
       });
       
       // 尝试加载预训练模型
@@ -818,12 +845,20 @@ export class ProcessingRegistry {
         console.log(`🔗 检测到自定义LLM端点: ${llmConfig.baseURL}`);
         console.log(`🔑 API密钥状态: ${llmConfig.apiKey === 'your_api_key_here' ? '占位符' : '已配置'}`);
         console.log(`🤖 LLM模型: ${llmConfig.model}`);
-        
-        // 注册基础LLM处理模块
-        this.register('basic-llm', new BasicLLMProcessingModule(llmConfig));
+
+        let pool: Pool | undefined;
+        try {
+          const { getPostgresDatabase } = require('./postgres-database.js');
+          pool = getPostgresDatabase().getPool();
+        } catch (e) {
+          console.warn('⚠️ 获取数据库连接池失败，LLM缓存将不可用:', e instanceof Error ? e.message : e);
+        }
+
+        // 注册基础LLM处理模块（带缓存）
+        this.register('basic-llm', new BasicLLMProcessingModule(llmConfig, pool));
         
         // 注册AX优化处理模块
-        this.register('ax-optimized', new AxOptimizedProcessingModule(llmConfig));
+        this.register('ax-optimized', new AxOptimizedProcessingModule(llmConfig, pool));
         
         console.log('🤖 LLM处理模块初始化完成（自动读取.env配置）');
       } else {

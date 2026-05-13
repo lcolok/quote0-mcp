@@ -115,12 +115,12 @@ export class PostgresDatabase {
         FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name IN (
           'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats',
-          'news_scheduler_jobs', 'news_push_stats', 'news_push_log'
+          'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache'
         )
       `);
 
       const existingTables = tablesResult.rows.map(row => row.table_name);
-      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log'];
+      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache'];
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
 
       console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
@@ -145,6 +145,13 @@ export class PostgresDatabase {
    */
   async getClient(): Promise<PoolClient> {
     return await this.pool.connect();
+  }
+
+  /**
+   * 获取底层连接池（供 LLMCallCache 等内部模块使用）
+   */
+  getPool(): Pool {
+    return this.pool;
   }
 
   /**
@@ -303,6 +310,57 @@ export class PostgresDatabase {
           metadata JSONB
       );
 
+      -- 人工标注表（AX 训练 ground truth 来源；annotation-api.ts 使用）
+      CREATE TABLE IF NOT EXISTS quality_annotations (
+          id SERIAL PRIMARY KEY,
+          news_id INTEGER NOT NULL REFERENCES news_push_log(id) ON DELETE CASCADE,
+
+          -- 核心评分
+          overall_score INTEGER NOT NULL CHECK (overall_score BETWEEN 0 AND 100),
+          category VARCHAR(10) NOT NULL CHECK (category IN ('high', 'medium', 'low')),
+          should_filter BOOLEAN NOT NULL DEFAULT false,
+
+          -- 维度评分（可选）
+          news_value INTEGER,
+          practicality INTEGER,
+          density INTEGER,
+          timeliness INTEGER,
+          universality INTEGER,
+
+          -- 标注元数据
+          reason TEXT,
+          tags JSONB DEFAULT '[]'::jsonb,
+          annotator VARCHAR(100) DEFAULT 'human',
+          difficulty VARCHAR(10) CHECK (difficulty IS NULL OR difficulty IN ('easy', 'medium', 'hard')),
+          confidence INTEGER,
+
+          -- AX 训练 ground truth
+          optimized_title TEXT,
+          optimized_summary TEXT,
+          optimized_content TEXT,
+
+          -- 版本管理
+          is_latest BOOLEAN NOT NULL DEFAULT true,
+
+          -- 时间戳
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- LLM调用缓存表（prompt-hash 缓存，避免重复调用 LLM）
+      CREATE TABLE IF NOT EXISTS llm_call_cache (
+          cache_key VARCHAR(64) PRIMARY KEY,
+          model VARCHAR(100) NOT NULL,
+          prompt_preview TEXT,
+          response TEXT NOT NULL,
+          tokens_in INTEGER,
+          tokens_out INTEGER,
+          hit_count INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_hit_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          expires_at TIMESTAMP NOT NULL
+      );
+
       -- 数据库迁移：为兼容旧结构补齐缺失字段
       ALTER TABLE news_cache ADD COLUMN IF NOT EXISTS image_path TEXT;
       ALTER TABLE news_scheduler_jobs ADD COLUMN IF NOT EXISTS rss_sources JSONB;
@@ -335,6 +393,12 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_push_log_job ON news_push_log(job_id, pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_log_fingerprint ON news_push_log(fingerprint, pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_job ON scheduler_run_history(job_id, run_started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_qa_news_id_latest ON quality_annotations(news_id) WHERE is_latest = true;
+      CREATE INDEX IF NOT EXISTS idx_qa_score_latest ON quality_annotations(overall_score) WHERE is_latest = true;
+      CREATE INDEX IF NOT EXISTS idx_qa_category_latest ON quality_annotations(category) WHERE is_latest = true;
+      CREATE INDEX IF NOT EXISTS idx_qa_annotator ON quality_annotations(annotator, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_llm_cache_expires ON llm_call_cache(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_llm_cache_model_lasthit ON llm_call_cache(model, last_hit_at DESC);
       CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_status ON scheduler_run_history(push_status);
 
       -- 插入初始统计数据

@@ -3,6 +3,9 @@
  * 专注于实际功能而非复杂的类型系统
  */
 
+import { Pool } from 'pg';
+import { LLMCallCache } from '../core/llm-call-cache.js';
+
 export interface OptimizedProgram {
   instruction: string;
   demos: Array<{
@@ -43,12 +46,16 @@ export interface OptimizationArtifacts {
 export class AxOptimizedNewsProcessorSimplified {
   private optimizedProgram: OptimizationArtifacts['programs'] | null = null;
   private currentVersion: string = 'unknown';
+  private llmCache: LLMCallCache | null;
 
   constructor(private options: {
     apiKey: string;
     baseURL: string;
     model: string;
-  }) {}
+    pool?: Pool;
+  }) {
+    this.llmCache = options.pool ? new LLMCallCache(options.pool) : null;
+  }
 
   /**
    * 从文件加载优化产物
@@ -139,30 +146,51 @@ export class AxOptimizedNewsProcessorSimplified {
         baseURL: this.options.baseURL
       });
 
-      console.log('📝 生成优化标题...');
-      const titleResponse = await client.chat.completions.create({
-        model: this.options.model,
-        messages: [{ role: 'user', content: titlePrompt }],
-        ...titleProgram.modelConfig
-      });
+      let title: string;
+      const titleCacheKey = { prompt: titlePrompt, model: this.options.model, temperature: titleProgram.modelConfig.temperature };
+      const titleCached = this.llmCache ? await this.llmCache.get(titleCacheKey) : null;
+      if (titleCached) {
+        console.log(`💾 AX标题缓存命中`);
+        title = titleCached.response;
+      } else {
+        console.log('📝 生成优化标题...');
+        const titleResponse = await client.chat.completions.create({
+          model: this.options.model,
+          messages: [{ role: 'user', content: titlePrompt }],
+          ...titleProgram.modelConfig
+        });
 
-      if (!titleResponse.choices || titleResponse.choices.length === 0) {
-        throw new Error('LLM未返回标题优化结果');
+        if (!titleResponse.choices || titleResponse.choices.length === 0) {
+          throw new Error('LLM未返回标题优化结果');
+        }
+        title = titleResponse.choices[0]?.message?.content?.trim() || '无标题';
+        if (this.llmCache) {
+          await this.llmCache.set(titleCacheKey, title);
+        }
       }
 
-      console.log('📝 生成优化摘要...');
-      const summaryResponse = await client.chat.completions.create({
-        model: this.options.model,
-        messages: [{ role: 'user', content: summaryPrompt }],
-        ...summaryProgram.modelConfig
-      });
+      let body: string;
+      const summaryCacheKey = { prompt: summaryPrompt, model: this.options.model, temperature: summaryProgram.modelConfig.temperature };
+      const summaryCached = this.llmCache ? await this.llmCache.get(summaryCacheKey) : null;
+      if (summaryCached) {
+        console.log(`💾 AX摘要缓存命中`);
+        body = summaryCached.response;
+      } else {
+        console.log('📝 生成优化摘要...');
+        const summaryResponse = await client.chat.completions.create({
+          model: this.options.model,
+          messages: [{ role: 'user', content: summaryPrompt }],
+          ...summaryProgram.modelConfig
+        });
 
-      if (!summaryResponse.choices || summaryResponse.choices.length === 0) {
-        throw new Error('LLM未返回摘要优化结果');
+        if (!summaryResponse.choices || summaryResponse.choices.length === 0) {
+          throw new Error('LLM未返回摘要优化结果');
+        }
+        body = summaryResponse.choices[0]?.message?.content?.trim() || '无内容';
+        if (this.llmCache) {
+          await this.llmCache.set(summaryCacheKey, body);
+        }
       }
-
-      const title = titleResponse.choices[0]?.message?.content?.trim() || '无标题';
-      const body = summaryResponse.choices[0]?.message?.content?.trim() || '无内容';
 
       console.log(`✅ 优化完成: 标题"${title}" (${title.length}字符), 摘要${body.length}字符`);
 
