@@ -891,6 +891,10 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     const client = await postgres.getClient();
     const id = parseInt(c.req.param('id'));
 
+    // 解析目标设备参数
+    const body = await c.req.json().catch(() => ({})) as { renderer?: 'device' | 'local-eink' | 'both' };
+    const targetRenderer = body.renderer || 'device';
+
     // 获取原始记录
     const result = await client.query(
       'SELECT * FROM news_push_log WHERE id = $1',
@@ -906,31 +910,40 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     }
 
     const record = result.rows[0];
-
-    // 使用现有的processNews函数重新推送
-    const response = await processNews({
-      category: record.category || 'technology',
-      dataSource: record.data_source || 'rss',
-      processor: 'passthrough', // 使用原有数据，不重新处理
-      index: 0,
-      renderer: 'device',
-      options: {
-        // 传递原有的处理结果
-        preProcessedData: {
-          title: record.processed_content?.title || record.raw_content?.title,
-          description: record.processed_content?.message || record.raw_content?.description,
-          link: record.raw_content?.link,
-          imagePath: record.image_path,
-        }
-      }
-    });
-
     client.release();
 
+    // 根据目标分发
+    const renderers = targetRenderer === 'both' ? ['device', 'local-eink'] : [targetRenderer];
+    const results: Array<{renderer: string, success: boolean, error?: string}> = [];
+
+    for (const renderer of renderers) {
+      try {
+        await processNews({
+          category: record.category || 'technology',
+          dataSource: record.data_source || 'rss',
+          processor: 'passthrough',
+          index: 0,
+          renderer: renderer as any,
+          options: {
+            preProcessedData: {
+              title: record.processed_content?.title || record.raw_content?.title,
+              description: record.processed_content?.message || record.raw_content?.description,
+              link: record.raw_content?.link,
+              imagePath: record.image_path,
+            }
+          }
+        });
+        results.push({ renderer, success: true });
+      } catch (err) {
+        results.push({ renderer, success: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    const allOk = results.every(r => r.success);
     return c.json({
-      success: true,
-      message: '重新推送成功',
-      data: response
+      success: allOk,
+      message: allOk ? '重新推送成功' : '部分推送失败',
+      data: { results }
     });
   } catch (error) {
     console.error('重新推送失败:', error);

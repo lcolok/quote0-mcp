@@ -181,9 +181,10 @@ class AnnotationApiClient {
   /**
    * 重新推送
    */
-  async resendPush(id: number): Promise<ApiResponse<void>> {
-    const response = await this.client.post<ApiResponse<void>>(
-      `/api/scheduler/push-history/${id}/resend`
+  async resendPush(id: number, renderer: 'device' | 'local-eink' | 'both' = 'device'): Promise<ApiResponse<any>> {
+    const response = await this.client.post<ApiResponse<any>>(
+      `/api/scheduler/push-history/${id}/resend`,
+      { renderer }
     );
     return response.data;
   }

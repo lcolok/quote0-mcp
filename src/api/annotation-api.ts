@@ -63,9 +63,9 @@ app.get('/api/annotation/news', async (c) => {
 
     const client = await postgres.getClient();
     try {
-      // 直接查询news_push_log
-      let query = `
-        SELECT
+      // 按 fingerprint 去重，取每个 fingerprint 最新的 push_log
+      let innerQuery = `
+        SELECT DISTINCT ON (npl.fingerprint)
           npl.id,
           npl.raw_content->>'title' as title,
           npl.raw_content->>'source' as source,
@@ -78,7 +78,7 @@ app.get('/api/annotation/news', async (c) => {
           COALESCE(nps.category, 'technology') as category,
           npl.image_path,
           npl.annotation_status,
-          npl.raw_content->>'fingerprint' as fingerprint,
+          npl.fingerprint,
           npl.raw_content,
           npl.processed_content
         FROM news_push_log npl
@@ -86,28 +86,32 @@ app.get('/api/annotation/news', async (c) => {
         WHERE npl.annotation_status = $1
           AND npl.raw_content->>'title' IS NOT NULL
           AND npl.raw_content->>'title' != ''
+          AND npl.fingerprint IS NOT NULL
       `;
 
       const params: any[] = [status];
 
       if (category) {
-        query += ` AND nps.category = $${params.length + 1}`;
+        innerQuery += ` AND nps.category = $${params.length + 1}`;
         params.push(category);
       }
 
-      query += ` ORDER BY npl.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      innerQuery += ` ORDER BY npl.fingerprint, npl.pushed_at DESC`;
+
+      const query = `SELECT * FROM (${innerQuery}) AS sub ORDER BY sub.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
       params.push(limit, offset);
 
       const result = await client.query<NewsItem>(query, params);
 
-      // 获取总数
+      // 获取去重后的总数
       let countQuery = `
-        SELECT COUNT(*)
+        SELECT COUNT(DISTINCT npl.fingerprint)
         FROM news_push_log npl
         LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
         WHERE npl.annotation_status = $1
           AND npl.raw_content->>'title' IS NOT NULL
           AND npl.raw_content->>'title' != ''
+          AND npl.fingerprint IS NOT NULL
       `;
       const countParams: any[] = [status];
 
@@ -275,11 +279,16 @@ app.post('/api/annotation/news/:id/annotate',
           annotation.optimized_content
         ]);
 
-        // 更新push_log状态为completed
-        await client.query(
-          'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
-          ['completed', newsId]
+        // 按 fingerprint 批量更新所有同源 push_log
+        const r = await client.query(
+          `UPDATE news_push_log
+           SET annotation_status = 'completed'
+           WHERE fingerprint = (SELECT fingerprint FROM news_push_log WHERE id = $1)
+             AND annotation_status = 'pending'
+           RETURNING id`,
+          [newsId]
         );
+        console.log(`✅ 批量更新 ${r.rowCount} 条同 fingerprint 的 push_log`);
 
         await client.query('COMMIT');
 
@@ -349,11 +358,16 @@ app.post('/api/annotation/news/:id/quick', async (c) => {
         'quick-annotator'
       ]);
 
-      // 更新push_log状态为completed
-      await client.query(
-        'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
-        ['completed', newsId]
+      // 按 fingerprint 批量更新所有同源 push_log
+      const r = await client.query(
+        `UPDATE news_push_log
+         SET annotation_status = 'completed'
+         WHERE fingerprint = (SELECT fingerprint FROM news_push_log WHERE id = $1)
+           AND annotation_status = 'pending'
+         RETURNING id`,
+        [newsId]
       );
+      console.log(`✅ 批量更新 ${r.rowCount} 条同 fingerprint 的 push_log`);
 
       await client.query('COMMIT');
 

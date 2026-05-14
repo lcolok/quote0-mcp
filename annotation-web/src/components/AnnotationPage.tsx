@@ -21,6 +21,7 @@ interface NewsRecord {
 function AnnotationPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pushTarget, setPushTarget] = useState<{cloud: boolean, esp32: boolean}>({cloud: true, esp32: true});
 
   // 从localStorage读取列宽配置，默认值：25%, 50%, 25%
   const [leftWidth, setLeftWidth] = useState(() => {
@@ -252,9 +253,10 @@ function AnnotationPage() {
 
   // 推送mutation
   const pushMutation = useMutation({
-    mutationFn: (id: number) => apiClient.resendPush(id),
+    mutationFn: ({id, renderer}: {id: number, renderer: 'device' | 'local-eink' | 'both'}) =>
+      apiClient.resendPush(id, renderer),
     onSuccess: () => {
-      toast.success('📤 推送成功');
+      toast.success('📤 推送已发送');
       queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
     },
     onError: (error: Error) => {
@@ -297,9 +299,13 @@ function AnnotationPage() {
   };
 
   const handlePush = () => {
-    if (currentRecord) {
-      pushMutation.mutate(currentRecord.id);
-    }
+    if (!currentRecord) return;
+    let renderer: 'device' | 'local-eink' | 'both';
+    if (pushTarget.cloud && pushTarget.esp32) renderer = 'both';
+    else if (pushTarget.cloud) renderer = 'device';
+    else if (pushTarget.esp32) renderer = 'local-eink';
+    else return;
+    pushMutation.mutate({ id: currentRecord.id, renderer });
   };
 
   // 搜索时重置选中
@@ -753,16 +759,32 @@ function AnnotationPage() {
             )}
 
             {/* 重新推送按钮（所有记录都可推送） */}
-            <button
-              onClick={handlePush}
-              disabled={pushMutation.isPending}
-              className="w-full flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Send className="w-6 h-6 mr-3" />
-              <span className="font-medium text-lg">
-                {pushMutation.isPending ? '推送中...' : '重新推送到设备'}
-              </span>
-            </button>
+            <div className="space-y-2">
+              <div className="flex gap-4 px-2">
+                <label className="flex items-center text-sm">
+                  <input type="checkbox" checked={pushTarget.cloud}
+                         onChange={e => setPushTarget(t => ({...t, cloud: e.target.checked}))}
+                         className="mr-2" />
+                  ☁️ MindReset 云端
+                </label>
+                <label className="flex items-center text-sm">
+                  <input type="checkbox" checked={pushTarget.esp32}
+                         onChange={e => setPushTarget(t => ({...t, esp32: e.target.checked}))}
+                         className="mr-2" />
+                  📟 ESP32-C3 本地
+                </label>
+              </div>
+              <button
+                onClick={handlePush}
+                disabled={pushMutation.isPending || (!pushTarget.cloud && !pushTarget.esp32)}
+                className="w-full flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-6 h-6 mr-3" />
+                <span className="font-medium text-lg">
+                  {pushMutation.isPending ? '推送中...' : '重新推送到选中设备'}
+                </span>
+              </button>
+            </div>
 
             {/* 已标注/跳过的提示 */}
             {currentRecord.annotationStatus === 'completed' && (

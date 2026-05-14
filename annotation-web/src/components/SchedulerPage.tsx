@@ -55,7 +55,7 @@ function SchedulerPage() {
 
   // 重新推送
   const resendMutation = useMutation({
-    mutationFn: (id: number) => apiClient.resendPush(id),
+    mutationFn: (id: number) => apiClient.resendPush(id, 'device'),
     onSuccess: () => {
       toast.success('推送成功');
       queryClient.invalidateQueries({ queryKey: ['push-history'] });
