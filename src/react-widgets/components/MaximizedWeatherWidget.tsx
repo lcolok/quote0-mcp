@@ -26,7 +26,7 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
   const getCityDisplayText = () => {
     // 检查全局缓存的地理信息（从高德API直接获取）
     const geoInfo = (global as any).__amapGeoCache;
-    if (geoInfo && geoInfo.city && geoInfo.district) {
+    if (geoInfo && typeof geoInfo.city === 'string' && typeof geoInfo.district === 'string') {
       const cityName = geoInfo.city.replace(/(市|区|县)$/, '');
       const districtName = geoInfo.district.replace(/(区|县)$/, '');
       return `${cityName}${districtName}`;
