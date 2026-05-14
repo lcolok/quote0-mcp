@@ -907,6 +907,38 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     const record = result.rows[0];
     client.release();
 
+    // v1.0.19: 天气类型记录走专属路径 — 触发对应 weather job 重新拉数据并渲染
+    if (typeof record.fingerprint === 'string' && record.fingerprint.startsWith('weather:')) {
+      const city = record.fingerprint.split(':')[1] || '';
+      const allJobs = await postgres.getSchedulerJobs();
+      const weatherJob = allJobs.find((j: any) =>
+        j.dataSource === 'weather' && (j.rssSource === city || (typeof j.id === 'string' && j.id.includes(city)))
+      );
+      if (!weatherJob) {
+        return c.json({
+          success: false,
+          error: `未找到匹配城市 "${city}" 的 weather job`
+        }, 404);
+      }
+      const scheduler = await getSchedulerInstance();
+      if (!scheduler) {
+        return c.json({ success: false, error: '调度器未启动' }, 400);
+      }
+      try {
+        await scheduler.triggerJob(weatherJob.id);
+        return c.json({
+          success: true,
+          message: `天气任务 ${weatherJob.id} 已触发重新推送`,
+          data: { results: [{ renderer: 'weather-job-trigger', success: true }] }
+        });
+      } catch (err) {
+        return c.json({
+          success: false,
+          error: `触发 weather job 失败: ${err instanceof Error ? err.message : String(err)}`
+        }, 500);
+      }
+    }
+
     const { renderingRegistry } = await import('../react-widgets/core/rendering-modules.js');
 
     const renderers = targetRenderer === 'both' ? ['device', 'local-eink'] : [targetRenderer];
