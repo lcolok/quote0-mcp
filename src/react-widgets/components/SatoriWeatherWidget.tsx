@@ -151,9 +151,9 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        height: '64px',
-        paddingLeft: '24px',
-        paddingRight: '24px',
+        height: '32px',
+        paddingLeft: '8px',
+        paddingRight: '8px',
         backgroundColor: invertedBanner ? '#000000' : '#FFFFFF',
         color: invertedBanner ? '#FFFFFF' : '#000000',
         flexShrink: 0
@@ -161,8 +161,8 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         <div style={{
           display: 'flex',
           fontFamily: 'FusionPixelFont',
-          fontSize: '32px',
-          lineHeight: '32px',
+          fontSize: '24px',
+          lineHeight: '24px',
           fontWeight: 'normal'
         }}>
           {getCityDisplayText()}
@@ -170,10 +170,10 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '12px',
+          gap: '4px',
           fontFamily: 'FusionPixelFont',
-          fontSize: '32px',
-          lineHeight: '32px'
+          fontSize: '24px',
+          lineHeight: '24px'
         }}>
           <span>{getHumidityIcon()}</span>
           <span>{data.humidity}%</span>
@@ -186,20 +186,20 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
-        paddingLeft: '24px',
-        paddingRight: '24px'
+        paddingLeft: '8px',
+        paddingRight: '8px'
       }}>
         <div style={{
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'flex-start',
-          gap: '12px'
+          gap: '4px'
         }}>
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: '192px',
-            lineHeight: '192px',
+            fontSize: '96px',
+            lineHeight: '96px',
             fontWeight: 'normal'
           }}>
             {data.temperature}
@@ -207,10 +207,10 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: '48px',
-            lineHeight: '48px',
+            fontSize: '24px',
+            lineHeight: '24px',
             fontWeight: 'normal',
-            marginTop: '24px'
+            marginTop: '8px'
           }}>
             °C
           </div>
@@ -222,13 +222,13 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: '8px'
+          gap: '2px'
         }}>
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: '144px',
-            lineHeight: '144px',
+            fontSize: '72px',
+            lineHeight: '72px',
             textAlign: 'center'
           }}>
             {getWeatherIconText(data.weather)}
@@ -236,8 +236,8 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: '32px',
-            lineHeight: '32px',
+            fontSize: '12px',
+            lineHeight: '12px',
             fontWeight: 'normal',
             textAlign: 'center'
           }}>
@@ -251,15 +251,15 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
-        height: '48px',
-        paddingLeft: '12px',
-        paddingRight: '12px',
+        height: '16px',
+        paddingLeft: '4px',
+        paddingRight: '4px',
         borderTop: '1px solid rgba(0,0,0,0.1)',
         backgroundColor: invertedBanner ? '#000000' : 'rgba(0,0,0,0.05)',
         color: invertedBanner ? '#FFFFFF' : '#333333',
         fontFamily: 'FusionPixelFont',
-        fontSize: '24px',
-        lineHeight: '24px',
+        fontSize: '12px',
+        lineHeight: '12px',
         fontWeight: 'normal',
         flexShrink: 0
       }}>
