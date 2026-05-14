@@ -130,10 +130,9 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
     return data.temperature;
   };
 
-  // 缩放：原设计 296x152，目标 ESP32 640x384 = 2.16x / 2.53x
-  // satori 不支持 transform: scale，所以直接放大每个元素的尺寸
-  const SCALE = 640 / 296;  // ≈ 2.16
-  const px = (n: number) => `${Math.round(n * SCALE)}px`;
+  // v1.0.23: 所有 fontSize 严格用 8/10/12 的整数倍，避免像素字体非整数倍缩放糊
+  // 布局像素（height/padding/gap/margin）可以任意值，只有 fontSize 受像素字体约束
+  // 满版 640x384 = 顶部 64 + 主区 272 + 底部 48
 
   return (
     <div style={{
@@ -141,22 +140,20 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
       height: '100%',
       backgroundColor: '#FFFFFF',
       fontFamily: 'FusionPixelFont',
-      fontSize: px(12),
-      lineHeight: px(14),
       padding: '0px',
       boxSizing: 'border-box',
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden'
     }}>
-      {/* 顶部信息条：城市 + 湿度 */}
+      {/* 顶部信息条：城市 + 湿度，高度 64px */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        height: px(40),
-        paddingLeft: px(16),
-        paddingRight: px(16),
+        height: '64px',
+        paddingLeft: '24px',
+        paddingRight: '24px',
         backgroundColor: invertedBanner ? '#000000' : '#FFFFFF',
         color: invertedBanner ? '#FFFFFF' : '#000000',
         flexShrink: 0
@@ -164,8 +161,8 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         <div style={{
           display: 'flex',
           fontFamily: 'FusionPixelFont',
-          fontSize: px(28),
-          lineHeight: px(32),
+          fontSize: '32px',
+          lineHeight: '32px',
           fontWeight: 'normal'
         }}>
           {getCityDisplayText()}
@@ -173,50 +170,47 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: px(8),
+          gap: '12px',
           fontFamily: 'FusionPixelFont',
-          fontSize: px(28),
-          lineHeight: px(32)
+          fontSize: '32px',
+          lineHeight: '32px'
         }}>
           <span>{getHumidityIcon()}</span>
           <span>{data.humidity}%</span>
         </div>
       </div>
 
-      {/* 主内容：超大温度 + 大天气图标 */}
+      {/* 主内容：超大温度 + 大天气图标，主区高度 272px */}
       <div style={{
         flex: 1,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingLeft: px(16),
-        paddingRight: px(16)
+        justifyContent: 'space-around',
+        paddingLeft: '24px',
+        paddingRight: '24px'
       }}>
         <div style={{
           display: 'flex',
-          alignItems: 'baseline',
+          alignItems: 'flex-start',
           justifyContent: 'flex-start',
-          gap: px(8)
+          gap: '12px'
         }}>
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(95),
-            lineHeight: px(95),
-            fontWeight: 'normal',
-            letterSpacing: '-2px'
+            fontSize: '192px',
+            lineHeight: '192px',
+            fontWeight: 'normal'
           }}>
             {data.temperature}
           </div>
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(40),
-            lineHeight: px(40),
+            fontSize: '48px',
+            lineHeight: '48px',
             fontWeight: 'normal',
-            alignSelf: 'flex-start',
-            marginTop: px(15),
-            marginLeft: px(8)
+            marginTop: '24px'
           }}>
             °C
           </div>
@@ -228,13 +222,13 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: px(4)
+          gap: '8px'
         }}>
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(85),
-            lineHeight: px(85),
+            fontSize: '144px',
+            lineHeight: '144px',
             textAlign: 'center'
           }}>
             {getWeatherIconText(data.weather)}
@@ -242,8 +236,8 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(26),
-            lineHeight: px(30),
+            fontSize: '32px',
+            lineHeight: '32px',
             fontWeight: 'normal',
             textAlign: 'center'
           }}>
@@ -252,20 +246,20 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         </div>
       </div>
 
-      {/* 底部横条banner：体感温度 + 风向风力 + 明日天气 */}
+      {/* 底部横条 banner：体感温度 + 风向风力 + 明日天气，高度 48px */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
-        height: px(22),
-        paddingLeft: px(8),
-        paddingRight: px(8),
+        height: '48px',
+        paddingLeft: '12px',
+        paddingRight: '12px',
         borderTop: '1px solid rgba(0,0,0,0.1)',
         backgroundColor: invertedBanner ? '#000000' : 'rgba(0,0,0,0.05)',
         color: invertedBanner ? '#FFFFFF' : '#333333',
         fontFamily: 'FusionPixelFont',
-        fontSize: px(18),
-        lineHeight: px(20),
+        fontSize: '24px',
+        lineHeight: '24px',
         fontWeight: 'normal',
         flexShrink: 0
       }}>
