@@ -13,6 +13,24 @@ import type { RawDataItem } from '../react-widgets/core/modular-architecture.js'
 import React from 'react';
 import { MaximizedWeatherWidget } from '../react-widgets/components/MaximizedWeatherWidget.js';
 import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
+import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
+
+function sanitizeWeatherData(data: any): WeatherData {
+  const toStr = (v: any, fallback?: string): string | undefined => {
+    if (typeof v === 'string' && v.trim()) return v;
+    return fallback;
+  };
+  return {
+    ...data,
+    city: toStr(data.city, '广州') as string,
+    realCity: toStr(data.realCity),
+    district: toStr(data.district),
+    province: toStr(data.province),
+    weather: toStr(data.weather, '晴') as string,
+    windDirection: toStr(data.windDirection),
+    windPower: toStr(data.windPower),
+  };
+}
 import type { WeatherData } from '../react-widgets/types.js';
 interface RetryOptions {
   retries?: number;
@@ -688,8 +706,9 @@ export class NewsScheduler {
       const { satoriRenderer } = await import('../react-widgets/core/satori-renderer.js');
       await satoriRenderer.initialize();
 
+      const safeData = sanitizeWeatherData(weatherData);
       const imageBuffer = await satoriRenderer.renderToImage(
-        React.createElement(MaximizedWeatherWidget, { data: weatherData }),
+        React.createElement(SatoriWeatherWidget, { data: safeData }),
         {
           width: (job.config.options as any)?.width || 640,
           height: (job.config.options as any)?.height || 384,
