@@ -154,7 +154,7 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        height: px(60),
+        height: px(40),
         paddingLeft: px(16),
         paddingRight: px(16),
         backgroundColor: invertedBanner ? '#000000' : '#FFFFFF',
@@ -201,21 +201,22 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(120),
-            lineHeight: px(110),
+            fontSize: px(95),
+            lineHeight: px(95),
             fontWeight: 'normal',
-            letterSpacing: '-4px'
+            letterSpacing: '-2px'
           }}>
             {data.temperature}
           </div>
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(64),
-            lineHeight: px(64),
+            fontSize: px(40),
+            lineHeight: px(40),
             fontWeight: 'normal',
             alignSelf: 'flex-start',
-            marginTop: px(20)
+            marginTop: px(15),
+            marginLeft: px(8)
           }}>
             °C
           </div>
@@ -232,8 +233,8 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(110),
-            lineHeight: px(110),
+            fontSize: px(85),
+            lineHeight: px(85),
             textAlign: 'center'
           }}>
             {getWeatherIconText(data.weather)}
@@ -241,8 +242,8 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(32),
-            lineHeight: px(36),
+            fontSize: px(26),
+            lineHeight: px(30),
             fontWeight: 'normal',
             textAlign: 'center'
           }}>
@@ -256,7 +257,7 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
-        height: px(40),
+        height: px(22),
         paddingLeft: px(8),
         paddingRight: px(8),
         borderTop: '1px solid rgba(0,0,0,0.1)',
