@@ -784,15 +784,35 @@ export class NewsScheduler {
 
       // 6. 记录推送结果
       const fingerprint = `weather:${city}:${Math.floor(timestamp / 600000)}`;
+      const displayTitle = `${city}天气 ${weatherData.temperature}°C ${weatherData.weather}`;
+      const summary = `${city} ${weatherData.temperature}°C ${weatherData.weather}，湿度 ${weatherData.humidity}%，${weatherData.windDirection || ''}风${weatherData.windPower || ''}`;
       await this.postgres.recordPushResult({
         jobId: job.config.id,
         fingerprint,
-        title: `${city}天气 ${weatherData.temperature}°C ${weatherData.weather}`,
+        title: displayTitle,
         category: job.config.category,
         source: 'weather',
         imagePath: `/${objectKey}`,
         layer: 'weather',
         isFallback: false,
+        // 让 annotation-api 能正确显示标题、来源等（前端从 raw_content/processed_content 取字段）
+        rawContent: {
+          title: displayTitle,
+          source: `${city}天气`,
+          publishTime: new Date().toISOString(),
+          category: '天气',
+          fingerprint,
+          link: null,
+          content: summary
+        },
+        processedContent: {
+          title: displayTitle,
+          message: summary,
+          summary,
+          source: `${city}天气`,
+          category: '天气',
+          publishTime: new Date().toISOString()
+        },
         metadata: {
           city,
           temperature: weatherData.temperature,
