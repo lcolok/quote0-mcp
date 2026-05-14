@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.0.11
+version: 1.0.12
 
 # 应用名称
 name: Quote0 新闻服务
@@ -72,10 +72,10 @@ application:
     MINDRESET_DEVICE_ID: E4B063CC0F10
     MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
     LLM_PROVIDER: custom
-    LLM_BASE_URL: https://token-plan-cn.xiaomimimo.com/v1
-    LLM_API_KEY: tp-cfrkbuyhoniwfcf0dt4dr4tj1v64ughfivfzjhxcl8bmuz5l
-    LLM_MODEL: mimo-v2.5-pro
-    LLM_FAST_MODEL: mimo-v2.5
+    LLM_BASE_URL: https://api.kimi.com/coding/
+    LLM_API_KEY: sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP
+    LLM_MODEL: kimi-for-coding
+    LLM_FAST_MODEL: kimi-for-coding
     LLM_MAX_TOKENS: "1000"
     LLM_TEMPERATURE: "0.7"
     # 新闻调度器
@@ -155,7 +155,7 @@ services:
 
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.11
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.12
     environment:
       NODE_ENV: production
       PORT: "3001"
@@ -176,10 +176,10 @@ services:
       MINDRESET_DEVICE_ID: E4B063CC0F10
       MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
       LLM_PROVIDER: custom
-      LLM_BASE_URL: https://token-plan-cn.xiaomimimo.com/v1
-      LLM_API_KEY: tp-cfrkbuyhoniwfcf0dt4dr4tj1v64ughfivfzjhxcl8bmuz5l
-      LLM_MODEL: mimo-v2.5-pro
-      LLM_FAST_MODEL: mimo-v2.5
+      LLM_BASE_URL: https://api.kimi.com/coding/
+      LLM_API_KEY: sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP
+      LLM_MODEL: kimi-for-coding
+      LLM_FAST_MODEL: kimi-for-coding
       LLM_MAX_TOKENS: "1000"
       LLM_TEMPERATURE: "0.7"
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
