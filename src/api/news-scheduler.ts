@@ -707,32 +707,8 @@ export class NewsScheduler {
       await satoriRenderer.initialize();
 
       const safeData = sanitizeWeatherData(weatherData);
-
-      // 内联简化天气视图（v1.0.18：SatoriWeatherWidget 仍有 display:flex 遗漏问题）
-      // 所有 div 显式 display:flex 满足 satori 硬性要求
-      const baseRow = { display: 'flex', flexDirection: 'row' as const };
-      const baseCol = { display: 'flex', flexDirection: 'column' as const };
-      const widgetJsx = React.createElement('div', {
-        style: { ...baseCol, width: '100%', height: '100%', padding: '32px 48px',
-                 background: '#ffffff', fontFamily: 'sans-serif', justifyContent: 'space-between' }
-      },
-        React.createElement('div', { style: { ...baseRow, justifyContent: 'space-between', alignItems: 'flex-start' } },
-          React.createElement('div', { style: { ...baseCol, fontSize: 36, color: '#1a1a1a' } }, safeData.city),
-          React.createElement('div', { style: { ...baseRow, fontSize: 24, color: '#666' } }, `湿度 ${safeData.humidity ?? '-'}%`)
-        ),
-        React.createElement('div', { style: { ...baseRow, alignItems: 'center', justifyContent: 'center', gap: 24 } },
-          React.createElement('div', { style: { ...baseRow, fontSize: 192, fontWeight: 700, color: '#000' } }, `${safeData.temperature ?? '--'}`),
-          React.createElement('div', { style: { ...baseCol, fontSize: 48, color: '#333' } }, '°C')
-        ),
-        React.createElement('div', { style: { ...baseRow, justifyContent: 'space-between', alignItems: 'flex-end', fontSize: 28, color: '#444' } },
-          React.createElement('div', { style: { ...baseRow } }, safeData.weather),
-          React.createElement('div', { style: { ...baseRow } },
-            `${safeData.windDirection ?? ''}${safeData.windPower ? ' ' + safeData.windPower : ''}`.trim() || '风力 N/A')
-        )
-      );
-
       const imageBuffer = await satoriRenderer.renderToImage(
-        widgetJsx,
+        React.createElement(SatoriWeatherWidget, { data: safeData }),
         {
           width: (job.config.options as any)?.width || 640,
           height: (job.config.options as any)?.height || 384,
