@@ -93,9 +93,9 @@ const getWeatherIconText = (weather: string): string => {
   return '⛅';
 };
 
-// 湿度图标
+// 湿度图标（用中文字代替 emoji，FusionPixelFont 不支持 emoji）
 const getHumidityIcon = (): string => {
-  return '💧';
+  return '湿';
 };
 
 const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, invertedBanner = true }) => {
@@ -211,22 +211,23 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(48),
-            lineHeight: px(50),
+            fontSize: px(64),
+            lineHeight: px(64),
             fontWeight: 'normal',
             alignSelf: 'flex-start',
-            marginTop: px(12)
+            marginTop: px(20)
           }}>
             °C
           </div>
         </div>
 
+        {/* 天气图标 + 文字：上下排列让"阴/多云"也能完整显示 */}
         <div style={{
           display: 'flex',
-          flexDirection: 'row',
+          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: px(12)
+          gap: px(4)
         }}>
           <div style={{
             display: 'flex',
@@ -239,12 +240,11 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           </div>
           <div style={{
             display: 'flex',
-            flexDirection: 'column',
             fontFamily: 'FusionPixelFont',
-            fontSize: px(28),
-            lineHeight: px(32),
+            fontSize: px(32),
+            lineHeight: px(36),
             fontWeight: 'normal',
-            letterSpacing: px(4)
+            textAlign: 'center'
           }}>
             {data.weather}
           </div>
@@ -256,34 +256,38 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
-        height: px(36),
+        height: px(40),
         paddingLeft: px(8),
         paddingRight: px(8),
         borderTop: '1px solid rgba(0,0,0,0.1)',
         backgroundColor: invertedBanner ? '#000000' : 'rgba(0,0,0,0.05)',
         color: invertedBanner ? '#FFFFFF' : '#333333',
         fontFamily: 'FusionPixelFont',
-        fontSize: px(16),
-        lineHeight: px(18),
-        fontWeight: 'normal'
+        fontSize: px(18),
+        lineHeight: px(20),
+        fontWeight: 'normal',
+        flexShrink: 0
       }}>
         <div style={{
           display: 'flex',
-          minWidth: px(160),
+          flex: 1,
+          justifyContent: 'center',
           whiteSpace: 'nowrap'
         }}>
           体感 {getFeelsLikeTemp()}°C
         </div>
         <div style={{
           display: 'flex',
-          minWidth: px(160),
+          flex: 1,
+          justifyContent: 'center',
           whiteSpace: 'nowrap'
         }}>
-          {data.windDirection ? `${data.windDirection}风 ${data.windPower?.replace('≤', '≤ ') || ''}` : `风力 ${data.windPower || 'N/A'}`}
+          {data.windDirection ? `${data.windDirection}风 ${(data.windPower || '').replace(/≤/g, '<=')}` : `风力 ${data.windPower || 'N/A'}`}
         </div>
         <div style={{
           display: 'flex',
-          minWidth: px(160),
+          flex: 1,
+          justifyContent: 'center',
           whiteSpace: 'nowrap'
         }}>
           明日 {data.tomorrowWeather || data.forecast?.tomorrow?.weather || '未知'}
