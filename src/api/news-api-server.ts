@@ -884,18 +884,16 @@ app.get('/api/scheduler/push-history/:id', async (c) => {
   }
 });
 
-// 手动推送指定记录
+// 手动推送指定记录 - 直接从 history 渲染，不再走 RSS 拉取
 app.post('/api/scheduler/push-history/:id/resend', async (c) => {
   try {
     await postgres.initialize();
     const client = await postgres.getClient();
     const id = parseInt(c.req.param('id'));
 
-    // 解析目标设备参数
     const body = await c.req.json().catch(() => ({})) as { renderer?: 'device' | 'local-eink' | 'both' };
     const targetRenderer = body.renderer || 'device';
 
-    // 获取原始记录
     const result = await client.query(
       'SELECT * FROM news_push_log WHERE id = $1',
       [id]
@@ -903,39 +901,56 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
 
     if (result.rows.length === 0) {
       client.release();
-      return c.json({
-        success: false,
-        error: '推送记录不存在'
-      }, 404);
+      return c.json({ success: false, error: '推送记录不存在' }, 404);
     }
 
     const record = result.rows[0];
     client.release();
 
-    // 根据目标分发
+    const { renderingRegistry } = await import('../react-widgets/core/rendering-modules.js');
+
     const renderers = targetRenderer === 'both' ? ['device', 'local-eink'] : [targetRenderer];
     const results: Array<{renderer: string, success: boolean, error?: string}> = [];
 
-    for (const renderer of renderers) {
+    for (const rendererName of renderers) {
+      const rendererModule = renderingRegistry.get(rendererName);
+      if (!rendererModule) {
+        results.push({ renderer: rendererName, success: false, error: `渲染器 ${rendererName} 不存在` });
+        continue;
+      }
+
       try {
-        await processNews({
-          category: record.category || 'technology',
-          dataSource: record.data_source || 'rss',
-          processor: 'passthrough',
-          index: 0,
-          renderer: renderer as any,
-          options: {
-            preProcessedData: {
-              title: record.processed_content?.title || record.raw_content?.title,
-              description: record.processed_content?.message || record.raw_content?.description,
-              link: record.raw_content?.link,
-              imagePath: record.image_path,
-            }
-          }
-        });
-        results.push({ renderer, success: true });
+        const raw = record.raw_content || {};
+        const processed = record.processed_content || {};
+
+        const renderableData = {
+          id: String(record.id),
+          title: processed.title || raw.title || '未知标题',
+          message: processed.message || processed.summary || raw.description || raw.content || '',
+          signature: processed.signature || 'RSS智能',
+          source: processed.source || raw.source || 'unknown',
+          publishTime: processed.publishTime || raw.publishTime || record.pushed_at?.toISOString?.() || new Date().toISOString(),
+          category: processed.category || raw.category || '新闻',
+          link: raw.link,
+        };
+
+        const renderConfig = { border: '0', width: 640, height: 384 };
+
+        console.log(`🔄 重新推送 #${id} → ${rendererName}: "${renderableData.title}"`);
+        const renderResult = await rendererModule.render(renderableData as any, renderConfig);
+
+        if (rendererName === 'device') {
+          const deviceRes = renderResult as { imageUrl: string; deviceResult: string };
+          results.push({ renderer: rendererName, success: !deviceRes.deviceResult?.includes?.('失败') });
+        } else if (rendererName === 'local-eink') {
+          const einkRes = renderResult as { imageUrl: string; pushResults: Array<{ device: string; ok: boolean; error?: string }> };
+          const allOk = einkRes.pushResults.length === 0 || einkRes.pushResults.every(r => r.ok);
+          results.push({ renderer: rendererName, success: allOk });
+        } else {
+          results.push({ renderer: rendererName, success: true });
+        }
       } catch (err) {
-        results.push({ renderer, success: false, error: err instanceof Error ? err.message : String(err) });
+        results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
       }
     }
 
