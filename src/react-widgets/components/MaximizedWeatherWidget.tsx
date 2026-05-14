@@ -33,21 +33,21 @@ const MaximizedWeatherWidget: React.FC<MaximizedWeatherWidgetProps> = ({ data, i
     }
     
     // 优先使用传递的完整地理信息
-    if (data.realCity && data.district) {
+    if (typeof data.realCity === 'string' && typeof data.district === 'string') {
       const cityName = data.realCity.replace(/(市|区|县)$/, '');
       const districtName = data.district.replace(/(区|县)$/, '');
       return `${cityName}${districtName}`;
     }
-    
+
     // 回退到省市数据
-    if (data.province && data.city) {
+    if (typeof data.province === 'string' && typeof data.city === 'string') {
       const cityName = data.city.replace(/(市|区|县)$/, '');
       const provinceName = data.province.replace(/省$/, '');
       return `${provinceName}${cityName}`;
     }
-    
-    // 最终回退
-    return data.city;
+
+    // 最终回退（data.city 可能也不是 string，做安全转换）
+    return typeof data.city === 'string' ? data.city : String(data.city ?? '');
   };
 
   // 计算体感温度 (Heat Index / Apparent Temperature)
