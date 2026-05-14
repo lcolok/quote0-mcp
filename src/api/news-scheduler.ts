@@ -10,6 +10,10 @@ import type {
 import { dataSourceRegistry } from '../react-widgets/core/data-source-modules.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RawDataItem } from '../react-widgets/core/modular-architecture.js';
+import React from 'react';
+import { MaximizedWeatherWidget } from '../react-widgets/components/MaximizedWeatherWidget.js';
+import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
+import type { WeatherData } from '../react-widgets/types.js';
 interface RetryOptions {
   retries?: number;
   initialDelayMs?: number;
@@ -384,6 +388,12 @@ export class NewsScheduler {
     this.ensureIndexState(job);
     job.state.running = true;
 
+    // Weather branch: minimal intrusion, bypass RSS pipeline entirely
+    if (job.config.dataSource === 'weather') {
+      await this.runWeatherJob(job);
+      return;
+    }
+
     const runStartedAt = new Date();
     const sourceInfo = await this.resolveRunnableSource(job, overrideIndex);
     let currentRssSource = sourceInfo.source;
@@ -650,6 +660,177 @@ export class NewsScheduler {
       }
 
       await this.handlePostRunFailure(job, currentRssSource);
+    } finally {
+      job.state.running = false;
+    }
+  }
+
+  private async runWeatherJob(job: SchedulerJobInstance): Promise<void> {
+    const city = job.config.rssSource || '广州';
+    let runHistoryId: number | null = null;
+
+    try {
+      const runStartedAt = new Date();
+      console.log(`🌤️ 天气任务 ${job.config.id} 开始执行，城市: ${city}`);
+
+      runHistoryId = await this.postgres.createSchedulerRunHistory({
+        jobId: job.config.id,
+        runStartedAt,
+        source: city,
+        metadata: { city, renderer: job.config.renderer }
+      });
+
+      // 1. 获取天气数据
+      const weatherData = await weatherPlugin.dataProvider.getData('amap', { city }) as WeatherData;
+      console.log(`🌡️ 天气数据获取成功: ${weatherData.city} ${weatherData.temperature}°C ${weatherData.weather}`);
+
+      // 2. Satori 渲染
+      const { satoriRenderer } = await import('../react-widgets/core/satori-renderer.js');
+      await satoriRenderer.initialize();
+
+      const imageBuffer = await satoriRenderer.renderToImage(
+        React.createElement(MaximizedWeatherWidget, { data: weatherData }),
+        {
+          width: (job.config.options as any)?.width || 640,
+          height: (job.config.options as any)?.height || 384,
+          backgroundColor: '#ffffff'
+        }
+      );
+
+      // 3. 保存到本地文件
+      const fs = await import('fs/promises');
+      const timestamp = Date.now();
+      const filename = `weather_${job.config.id}_${timestamp}.png`;
+      const dirPath = './processed-images/widgets/weather';
+      const localImagePath = `${dirPath}/${filename}`;
+      await fs.mkdir(dirPath, { recursive: true });
+      await fs.writeFile(localImagePath, imageBuffer);
+      console.log(`💾 天气图片已保存: ${localImagePath}`);
+
+      // 4. 上传到 MinIO
+      const { getImageStorage } = await import('../react-widgets/core/image-storage.js');
+      const imageStorage = getImageStorage();
+      const uploadResult = await imageStorage.uploadImage(localImagePath, {
+        widgetType: 'weather',
+        cacheKey: `weather_${job.config.id}_${timestamp}`,
+        renderConfig: job.config.options || {}
+      });
+      const imageUrl = uploadResult.url;
+      const objectKey = uploadResult.objectKey;
+      console.log(`✅ 天气图片已上传 MinIO: ${imageUrl}`);
+
+      // 5. 推送到设备
+      let deviceResult = '未推送';
+      const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
+
+      if (job.config.renderer === 'local-eink') {
+        const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
+        const bitmap = await pngTo1BitBitmap(imageBuffer);
+        console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
+
+        const devices = await getEinkDevices();
+        if (devices.length === 0) {
+          console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
+          deviceResult = '无 E-Ink 设备配置';
+        } else {
+          for (const device of devices) {
+            const result = await pushToEinkDevice(device, bitmap);
+            pushResults.push({
+              device: device.id,
+              ok: result.ok,
+              error: result.error
+            });
+          }
+          const okCount = pushResults.filter(r => r.ok).length;
+          deviceResult = `e-ink 推送完成: ${okCount}/${pushResults.length} 成功`;
+          console.log(`✅ ${deviceResult}`);
+        }
+      } else if (job.config.renderer === 'device') {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(exec);
+
+        const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${localImagePath}" "0" "" "ORDERED"`;
+        console.log(`📤 执行 MindReset 推送: ${deviceCommand}`);
+
+        const { stdout, stderr } = await execAsync(deviceCommand, {
+          cwd: process.cwd(),
+          env: process.env
+        });
+
+        if (stdout) console.log(stdout);
+        if (stderr) console.error(stderr);
+        deviceResult = 'MindReset 推送成功';
+      }
+
+      // 6. 记录推送结果
+      const fingerprint = `weather:${city}:${Math.floor(timestamp / 600000)}`;
+      await this.postgres.recordPushResult({
+        jobId: job.config.id,
+        fingerprint,
+        title: `${city}天气 ${weatherData.temperature}°C ${weatherData.weather}`,
+        category: job.config.category,
+        source: 'weather',
+        imagePath: `/${objectKey}`,
+        layer: 'weather',
+        isFallback: false,
+        metadata: {
+          city,
+          temperature: weatherData.temperature,
+          weather: weatherData.weather,
+          humidity: weatherData.humidity,
+          renderer: job.config.renderer
+        },
+        result: {
+          deviceResult,
+          pushResults,
+          imageUrl
+        }
+      });
+
+      // 7. 更新运行历史
+      if (runHistoryId) {
+        await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+          pushStatus: 'success',
+          pushReason: 'weather_pushed',
+          runFinishedAt: new Date(),
+          metadata: {
+            city,
+            weather: weatherData.weather,
+            temperature: weatherData.temperature,
+            deviceResult
+          }
+        });
+      }
+
+      // 8. 重置失败计数并持久化状态
+      job.state.consecutiveFailures = 0;
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.persistSchedulerState(job, nextRunAt);
+
+      console.log(`✅ 天气任务 ${job.config.id} 执行完成，下次运行: ${nextRunAt.toISOString()}`);
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`❌ 天气任务 ${job.config.id} 执行失败: ${message}`, error);
+
+      job.state.consecutiveFailures += 1;
+
+      if (runHistoryId) {
+        try {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'failed',
+            pushReason: message,
+            runFinishedAt: new Date(),
+            metadata: { error: message }
+          });
+        } catch (historyError) {
+          console.warn('⚠️ 更新运行历史失败:', historyError);
+        }
+      }
+
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.persistSchedulerState(job, nextRunAt);
     } finally {
       job.state.running = false;
     }
