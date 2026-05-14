@@ -710,8 +710,8 @@ export class NewsScheduler {
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriWeatherWidget, { data: safeData }),
         {
-          width: (job.config.options as any)?.width || 640,
-          height: (job.config.options as any)?.height || 384,
+          width: (job.config.options as any)?.width || 296,
+          height: (job.config.options as any)?.height || 152,
           backgroundColor: '#ffffff'
         }
       );
