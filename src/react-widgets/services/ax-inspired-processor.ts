@@ -11,6 +11,8 @@
  */
 
 import { CachedLLMService } from './llm-content-processor.js';
+import { getActiveLLMConfig, getFallbackLLMConfig } from '../core/llm-config.js';
+import { getPostgresDatabase } from '../core/postgres-database.js';
 
 /**
  * 工作流签名定义
@@ -65,9 +67,19 @@ export class WorkflowTask {
   private async callOpenAIDirect(prompt: string, model: string): Promise<string> {
     const { OpenAI } = await import('openai');
     
+    let activeApiKey = getFallbackLLMConfig().apiKey;
+    let activeBaseURL = getFallbackLLMConfig().baseUrl;
+    try {
+      const cfg = await getActiveLLMConfig(getPostgresDatabase());
+      activeApiKey = cfg.apiKey;
+      activeBaseURL = cfg.baseUrl;
+    } catch (e) {
+      // use fallback
+    }
+    
     const client = new OpenAI({
-      apiKey: process.env.LLM_API_KEY,
-      baseURL: process.env.LLM_BASE_URL
+      apiKey: activeApiKey,
+      baseURL: activeBaseURL
     });
     
     const completion = await client.chat.completions.create({

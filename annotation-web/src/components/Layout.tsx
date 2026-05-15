@@ -9,6 +9,7 @@ import {
   Zap,
   Calendar,
   Settings,
+  Brain,
 } from 'lucide-react';
 
 function Layout() {
@@ -30,6 +31,7 @@ function Layout() {
     { to: '/training', icon: Zap, label: 'AX训练' },
     { to: '/scheduler', icon: Calendar, label: '调度器' },
     { to: '/sources', icon: Settings, label: 'RSS源管理' },
+    { to: '/llm-providers', icon: Brain, label: 'LLM 切换' },
   ];
 
   // 保存状态到localStorage

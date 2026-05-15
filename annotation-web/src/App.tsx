@@ -7,6 +7,7 @@ import ExportPage from './components/ExportPage';
 import TrainingPage from './components/TrainingPage';
 import SchedulerPage from './components/SchedulerPage';
 import SourcesPage from './components/SourcesPage';
+import LLMProvidersPage from './components/LLMProvidersPage';
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
           <Route path="training" element={<TrainingPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="sources" element={<SourcesPage />} />
+          <Route path="llm-providers" element={<LLMProvidersPage />} />
         </Route>
       </Routes>
     </>

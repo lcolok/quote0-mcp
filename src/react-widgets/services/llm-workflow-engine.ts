@@ -4,6 +4,8 @@
  */
 
 import { LLMContentProcessor, ProcessedContent } from './llm-content-processor.js';
+import { getActiveLLMConfig, getFallbackLLMConfig } from '../core/llm-config.js';
+import { getPostgresDatabase } from '../core/postgres-database.js';
 
 export interface WorkflowStep {
   name: string;
@@ -76,7 +78,13 @@ export class TitleOptimizationStep implements WorkflowStep {
 
   async execute(input: { title: string; content?: string }, context: WorkflowContext): Promise<{ title: string }> {
     const { titleMaxLength } = context.config;
-    const model = process.env.LLM_MODEL || 'gpt-5-mini';
+    let model = getFallbackLLMConfig().model;
+    try {
+      const cfg = await getActiveLLMConfig(getPostgresDatabase());
+      model = cfg.model;
+    } catch (e) {
+      // use fallback
+    }
     
     console.log(`🧠 迭代生成${titleMaxLength}字符标题: ${model}`);
     

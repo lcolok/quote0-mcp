@@ -455,6 +455,43 @@ export class PostgresDatabase {
           RETURN deleted_count;
       END;
       $$ LANGUAGE plpgsql;
+
+      -- LLM 提供方表
+      CREATE TABLE IF NOT EXISTS llm_providers (
+        id SERIAL PRIMARY KEY,
+        slug VARCHAR(64) UNIQUE NOT NULL,
+        display_name VARCHAR(128) NOT NULL,
+        base_url TEXT NOT NULL,
+        api_key TEXT NOT NULL,
+        api_type VARCHAR(32) NOT NULL DEFAULT 'openai-completions',
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- LLM 模型表（一个 provider 多个 model）
+      CREATE TABLE IF NOT EXISTS llm_models (
+        id SERIAL PRIMARY KEY,
+        provider_id INTEGER NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
+        model_id VARCHAR(128) NOT NULL,
+        display_name VARCHAR(128) NOT NULL,
+        context_window INTEGER,
+        max_tokens INTEGER,
+        reasoning BOOLEAN DEFAULT false,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(provider_id, model_id)
+      );
+
+      -- 当前激活的 provider+model（单行 settings 表，id=1 固定）
+      CREATE TABLE IF NOT EXISTS llm_active_setting (
+        id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        active_provider_id INTEGER REFERENCES llm_providers(id),
+        active_model_id INTEGER REFERENCES llm_models(id),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_llm_models_provider ON llm_models(provider_id);
     `;
 
     try {
@@ -462,6 +499,50 @@ export class PostgresDatabase {
       console.log('🔧 数据库表结构创建成功');
     } catch (error) {
       console.error('❌ 创建数据库表失败:', error);
+      throw error;
+    }
+
+    // Seed LLM providers & models (幂等)
+    const seedSQL = `
+      INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+      SELECT 'siliconflow', 'SiliconFlow (via copilot)', 'https://copilot.logic.heiyu.space/providers/siliconflow/v1', 'dummy', 'openai-completions'
+      WHERE NOT EXISTS (SELECT 1 FROM llm_providers);
+
+      INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+      SELECT 'kimi-for-coding', 'Kimi For Coding (via copilot)', 'https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1', 'sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP', 'openai-completions'
+      WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='kimi-for-coding');
+
+      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+      SELECT p.id, 'deepseek-ai/DeepSeek-V4-Flash', 'DeepSeek V4-Flash', 64000, 8192, true
+      FROM llm_providers p WHERE p.slug='siliconflow'
+      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V4-Flash');
+
+      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+      SELECT p.id, 'deepseek-ai/DeepSeek-V3', 'DeepSeek V3', 64000, 8192, true
+      FROM llm_providers p WHERE p.slug='siliconflow'
+      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V3');
+
+      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+      SELECT p.id, 'Pro/zai-org/GLM-5.1', 'GLM 5.1', 32000, 8192, true
+      FROM llm_providers p WHERE p.slug='siliconflow'
+      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='Pro/zai-org/GLM-5.1');
+
+      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens)
+      SELECT p.id, 'kimi-for-coding', 'Kimi For Coding', 128000, 8192
+      FROM llm_providers p WHERE p.slug='kimi-for-coding'
+      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='kimi-for-coding');
+
+      INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
+      SELECT 1,
+        (SELECT id FROM llm_providers WHERE slug='siliconflow'),
+        (SELECT id FROM llm_models WHERE model_id='deepseek-ai/DeepSeek-V4-Flash')
+      WHERE NOT EXISTS (SELECT 1 FROM llm_active_setting);
+    `;
+    try {
+      await client.query(seedSQL);
+      console.log('🔧 LLM providers seed 完成');
+    } catch (error) {
+      console.error('❌ LLM providers seed 失败:', error);
       throw error;
     }
   }

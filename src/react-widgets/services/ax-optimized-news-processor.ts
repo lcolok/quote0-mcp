@@ -1,4 +1,6 @@
 import { ax, ai, AxBootstrapFewShot } from '@ax-llm/ax';
+import { getActiveLLMConfig, getFallbackLLMConfig } from '../core/llm-config.js';
+import { getPostgresDatabase } from '../core/postgres-database.js';
 
 /**
  * 启用AX完整优化功能的新闻处理器
@@ -173,23 +175,36 @@ export class AxOptimizedNewsProcessor {
     );
 
     try {
+      // 动态读取最新 LLM 配置
+      let activeApiKey = getFallbackLLMConfig().apiKey;
+      let activeBaseURL = getFallbackLLMConfig().baseUrl;
+      let activeModel = getFallbackLLMConfig().model;
+      try {
+        const cfg = await getActiveLLMConfig(getPostgresDatabase());
+        activeApiKey = cfg.apiKey;
+        activeBaseURL = cfg.baseUrl;
+        activeModel = cfg.model;
+      } catch (e) {
+        // use fallback
+      }
+
       // 使用OpenAI API直接调用（避免AX框架复杂性）
       const { OpenAI } = await import('openai');
       const client = new OpenAI({
-        apiKey: process.env.LLM_API_KEY,
-        baseURL: process.env.LLM_BASE_URL
+        apiKey: activeApiKey,
+        baseURL: activeBaseURL
       });
 
       console.log('📝 生成优化标题...');
       const titleResponse = await client.chat.completions.create({
-        model: process.env.LLM_MODEL || 'gpt-4o',
+        model: activeModel,
         messages: [{ role: 'user', content: titlePrompt }],
         ...titleProgram.modelConfig
       });
 
       console.log('📝 生成优化摘要...');
       const summaryResponse = await client.chat.completions.create({
-        model: process.env.LLM_MODEL || 'gpt-4o', 
+        model: activeModel,
         messages: [{ role: 'user', content: summaryPrompt }],
         ...summaryProgram.modelConfig
       });

@@ -3,6 +3,7 @@
  */
 
 import { NewsQualityEvaluator } from '../services/news-quality-evaluator.js';
+import { getFallbackLLMConfig } from '../core/llm-config.js';
 
 async function testQualityEvaluator() {
   console.log('========================================');
@@ -10,9 +11,10 @@ async function testQualityEvaluator() {
   console.log('========================================\n');
 
   // 获取环境变量
-  const apiKey = process.env.LLM_API_KEY;
-  const baseURL = process.env.LLM_BASE_URL;
-  const model = process.env.LLM_MODEL || 'gpt-5-mini';
+  const fallback = getFallbackLLMConfig();
+  const apiKey = fallback.apiKey;
+  const baseURL = fallback.baseUrl;
+  const model = fallback.model;
 
   if (!apiKey || !baseURL) {
     console.error('❌ 请设置环境变量: LLM_API_KEY, LLM_BASE_URL');

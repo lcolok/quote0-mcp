@@ -16,6 +16,7 @@ import { ensureSchedulerStarted, getSchedulerInstance } from './scheduler-regist
 import type { NewsSchedulerJobConfig } from './news-types.js';
 import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
+import { llmProvidersApp } from './llm-providers-api.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -152,6 +153,9 @@ app.route('/', annotationApp);
 
 // 集成AX训练管理API
 app.route('/api/ax-training', axTrainingApp);
+
+// LLM Providers API
+app.route('/', llmProvidersApp);
 
 // RSS源数据配置
 const RSS_SOURCES: Record<string, RSSSourceInfo> = {

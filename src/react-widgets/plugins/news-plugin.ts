@@ -18,6 +18,8 @@ import { LLMWorkflowEngine, EnhancedContent } from '../services/llm-workflow-eng
 import { AxNewsProcessor } from '../services/ax-news-processor.js';
 import { AxInspiredNewsProcessor } from '../services/ax-inspired-processor.js';
 import { EnvLoader } from '../../image-sender/adapters/environments/env-loader.js';
+import { getActiveLLMConfig, getFallbackLLMConfig } from '../core/llm-config.js';
+import { getPostgresDatabase } from '../core/postgres-database.js';
 import { stagedCacheManager } from '../core/staged-cache-manager.js';
 import { dataSourceRegistry } from '../core/data-source-modules.js';
 
@@ -81,12 +83,13 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
     // 确保环境变量已加载
     EnvLoader.load();
     
-    // 从环境变量读取LLM配置
+    // 从环境变量读取LLM配置（同步 fallback）
+    const fallback = getFallbackLLMConfig();
     const llmConfig: LLMConfig = {
       provider: (process.env.LLM_PROVIDER as any) || 'mock',
-      apiKey: process.env.LLM_API_KEY,
-      baseURL: process.env.LLM_BASE_URL,
-      model: process.env.LLM_MODEL || 'gpt-4o',
+      apiKey: fallback.apiKey,
+      baseURL: fallback.baseUrl,
+      model: fallback.model,
       maxTokens: parseInt(process.env.LLM_MAX_TOKENS || '1000'),
       temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.7')
     };
@@ -387,12 +390,16 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       const item = feed.items[targetIndex];
       console.log(`📰 选择第${targetIndex + 1}条新闻进行AX处理: ${item.title}`);
 
-      // 3. 初始化AX处理器
+      // 3. 初始化AX处理器（使用最新配置）
+      let activeCfg = getFallbackLLMConfig();
+      try {
+        activeCfg = await getActiveLLMConfig(getPostgresDatabase());
+      } catch (e) { /* use fallback */ }
       const axProcessor = new AxNewsProcessor({
-        apiKey: process.env.LLM_API_KEY || '',
-        baseURL: process.env.LLM_BASE_URL || '',
-        strongModel: process.env.LLM_MODEL || 'gpt-5-mini',
-        fastModel: process.env.LLM_FAST_MODEL || 'gpt-4o'
+        apiKey: activeCfg.apiKey,
+        baseURL: activeCfg.baseUrl,
+        strongModel: activeCfg.model,
+        fastModel: activeCfg.model
       });
 
       // 4. 准备原始新闻内容
@@ -430,11 +437,15 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       // 1. 动态导入简化版AxOptimizedNewsProcessor
       const { AxOptimizedNewsProcessorSimplified } = await import('../services/ax-optimized-news-processor-simplified.js');
       
-      // 2. 初始化AX优化处理器
+      // 2. 初始化AX优化处理器（使用最新配置）
+      let activeCfg2 = getFallbackLLMConfig();
+      try {
+        activeCfg2 = await getActiveLLMConfig(getPostgresDatabase());
+      } catch (e) { /* use fallback */ }
       const processor = new AxOptimizedNewsProcessorSimplified({
-        apiKey: process.env.LLM_API_KEY || '',
-        baseURL: process.env.LLM_BASE_URL || '',
-        model: process.env.LLM_MODEL || 'gpt-5-mini'
+        apiKey: activeCfg2.apiKey,
+        baseURL: activeCfg2.baseUrl,
+        model: activeCfg2.model
       });
       
       // 3. 尝试加载预训练的优化产物
@@ -518,11 +529,15 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       const item = feed.items[targetIndex];
       console.log(`📰 选择第${targetIndex + 1}条新闻进行AX风格处理: ${item.title}`);
 
-      // 3. 初始化AX风格处理器
+      // 3. 初始化AX风格处理器（使用最新配置）
+      let activeCfg3 = getFallbackLLMConfig();
+      try {
+        activeCfg3 = await getActiveLLMConfig(getPostgresDatabase());
+      } catch (e) { /* use fallback */ }
       const axProcessor = new AxInspiredNewsProcessor({
         llmService: this.llmService,
-        strongModel: process.env.LLM_MODEL || 'gpt-5-mini',
-        fastModel: process.env.LLM_FAST_MODEL || 'gpt-4o'
+        strongModel: activeCfg3.model,
+        fastModel: activeCfg3.model
       });
 
       // 4. 准备原始新闻内容

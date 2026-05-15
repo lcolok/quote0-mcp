@@ -5,6 +5,8 @@
 import fs from 'fs';
 import { Pool } from 'pg';
 import { LLMCallCache } from './llm-call-cache.js';
+import { getFallbackLLMConfig, getActiveLLMConfig } from './llm-config.js';
+import { getPostgresDatabase } from './postgres-database.js';
 import { 
   ProcessingModule, 
   RawDataItem, 
@@ -279,11 +281,24 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
     const startTime = Date.now();
     console.log(`🤖 基础LLM处理: ${rawData.title}`);
     
+    // 动态读取最新 LLM 配置
+    let activeApiKey = this.apiKey;
+    let activeBaseURL = this.baseURL;
+    let activeModel = this.model;
+    try {
+      const cfg = await getActiveLLMConfig(getPostgresDatabase());
+      activeApiKey = cfg.apiKey;
+      activeBaseURL = cfg.baseUrl;
+      activeModel = cfg.model;
+    } catch (e) {
+      // 使用构造时的 fallback
+    }
+    
     try {
       const { OpenAI } = await import('openai');
       const client = new OpenAI({
-        apiKey: this.apiKey,
-        baseURL: this.baseURL
+        apiKey: activeApiKey,
+        baseURL: activeBaseURL
       });
       
       const maxTitleLength = params.maxTitleLength || 20;
@@ -304,14 +319,14 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 优化标题:`;
 
       let optimizedTitle: string;
-      const titleCacheKey = { prompt: titlePrompt, model: this.model, temperature };
+      const titleCacheKey = { prompt: titlePrompt, model: activeModel, temperature };
       const titleCached = this.llmCache ? await this.llmCache.get(titleCacheKey) : null;
       if (titleCached) {
         console.log(`💾 标题缓存命中: "${rawData.title}"`);
         optimizedTitle = titleCached.response;
       } else {
         const titleResponse = await client.chat.completions.create({
-          model: this.model,
+          model: activeModel,
           messages: [{ role: 'user', content: titlePrompt }],
           temperature,
           max_tokens: 100
@@ -336,14 +351,14 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 摘要:`;
 
       let processedContent: string;
-      const contentCacheKey = { prompt: contentPrompt, model: this.model, temperature };
+      const contentCacheKey = { prompt: contentPrompt, model: activeModel, temperature };
       const contentCached = this.llmCache ? await this.llmCache.get(contentCacheKey) : null;
       if (contentCached) {
         console.log(`💾 摘要缓存命中: "${rawData.title}"`);
         processedContent = contentCached.response;
       } else {
         const contentResponse = await client.chat.completions.create({
-          model: this.model,
+          model: activeModel,
           messages: [{ role: 'user', content: contentPrompt }],
           temperature,
           max_tokens: 300
@@ -367,7 +382,7 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
         qualityScore: 0.85, // 基础处理质量分数
         processingMetadata: {
           processor: this.name,
-          model: this.model,
+          model: activeModel,
           processedAt: new Date().toISOString(),
           processingTime,
           confidence: 0.85
@@ -382,7 +397,17 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
   }
 
   async getHealthStatus(): Promise<ProcessingHealthStatus> {
-    if (!this.baseURL || !this.apiKey) {
+    let activeApiKey = this.apiKey;
+    let activeBaseURL = this.baseURL;
+    try {
+      const cfg = await getActiveLLMConfig(getPostgresDatabase());
+      activeApiKey = cfg.apiKey;
+      activeBaseURL = cfg.baseUrl;
+    } catch (e) {
+      // use fallback
+    }
+
+    if (!activeBaseURL || !activeApiKey) {
       return {
         healthy: false,
         message: 'LLM处理器未完成配置 (缺少API Key或Base URL)',
@@ -391,13 +416,13 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
         modelStatus: 'error',
         queueLength: 0,
         additionalInfo: {
-          baseURL: this.baseURL || null,
-          apiKeyConfigured: Boolean(this.apiKey)
+          baseURL: activeBaseURL || null,
+          apiKeyConfigured: Boolean(activeApiKey)
         }
       };
     }
 
-    const endpointCheck = await checkLLMEndpointReachability(this.baseURL, this.apiKey, LLM_HEALTH_TIMEOUT_MS);
+    const endpointCheck = await checkLLMEndpointReachability(activeBaseURL, activeApiKey, LLM_HEALTH_TIMEOUT_MS);
     const responseTime = endpointCheck.duration;
     const timestamp = new Date().toISOString();
 
@@ -410,7 +435,7 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
         modelStatus: 'ready',
         queueLength: 0,
         additionalInfo: {
-          baseURL: this.baseURL,
+          baseURL: activeBaseURL,
           statusCode: endpointCheck.status ?? null,
           timedOut: false
         }
@@ -427,7 +452,7 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
       modelStatus: endpointCheck.timedOut ? 'loading' : 'error',
       queueLength: 0,
       additionalInfo: {
-        baseURL: this.baseURL,
+        baseURL: activeBaseURL,
         statusCode: endpointCheck.status ?? null,
         error: endpointCheck.message,
         timedOut: endpointCheck.timedOut
@@ -595,6 +620,17 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
     const startTime = Date.now();
     console.log(`🧠 AX优化处理: ${rawData.title}`);
     
+    // 动态读取最新 LLM 配置，若变更则重置处理器实例
+    try {
+      const cfg = await getActiveLLMConfig(getPostgresDatabase());
+      if (cfg.baseUrl !== this.config.baseURL || cfg.apiKey !== this.config.apiKey || cfg.model !== this.config.model) {
+        this.config = { baseURL: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model };
+        this.processorInstance = null;
+      }
+    } catch (e) {
+      // use fallback
+    }
+    
     try {
       const processor = await this.initializeProcessor();
       
@@ -633,6 +669,15 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
 
   async getHealthStatus(): Promise<ProcessingHealthStatus> {
     const timestamp = new Date().toISOString();
+    
+    // 动态读取最新 LLM 配置
+    try {
+      const cfg = await getActiveLLMConfig(getPostgresDatabase());
+      this.config = { baseURL: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model };
+    } catch (e) {
+      // use fallback
+    }
+    
     const configReport = this.validateConfiguration();
     const additionalInfo: Record<string, any> = {
       baseURL: this.config.baseURL,
@@ -787,10 +832,11 @@ export class ProcessingRegistry {
       // 直接从项目根目录的.env文件读取LLM配置
       const envPath = process.cwd() + '/.env';
       
+      const fallbackCfg = getFallbackLLMConfig();
       let llmConfig = {
-        apiKey: process.env.LLM_API_KEY || '',
-        baseURL: process.env.LLM_BASE_URL || '',
-        model: process.env.LLM_MODEL || 'gpt-4o'
+        apiKey: fallbackCfg.apiKey,
+        baseURL: fallbackCfg.baseUrl,
+        model: fallbackCfg.model
       };
       
       // 总是尝试直接读取.env文件来获取最新配置
@@ -828,10 +874,11 @@ export class ProcessingRegistry {
         console.log(`   LLM_MODEL: ${envVars.LLM_MODEL || '未设置'}`);
         
         // 使用.env文件中的配置覆盖默认值
+        const fallback = getFallbackLLMConfig();
         llmConfig = {
-          apiKey: envVars.LLM_API_KEY || llmConfig.apiKey,
-          baseURL: envVars.LLM_BASE_URL || llmConfig.baseURL,
-          model: envVars.LLM_MODEL || llmConfig.model
+          apiKey: envVars.LLM_API_KEY || fallback.apiKey,
+          baseURL: envVars.LLM_BASE_URL || fallback.baseUrl,
+          model: envVars.LLM_MODEL || fallback.model
         };
         
         console.log(`✅ 从.env文件成功读取LLM配置`);
@@ -842,7 +889,7 @@ export class ProcessingRegistry {
       
       // 验证配置并注册模块
       if (llmConfig.baseURL) {
-        console.log(`🔗 检测到自定义LLM端点: ${llmConfig.baseURL}`);
+        console.log(`🔗 检测到自定义LLM端点: ${llmConfig.baseURL || llmConfig.baseUrl}`);
         console.log(`🔑 API密钥状态: ${llmConfig.apiKey === 'your_api_key_here' ? '占位符' : '已配置'}`);
         console.log(`🤖 LLM模型: ${llmConfig.model}`);
 
