@@ -8,6 +8,7 @@ import TrainingPage from './components/TrainingPage';
 import SchedulerPage from './components/SchedulerPage';
 import SourcesPage from './components/SourcesPage';
 import LLMProvidersPage from './components/LLMProvidersPage';
+import InventoryPage from './components/InventoryPage';
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="sources" element={<SourcesPage />} />
           <Route path="llm-providers" element={<LLMProvidersPage />} />
+          <Route path="inventory" element={<InventoryPage />} />
         </Route>
       </Routes>
     </>

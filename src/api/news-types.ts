@@ -133,6 +133,7 @@ export interface NewsSchedulerJobRecord {
   nextRunAt?: string;
   state?: Record<string, any>;
   metadata?: Record<string, any>;
+  jobRole?: 'producer' | 'consumer' | 'mixed';
 }
 
 export interface RequiredSchedulerIndexStrategy {

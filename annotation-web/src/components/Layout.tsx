@@ -10,6 +10,7 @@ import {
   Calendar,
   Settings,
   Brain,
+  Package,
 } from 'lucide-react';
 
 function Layout() {
@@ -32,6 +33,7 @@ function Layout() {
     { to: '/scheduler', icon: Calendar, label: '调度器' },
     { to: '/sources', icon: Settings, label: 'RSS源管理' },
     { to: '/llm-providers', icon: Brain, label: 'LLM 切换' },
+    { to: '/inventory', icon: Package, label: '素材库' },
   ];
 
   // 保存状态到localStorage

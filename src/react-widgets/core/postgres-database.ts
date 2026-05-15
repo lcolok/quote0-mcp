@@ -116,12 +116,12 @@ export class PostgresDatabase {
         WHERE table_schema = 'public' AND table_name IN (
           'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats',
           'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache',
-          'llm_providers', 'llm_models', 'llm_active_setting'
+          'llm_providers', 'llm_models', 'llm_active_setting', 'content_inventory'
         )
       `);
 
       const existingTables = tablesResult.rows.map(row => row.table_name);
-      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache', 'llm_providers', 'llm_models', 'llm_active_setting'];
+      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache', 'llm_providers', 'llm_models', 'llm_active_setting', 'content_inventory'];
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
 
       console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
@@ -493,6 +493,36 @@ export class PostgresDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS idx_llm_models_provider ON llm_models(provider_id);
+
+      -- 内容素材库
+      CREATE TABLE IF NOT EXISTS content_inventory (
+        id SERIAL PRIMARY KEY,
+        producer_job_id VARCHAR(64) NOT NULL,
+        content_type VARCHAR(20) NOT NULL,
+        source VARCHAR(64),
+        category VARCHAR(50),
+        fingerprint VARCHAR(128) UNIQUE,
+        title TEXT,
+        link TEXT,
+        raw_content JSONB,
+        processed_content JSONB,
+        image_path TEXT NOT NULL,
+        state VARCHAR(20) NOT NULL DEFAULT 'ready'
+          CHECK (state IN ('ready', 'pushed', 'expired')),
+        replay_count INTEGER NOT NULL DEFAULT 0,
+        max_replays INTEGER NOT NULL DEFAULT 3,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_pushed_at TIMESTAMP,
+        expires_at TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_inventory_state ON content_inventory(state, created_at);
+      CREATE INDEX IF NOT EXISTS idx_inventory_replay ON content_inventory(state, last_pushed_at) WHERE state='pushed';
+      CREATE INDEX IF NOT EXISTS idx_inventory_producer ON content_inventory(producer_job_id);
+
+      -- job_role 列：producer / consumer / mixed
+      ALTER TABLE news_scheduler_jobs
+        ADD COLUMN IF NOT EXISTS job_role VARCHAR(20) NOT NULL DEFAULT 'mixed'
+        CHECK (job_role IN ('producer', 'consumer', 'mixed'));
     `;
 
     try {
@@ -544,6 +574,22 @@ export class PostgresDatabase {
       console.log('🔧 LLM providers seed 完成');
     } catch (error) {
       console.error('❌ LLM providers seed 失败:', error);
+      throw error;
+    }
+
+    // Seed job roles for producer/consumer architecture
+    const jobRoleSeedSQL = `
+      UPDATE news_scheduler_jobs SET job_role='producer' WHERE id='multi-source-rotation' AND job_role='mixed';
+
+      INSERT INTO news_scheduler_jobs (id, name, enabled, data_source, processor, renderer, rss_source, category, interval_ms, job_role, index_strategy)
+      SELECT 'device-content-rotator', '设备内容轮播器', true, 'inventory', 'passthrough', 'local-eink', NULL, NULL, 60000, 'consumer', '{"type":"fair-rotation","poolSize":10,"startIndex":0,"cooldownHours":24,"maxPushCount":5,"rotateAfterEachPush":true,"skipEmptySource":true}'::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM news_scheduler_jobs WHERE id='device-content-rotator');
+    `;
+    try {
+      await client.query(jobRoleSeedSQL);
+      console.log('🔧 Job role seed 完成');
+    } catch (error) {
+      console.error('❌ Job role seed 失败:', error);
       throw error;
     }
   }
@@ -1067,7 +1113,8 @@ export class PostgresDatabase {
         lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
         nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
         state: row.state || {},
-        metadata: row.metadata || {}
+        metadata: row.metadata || {},
+        jobRole: row.job_role || 'mixed'
       }));
     } finally {
       client.release();
@@ -1102,7 +1149,8 @@ export class PostgresDatabase {
         lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
         nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
         state: row.state || {},
-        metadata: row.metadata || {}
+        metadata: row.metadata || {},
+        jobRole: row.job_role || 'mixed'
       };
     } finally {
       client.release();

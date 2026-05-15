@@ -412,6 +412,12 @@ export class NewsScheduler {
       return;
     }
 
+    // Consumer branch: pick from inventory and push to device
+    if (job.config.jobRole === 'consumer') {
+      await this.runConsumerJob(job);
+      return;
+    }
+
     const runStartedAt = new Date();
     const sourceInfo = await this.resolveRunnableSource(job, overrideIndex);
     let currentRssSource = sourceInfo.source;
@@ -471,7 +477,7 @@ export class NewsScheduler {
         dataSource: job.config.dataSource,
         rssSource: currentRssSource,
         processor: job.config.processor,
-        renderer: job.config.renderer,
+        renderer: job.config.jobRole === 'producer' ? 'news' : job.config.renderer,
         index: candidate.index,
         options: job.config.options,
         context: candidate.context
@@ -486,6 +492,11 @@ export class NewsScheduler {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`❌ 首次新闻处理失败: ${message}`);
+
+        if (job.config.jobRole === 'producer') {
+          // producer 不推送设备，不需要 JSON fallback
+          throw error;
+        }
 
         if (job.config.renderer === 'device') {
           console.warn('⚠️ 尝试回退至JSON渲染以避免阻塞推送流水');
@@ -580,38 +591,88 @@ export class NewsScheduler {
       }
 
       let imagePath: string | undefined;
-      if (result.result && typeof result.result === 'object' && 'localImagePath' in result.result) {
-        imagePath = (result.result as any).localImagePath;
+      if (job.config.jobRole === 'producer') {
+        // producer: result.result is the MinIO URL string from renderer='news'
+        const imageUrl = typeof result.result === 'string' ? result.result : (result.result as any)?.imageUrl;
+        if (imageUrl && imageUrl.includes('/quote0-images/')) {
+          const urlParts = new URL(imageUrl);
+          imagePath = urlParts.pathname.substring('/quote0-images/'.length);
+          imagePath = '/' + imagePath;
+        }
+      } else {
+        if (result.result && typeof result.result === 'object' && 'localImagePath' in result.result) {
+          imagePath = (result.result as any).localImagePath;
+        }
       }
 
       const pushTime = new Date();
 
-      await this.postgres.recordPushResult({
-        jobId: job.config.id,
-        fingerprint: candidate.fingerprint,
-        title: candidate.context.title,
-        link: candidate.context.link,
-        category: candidate.context.category,
-        source: candidate.context.source,
-        metadata: {
-          publishTime: candidate.context.publishTime,
-          index: candidate.index,
-          rssSource: currentRssSource,
-          category: candidate.context.category || job.config.category,
+      if (job.config.jobRole === 'producer') {
+        // Producer: write to inventory, enforce soft cap, skip device push and push log
+        if (imagePath) {
+          try {
+            await this.enforceInventoryCap();
+            await this.postgres.pool.query(`
+              INSERT INTO content_inventory (
+                producer_job_id, content_type, source, category, fingerprint,
+                title, link, raw_content, processed_content, image_path, state, max_replays
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ready', 3)
+              ON CONFLICT (fingerprint) DO UPDATE SET
+                image_path = EXCLUDED.image_path,
+                processed_content = EXCLUDED.processed_content,
+                state = 'ready',
+                replay_count = 0,
+                last_pushed_at = NULL,
+                created_at = CURRENT_TIMESTAMP
+            `, [
+              job.config.id,
+              'news',
+              currentRssSource,
+              job.config.category,
+              candidate.fingerprint,
+              candidate.context.title || null,
+              candidate.context.link || null,
+              JSON.stringify(rawContent),
+              processedContent ? JSON.stringify(processedContent) : null,
+              imagePath
+            ]);
+            console.log(`📦 Producer 素材已入库: ${candidate.fingerprint} -> ${imagePath}`);
+          } catch (inventoryError) {
+            console.error('❌ 写入 inventory 失败:', inventoryError);
+            throw inventoryError;
+          }
+        } else {
+          console.warn('⚠️ Producer 未获取到图片路径，跳过入库');
+        }
+      } else {
+        // Mixed: legacy full pipeline with device push and push log
+        await this.postgres.recordPushResult({
+          jobId: job.config.id,
+          fingerprint: candidate.fingerprint,
+          title: candidate.context.title,
+          link: candidate.context.link,
+          category: candidate.context.category,
+          source: candidate.context.source,
+          metadata: {
+            publishTime: candidate.context.publishTime,
+            index: candidate.index,
+            rssSource: currentRssSource,
+            category: candidate.context.category || job.config.category,
+            layer: selection.layer,
+            isFallback: selection.isFallback
+          },
+          result: {
+            workflow: result.workflow,
+            cache: result.cacheSource
+          },
+          rawContent,
+          processedContent,
+          imagePath,
           layer: selection.layer,
-          isFallback: selection.isFallback
-        },
-        result: {
-          workflow: result.workflow,
-          cache: result.cacheSource
-        },
-        rawContent,
-        processedContent,
-        imagePath,
-        layer: selection.layer,
-        isFallback: selection.isFallback,
-        strategySnapshot: selection.strategySnapshot
-      });
+          isFallback: selection.isFallback,
+          strategySnapshot: selection.strategySnapshot
+        });
+      }
 
       if (runHistoryId) {
         try {
@@ -623,7 +684,7 @@ export class NewsScheduler {
             candidateProcessTime: processingDurationMs ? new Date(pushTime.getTime() - processingDurationMs) : null,
             pushTime,
             pushStatus: 'success',
-            pushReason: 'selected',
+            pushReason: job.config.jobRole === 'producer' ? 'producer_stored' : 'selected',
             pushCountBefore: selection.pushCountBefore,
             pushCountAfter: selection.pushCountBefore + 1,
             coolingElapsedMs: selection.coolingElapsedMs ?? null,
@@ -632,7 +693,8 @@ export class NewsScheduler {
               strategySnapshot: selection.strategySnapshot,
               processingDurationMs,
               totalCandidates: selection.totalCandidates,
-              poolSize: selection.poolSize
+              poolSize: selection.poolSize,
+              jobRole: job.config.jobRole
             },
             runFinishedAt: new Date()
           });
@@ -1570,6 +1632,236 @@ export class NewsScheduler {
       list.length = limit;
     }
   }
+
+  /**
+   * Consumer job: pick image from inventory and push to device
+   */
+  private async runConsumerJob(job: SchedulerJobInstance): Promise<void> {
+    const runStartedAt = new Date();
+    let runHistoryId: number | null = null;
+
+    try {
+      runHistoryId = await this.postgres.createSchedulerRunHistory({
+        jobId: job.config.id,
+        runStartedAt,
+        source: 'inventory',
+        metadata: { jobRole: 'consumer' }
+      });
+
+      // 1. Prefer ready items (FIFO)
+      let item = await this.postgres.pool.query(`
+        SELECT * FROM content_inventory
+        WHERE state='ready'
+        ORDER BY created_at ASC
+        LIMIT 1
+      `);
+
+      // 2. Fallback to pushed items with replay budget (LRU)
+      if (item.rows.length === 0) {
+        item = await this.postgres.pool.query(`
+          SELECT * FROM content_inventory
+          WHERE state='pushed' AND replay_count < max_replays
+            AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+          ORDER BY last_pushed_at ASC NULLS FIRST
+          LIMIT 1
+        `);
+      }
+
+      // 3. Empty inventory → skip gracefully
+      if (item.rows.length === 0) {
+        console.log(`📭 Consumer ${job.config.id}: inventory empty, skipping`);
+        if (runHistoryId) {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'skipped',
+            pushReason: 'inventory_empty',
+            runFinishedAt: new Date()
+          });
+        }
+        job.state.consecutiveFailures = 0;
+        const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+        await this.persistSchedulerState(job, nextRunAt);
+        return;
+      }
+
+      const inventoryItem = item.rows[0];
+      console.log(`📤 Consumer ${job.config.id} 推送素材: ${inventoryItem.fingerprint} (replay ${inventoryItem.replay_count}/${inventoryItem.max_replays})`);
+
+      // 4. Push image from MinIO to device
+      await this.pushImageFromMinIO(inventoryItem.image_path, job);
+
+      // 5. Update inventory state
+      const updatedReplayCount = (inventoryItem.replay_count || 0) + 1;
+      await this.postgres.pool.query(`
+        UPDATE content_inventory
+        SET state='pushed', replay_count=replay_count+1, last_pushed_at=CURRENT_TIMESTAMP
+        WHERE id=$1
+      `, [inventoryItem.id]);
+
+      // 6. Write news_push_log for annotation compatibility
+      await this.postgres.recordPushResult({
+        jobId: job.config.id,
+        fingerprint: inventoryItem.fingerprint,
+        title: inventoryItem.title,
+        source: inventoryItem.source,
+        category: inventoryItem.category,
+        rawContent: inventoryItem.raw_content,
+        processedContent: inventoryItem.processed_content,
+        imagePath: inventoryItem.image_path,
+        result: { source_inventory_id: inventoryItem.id, replay_count: updatedReplayCount },
+        layer: 'inventory',
+        isFallback: false
+      });
+
+      if (runHistoryId) {
+        await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+          pushStatus: 'success',
+          pushReason: 'inventory_consumed',
+          candidateFingerprint: inventoryItem.fingerprint,
+          runFinishedAt: new Date(),
+          metadata: { inventoryId: inventoryItem.id, replayCount: updatedReplayCount }
+        });
+      }
+
+      job.state.consecutiveFailures = 0;
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.persistSchedulerState(job, nextRunAt);
+      console.log(`✅ Consumer ${job.config.id} 完成，下次运行: ${nextRunAt.toISOString()}`);
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`❌ Consumer ${job.config.id} 执行失败: ${message}`, error);
+      job.state.consecutiveFailures += 1;
+
+      if (runHistoryId) {
+        try {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'failed',
+            pushReason: message,
+            runFinishedAt: new Date(),
+            metadata: { error: message, consecutiveFailures: job.state.consecutiveFailures }
+          });
+        } catch (historyError) {
+          console.warn('⚠️ 更新运行历史失败:', historyError);
+        }
+      }
+
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.persistSchedulerState(job, nextRunAt);
+    } finally {
+      job.state.running = false;
+    }
+  }
+
+  /**
+   * Push an image from MinIO to the device without re-rendering
+   */
+  private async pushImageFromMinIO(imagePath: string, job: SchedulerJobInstance): Promise<void> {
+    const renderer = job.config.renderer;
+    const { getImageStorage } = await import('../react-widgets/core/image-storage.js');
+    const imageStorage = getImageStorage();
+
+    // imagePath is like "/widgets/news/2025/05/16/abc.png"
+    const objectKey = imagePath.startsWith('/') ? imagePath.substring(1) : imagePath;
+    const existsResult = await imageStorage.imageExistsByObjectKey(objectKey);
+    if (!existsResult) {
+      throw new Error(`MinIO 图片不存在: ${objectKey}`);
+    }
+
+    const imageUrl = existsResult.url;
+
+    // Download to temp file
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const { tmpdir } = await import('os');
+    const https = await import('https');
+    const http = await import('http');
+    const { createWriteStream } = await import('fs');
+
+    const tempFileName = `inventory_${Date.now()}.png`;
+    const tempFilePath = path.join(tmpdir(), tempFileName);
+
+    await new Promise<void>((resolve, reject) => {
+      const client = imageUrl.startsWith('https:') ? https : http;
+      const file = createWriteStream(tempFilePath);
+      client.get(imageUrl, (response) => {
+        response.pipe(file);
+        file.on('finish', () => {
+          file.close(() => resolve());
+        });
+        file.on('error', (err) => {
+          file.close();
+          reject(err);
+        });
+      }).on('error', (err) => {
+        file.close();
+        reject(err);
+      });
+    });
+
+    try {
+      if (renderer === 'local-eink') {
+        const fsModule = await import('fs');
+        const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
+        const pngBuffer = await fsModule.promises.readFile(tempFilePath);
+        const bitmap = await pngTo1BitBitmap(pngBuffer);
+        const devices = await getEinkDevices();
+        if (devices.length === 0) {
+          console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
+        } else {
+          for (const device of devices) {
+            const result = await pushToEinkDevice(device, bitmap);
+            if (result.ok) {
+              console.log(`✅ ${device.name} 推送成功`);
+            } else {
+              console.error(`❌ ${device.name} 推送失败: ${result.error}`);
+            }
+          }
+        }
+      } else if (renderer === 'device') {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(exec);
+        const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${tempFilePath}" "0" "" "ORDERED"`;
+        console.log(`📤 执行 MindReset 推送: ${deviceCommand}`);
+        const { stdout, stderr } = await execAsync(deviceCommand, {
+          cwd: process.cwd(),
+          env: process.env
+        });
+        if (stdout) console.log(stdout);
+        if (stderr) console.error(stderr);
+      } else {
+        console.warn(`⚠️ 不支持的 consumer renderer: ${renderer}，跳过设备推送`);
+      }
+    } finally {
+      try {
+        await fs.unlink(tempFilePath);
+      } catch (cleanupError) {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * Enforce soft inventory cap: mark oldest items as expired when over 100
+   */
+  private async enforceInventoryCap(): Promise<void> {
+    try {
+      const result = await this.postgres.pool.query(`
+        UPDATE content_inventory SET state='expired'
+        WHERE id IN (
+          SELECT id FROM content_inventory
+          WHERE state IN ('ready', 'pushed')
+          ORDER BY created_at ASC
+          OFFSET 100
+        )
+      `);
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`🧹 Inventory cap enforced: ${result.rowCount} old items marked expired`);
+      }
+    } catch (error) {
+      console.warn('⚠️ Inventory cap enforcement failed:', error);
+    }
+  }
 }
 
 function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
@@ -1649,7 +1941,8 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
     updatedAt: record.updatedAt,
     lastRunAt: record.lastRunAt,  // 持久化字段
     nextRunAt: record.nextRunAt,  // 持久化字段
-    state: record.state || {}     // 持久化字段
+    state: record.state || {},     // 持久化字段
+    jobRole: record.jobRole || record.job_role || 'mixed'
   };
 }
 

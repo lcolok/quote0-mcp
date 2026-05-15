@@ -17,6 +17,7 @@ import type { NewsSchedulerJobConfig } from './news-types.js';
 import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
+import inventoryApp from './inventory-api.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -156,6 +157,9 @@ app.route('/api/ax-training', axTrainingApp);
 
 // LLM Providers API
 app.route('/', llmProvidersApp);
+
+// Inventory API
+app.route('/', inventoryApp);
 
 // RSS源数据配置
 const RSS_SOURCES: Record<string, RSSSourceInfo> = {
