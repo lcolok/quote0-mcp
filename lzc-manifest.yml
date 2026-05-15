@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.0.28
+version: 1.0.29
 
 # 应用名称
 name: Quote0 新闻服务
@@ -72,7 +72,7 @@ application:
     MINDRESET_DEVICE_ID: E4B063CC0F10
     MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
     LLM_PROVIDER: custom
-    LLM_BASE_URL: https://api.kimi.com/coding/
+    LLM_BASE_URL: https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1
     LLM_API_KEY: sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP
     LLM_MODEL: kimi-for-coding
     LLM_FAST_MODEL: kimi-for-coding
@@ -155,7 +155,7 @@ services:
 
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.28
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.29
     environment:
       NODE_ENV: production
       PORT: "3001"
@@ -176,7 +176,7 @@ services:
       MINDRESET_DEVICE_ID: E4B063CC0F10
       MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
       LLM_PROVIDER: custom
-      LLM_BASE_URL: https://api.kimi.com/coding/
+      LLM_BASE_URL: https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1
       LLM_API_KEY: sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP
       LLM_MODEL: kimi-for-coding
       LLM_FAST_MODEL: kimi-for-coding
