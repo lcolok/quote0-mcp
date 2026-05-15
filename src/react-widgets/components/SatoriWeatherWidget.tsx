@@ -20,77 +20,72 @@ interface SatoriWeatherWidgetProps {
   invertedBanner?: boolean;
 }
 
-// 天气图标映射 - 使用文本符号替代SVG图标
+// 天气图标映射 - 用 FusionPixelFont 支持的中文单字代替 emoji
+// 历史教训：satori 未加载 emoji 字体，SMP 范围（🌧🌦🌨🌫💨）全渲染为方框 □；
+// BMP 范围（☀☁⛅⛈❄）部分也不在 FusionPixelFont 子集里。
+// 用中文单字 100% 可显示，下方仍保留完整中文描述（"大雨"/"雷阵雨"）。
 const getWeatherIconText = (weather: string): string => {
   const weatherLower = weather.toLowerCase();
-  
-  // 晴天类型
-  if (weatherLower.includes('晴') || weatherLower.includes('sunny') || weatherLower.includes('clear')) {
-    return '☀';
+
+  // 雷阵雨 / 雷雨（雷优先级高于雨，避免被普通雨匹配）
+  if (weatherLower.includes('雷阵雨') || weatherLower.includes('雷雨') ||
+      weatherLower.includes('雷') || weatherLower.includes('thunder') || weatherLower.includes('storm')) {
+    return '雷';
   }
-  
-  // 阴天/全云类型
-  if (weatherLower.includes('阴') || weatherLower.includes('overcast')) {
-    return '☁';
+
+  // 雨夹雪 / 雨雪（混合天气优先于纯雨/纯雪）
+  if (weatherLower.includes('雨夹雪') || weatherLower.includes('雨雪') || weatherLower.includes('sleet')) {
+    return '雪';
   }
-  
-  // 多云类型
-  if (weatherLower.includes('多云') || weatherLower.includes('cloudy') || weatherLower.includes('partly')) {
-    return '⛅';
-  }
-  
-  // 阵雨/淋雨类型
-  if (weatherLower.includes('阵雨') || weatherLower.includes('shower')) {
-    return '🌦';
-  }
-  
-  // 雷阵雨类型
-  if (weatherLower.includes('雷阵雨') || weatherLower.includes('雷雨')) {
-    return '⛈';
-  }
-  
-  // 普通雨天类型
-  if (weatherLower.includes('雨') || weatherLower.includes('rain') || weatherLower.includes('drizzle')) {
-    return '🌧';
-  }
-  
-  // 雷暴类型
-  if (weatherLower.includes('雷') || weatherLower.includes('thunder') || weatherLower.includes('storm')) {
-    return '⛈';
-  }
-  
-  // 雨夹雪/雨雪类型
-  if (weatherLower.includes('雨夹雪') || weatherLower.includes('sleet')) {
-    return '🌨';
-  }
-  
-  // 雪天类型
-  if (weatherLower.includes('雪') || weatherLower.includes('snow')) {
-    return '❄';
-  }
-  
-  // 雾天类型
-  if (weatherLower.includes('雾') || weatherLower.includes('fog')) {
-    return '🌫';
-  }
-  
-  // 霾/烟雾类型
-  if (weatherLower.includes('霾') || weatherLower.includes('haze') || weatherLower.includes('smog')) {
-    return '🌫';
-  }
-  
-  // 大风类型
-  if (weatherLower.includes('大风') || weatherLower.includes('windy') || weatherLower.includes('gust')) {
-    return '💨';
-  }
-  
-  // 冰雹类型
+
+  // 冰雹
   if (weatherLower.includes('冰雹') || weatherLower.includes('hail')) {
-    return '🌨';
+    return '雹';
   }
-  
+
+  // 阵雨 / 淋雨 / 普通雨
+  if (weatherLower.includes('阵雨') || weatherLower.includes('shower') ||
+      weatherLower.includes('雨') || weatherLower.includes('rain') || weatherLower.includes('drizzle')) {
+    return '雨';
+  }
+
+  // 雪天
+  if (weatherLower.includes('雪') || weatherLower.includes('snow')) {
+    return '雪';
+  }
+
+  // 雾天
+  if (weatherLower.includes('雾') || weatherLower.includes('fog')) {
+    return '雾';
+  }
+
+  // 霾 / 烟雾
+  if (weatherLower.includes('霾') || weatherLower.includes('haze') || weatherLower.includes('smog')) {
+    return '霾';
+  }
+
+  // 大风
+  if (weatherLower.includes('大风') || weatherLower.includes('windy') || weatherLower.includes('gust')) {
+    return '风';
+  }
+
+  // 晴天
+  if (weatherLower.includes('晴') || weatherLower.includes('sunny') || weatherLower.includes('clear')) {
+    return '晴';
+  }
+
+  // 阴天
+  if (weatherLower.includes('阴') || weatherLower.includes('overcast')) {
+    return '阴';
+  }
+
+  // 多云
+  if (weatherLower.includes('多云') || weatherLower.includes('cloudy') || weatherLower.includes('partly')) {
+    return '云';
+  }
+
   // 默认 - 多云
-  return '⛅';
+  return '云';
 };
 
 // 湿度图标（用中文字代替 emoji，FusionPixelFont 不支持 emoji）
