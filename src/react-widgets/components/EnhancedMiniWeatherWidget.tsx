@@ -8,6 +8,7 @@ import {
 } from 'react-icons/wi';
 import { FaTint } from 'react-icons/fa';
 import { BsDroplet } from 'react-icons/bs';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
 interface EnhancedMiniWeatherWidgetProps {
   data: WeatherData;
@@ -43,8 +44,8 @@ const EnhancedMiniWeatherWidget: React.FC<EnhancedMiniWeatherWidgetProps> = ({ d
   };
 
   const containerStyle: React.CSSProperties = {
-    width: '296px',
-    height: '152px',
+    width: `${EINK_DEVICE_WIDTH}px`,
+    height: `${EINK_DEVICE_HEIGHT}px`,
     backgroundColor: 'white',
     color: 'black',
     padding: '4px',

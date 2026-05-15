@@ -9,6 +9,7 @@ import {
   WiStrongWind, WiSmog, WiSleet, WiHail
 } from 'react-icons/wi';
 import { BsDropletFill } from 'react-icons/bs';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
 interface WeatherWidgetProps {
   data: WeatherData;
@@ -124,8 +125,8 @@ const WeatherWidget: React.FC<WeatherWidgetProps> = ({ data, invertedBanner = tr
 
   // 容器 - 完全填满屏幕
   const containerStyle: React.CSSProperties = {
-    width: '296px',
-    height: '152px',
+    width: `${EINK_DEVICE_WIDTH}px`,
+    height: `${EINK_DEVICE_HEIGHT}px`,
     backgroundColor: 'white',
     color: 'black',
     padding: '0px', // 完全消除边距

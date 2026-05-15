@@ -1,6 +1,7 @@
 import { ImageProcessor } from '../processors/image/base-processor.js';
 import { MindResetDeviceClient } from '../services/api/device-client.js';
 import { ImageSendOptions, ApiResponse, ImageProcessingOptions } from '../core/types/index.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../../react-widgets/core/device-constants.js';
 
 export class ImageSender {
   private processor: ImageProcessor;
@@ -28,7 +29,7 @@ export class ImageSender {
     let imagePathToSend = imagePath;
     let tempPath: string | null = null;
 
-    if (dimensions.width !== 296 || dimensions.height !== 152) {
+    if (dimensions.width !== EINK_DEVICE_WIDTH || dimensions.height !== EINK_DEVICE_HEIGHT) {
       console.log('图片尺寸不匹配设备屏幕，正在调整...');
       await this.processor.ensureTempDirectory();
       tempPath = this.processor.generateTempPath(imagePath);

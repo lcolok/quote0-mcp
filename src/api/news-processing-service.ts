@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
 import { stagedCacheManager } from '../react-widgets/core/staged-cache-manager.js';
 import type { NewsData } from '../react-widgets/components/NewsWidget.js';
@@ -28,8 +29,8 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
   const config: NewsProcessingConfig = {
     border: (body.options?.border || '0') as '0' | '1',
     // 设备真实分辨率 296×152（v1.0.22 起 satori widget 统一按此渲染）
-    width: body.options?.width || 296,
-    height: body.options?.height || 152
+    width: body.options?.width || EINK_DEVICE_WIDTH,
+    height: body.options?.height || EINK_DEVICE_HEIGHT
   };
 
   // 如果提供了mockData，注入到环境中

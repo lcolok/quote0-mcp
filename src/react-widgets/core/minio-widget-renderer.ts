@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { RenderOptions } from '../types.js';
 import { FontLoader } from '../font-loader.js';
 import { MinIOFontRenderer } from './minio-font-renderer.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from './device-constants.js';
 
 export class MinIOWidgetRenderer {
   private browser: Browser | null = null;
@@ -55,8 +56,8 @@ export class MinIOWidgetRenderer {
       
       // 设置视口为水墨屏尺寸
       await page.setViewport({
-        width: 296,
-        height: 152,
+        width: EINK_DEVICE_WIDTH,
+        height: EINK_DEVICE_HEIGHT,
         deviceScaleFactor: 1,
         hasTouch: false,
         isMobile: false
@@ -144,7 +145,7 @@ export class MinIOWidgetRenderer {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=296, height=152">
+    <meta name="viewport" content={`width=${EINK_DEVICE_WIDTH}, height=${EINK_DEVICE_HEIGHT}`}>
     <title>Widget Render</title>
     <style>
         * {
@@ -156,8 +157,8 @@ export class MinIOWidgetRenderer {
         ${minioFontCSS}
         
         body {
-            width: 296px;
-            height: 152px;
+            width: ${EINK_DEVICE_WIDTH}px;
+            height: ${EINK_DEVICE_HEIGHT}px;
             background-color: ${backgroundColor};
             font-family: ${FontLoader.getFusionPixelFontFamily()};
             overflow: hidden;

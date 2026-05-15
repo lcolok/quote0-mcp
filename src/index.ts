@@ -3,6 +3,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { fetch } from "undici";
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from "./react-widgets/core/device-constants.js";
 import {
   CallToolRequestSchema,
   CallToolResult,
@@ -37,7 +38,7 @@ const TextWithIconSchema = z.object({
 
 const ImageSchema = z.object({
   deviceId: z.string().describe("Device serial number"),
-  image: z.string().describe("Base64 encoded PNG image data (296px*152px)"),
+  image: z.string().describe(`Base64 encoded PNG image data (${EINK_DEVICE_WIDTH}px*${EINK_DEVICE_HEIGHT}px)`),
   border: z.enum(["0", "1"]).optional().describe("0 for white border, 1 for black border"),
   link: z.string().optional().describe("HTTP/HTTPS link or Scheme URL for tap-to-jump"),
 });
@@ -194,7 +195,7 @@ class MindResetMcpServer {
         type: "object",
         properties: {
           deviceId: { type: "string", description: "Device serial number" },
-          image: { type: "string", description: "Base64 encoded PNG image data (296px*152px)" },
+          image: { type: "string", description: `Base64 encoded PNG image data (${EINK_DEVICE_WIDTH}px*${EINK_DEVICE_HEIGHT}px)` },
           border: { type: "string", enum: ["0", "1"], description: "0 for white border, 1 for black border" },
           link: { type: "string", description: "HTTP/HTTPS link or Scheme URL for tap-to-jump" },
         },

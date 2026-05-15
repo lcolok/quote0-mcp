@@ -2,6 +2,7 @@
 
 import { createCanvas, loadImage } from 'canvas';
 import fs from 'fs';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../../../react-widgets/core/device-constants.js';
 
 /**
  * GIF处理工具 - 提取第一帧并优化
@@ -43,8 +44,8 @@ export class GifProcessor {
   async fitWithoutStretch(
     imagePath: string, 
     outputPath: string, 
-    targetWidth: number = 296, 
-    targetHeight: number = 152
+    targetWidth: number = EINK_DEVICE_WIDTH, 
+    targetHeight: number = EINK_DEVICE_HEIGHT
   ): Promise<boolean> {
     try {
       console.log('正在适配尺寸 (不拉伸，保持比例)...');
@@ -131,7 +132,7 @@ export class GifProcessor {
         
         const optimizeResult = await optimizer.optimizeForMonochromeScreen(
           fittedPath,
-          { width: 296, height: 152 },
+          { width: EINK_DEVICE_WIDTH, height: EINK_DEVICE_HEIGHT },
           'floydSteinberg',
           true
         );

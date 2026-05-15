@@ -3,6 +3,7 @@
  */
 
 import React from 'react';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT, EINK_DEVICE_SIZE_LABEL } from './device-constants.js';
 import { 
   RenderingModule, 
   ProcessedDataItem, 
@@ -168,8 +169,8 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
           border: borderColor 
         }),
         {
-          width: config.width || 640,
-          height: config.height || 384,
+          width: config.width || EINK_DEVICE_WIDTH,
+          height: config.height || EINK_DEVICE_HEIGHT,
           backgroundColor: config.backgroundColor || '#ffffff'
         }
       );
@@ -456,8 +457,8 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
         cacheKey: `modular_${data.id}_${timestamp}`,
         renderConfig: {
           border: config.border,
-          width: config.width || 640,
-          height: config.height || 384
+          width: config.width || EINK_DEVICE_WIDTH,
+          height: config.height || EINK_DEVICE_HEIGHT
         }
       };
       
@@ -784,7 +785,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
       const metadata = {
         widgetType: 'news',
         cacheKey: `modular_${data.id}_${timestamp}`,
-        renderConfig: { border: config.border, width: config.width || 640, height: config.height || 384 }
+        renderConfig: { border: config.border, width: config.width || EINK_DEVICE_WIDTH, height: config.height || EINK_DEVICE_HEIGHT }
       };
       const uploadResult = await imageStorage.uploadImage(localImagePath, metadata);
       const imageUrl = uploadResult.url;
@@ -858,7 +859,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
         renderingCapacity: devices.length > 0 ? 10 : 0,
         fontStatus: 'loaded',
         additionalInfo: {
-          targetResolution: '296x152',
+          targetResolution: EINK_DEVICE_SIZE_LABEL,
           bitmapFormat: '1-bit MSB-first',
           deviceCount: devices.length,
           devices: devices.map(d => ({ id: d.id, name: d.name }))

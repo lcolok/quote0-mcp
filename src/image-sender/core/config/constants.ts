@@ -3,11 +3,12 @@
  */
 
 import { ImageDimensions } from '../types/device.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../../../react-widgets/core/device-constants.js';
 
 // 设备屏幕尺寸
 export const DEVICE_SCREEN_SIZE: ImageDimensions = {
-  width: 296,
-  height: 152
+  width: EINK_DEVICE_WIDTH,
+  height: EINK_DEVICE_HEIGHT
 };
 
 // API配置

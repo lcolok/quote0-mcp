@@ -14,6 +14,7 @@ import React from 'react';
 import { MaximizedWeatherWidget } from '../react-widgets/components/MaximizedWeatherWidget.js';
 import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 
 function sanitizeWeatherData(data: any): WeatherData {
   const toStr = (v: any, fallback?: string): string | undefined => {
@@ -477,7 +478,7 @@ export class NewsScheduler {
       const isProducer = job.config.jobRole === 'producer';
       const baseOptions = (job.config.options || {}) as Record<string, any>;
       const producerOptions = isProducer
-        ? { ...baseOptions, width: baseOptions.width || 296, height: baseOptions.height || 152 }
+        ? { ...baseOptions, width: baseOptions.width || EINK_DEVICE_WIDTH, height: baseOptions.height || EINK_DEVICE_HEIGHT }
         : baseOptions;
 
       const request: NewsProcessRequest = {
@@ -780,8 +781,8 @@ export class NewsScheduler {
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriWeatherWidget, { data: safeData }),
         {
-          width: (job.config.options as any)?.width || 296,
-          height: (job.config.options as any)?.height || 152,
+          width: (job.config.options as any)?.width || EINK_DEVICE_WIDTH,
+          height: (job.config.options as any)?.height || EINK_DEVICE_HEIGHT,
           backgroundColor: '#ffffff'
         }
       );

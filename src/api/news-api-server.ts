@@ -18,6 +18,7 @@ import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
 import inventoryApp from './inventory-api.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -974,7 +975,7 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
           link: raw.link,
         };
 
-        const renderConfig = { border: '0', width: 640, height: 384 };
+        const renderConfig = { border: '0', width: EINK_DEVICE_WIDTH, height: EINK_DEVICE_HEIGHT };
 
         console.log(`🔄 重新推送 #${id} → ${rendererName}: "${renderableData.title}"`);
         const renderResult = await rendererModule.render(renderableData as any, renderConfig);

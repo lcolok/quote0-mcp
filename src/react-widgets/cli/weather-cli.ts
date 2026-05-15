@@ -19,6 +19,7 @@ import { EnvLoader } from '../../image-sender/index.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
 const execAsync = promisify(exec);
 
@@ -230,7 +231,7 @@ async function main(): Promise<void> {
         console.log('🎉 天气组件发送完成！');
         console.log('✨ 使用了最佳显示设置：');
         console.log('  • React 组件渲染 (灵活配置)');
-        console.log('  • 水墨屏尺寸优化 (296x152)');
+        console.log(`  • 水墨屏尺寸优化 (${EINK_DEVICE_WIDTH}x${EINK_DEVICE_HEIGHT})`);
         console.log('  • ORDERED 抖动 (规整点阵)');
         console.log('  • 实时天气数据展示');
         

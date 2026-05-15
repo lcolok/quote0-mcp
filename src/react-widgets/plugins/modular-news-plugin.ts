@@ -15,6 +15,7 @@ import { dataSourceRegistry } from '../core/data-source-modules.js';
 import { processingRegistry } from '../core/processing-modules.js';
 import { renderingRegistry } from '../core/rendering-modules.js';
 import { EnvLoader } from '../../image-sender/adapters/environments/env-loader.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
 /**
  * 模块化新闻插件参数接口
@@ -95,8 +96,8 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
         renderingConfig: {
           border: params.border || '0',
           // 设备真实分辨率 296×152（v1.0.22 起 widget 统一按此渲染）
-          width: 296,
-          height: 152
+          width: EINK_DEVICE_WIDTH,
+          height: EINK_DEVICE_HEIGHT
         }
       });
       
@@ -247,8 +248,8 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
       },
       config: {
         border: '0',
-        width: 296,
-        height: 152
+        width: EINK_DEVICE_WIDTH,
+        height: EINK_DEVICE_HEIGHT
       }
     };
   }

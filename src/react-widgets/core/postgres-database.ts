@@ -99,6 +99,14 @@ export class PostgresDatabase {
   }
 
   /**
+   * 从 createTablesSQL 自动抽取 requiredTables，避免新增表时漏改白名单。
+   */
+  private extractRequiredTableNames(sql: string): string[] {
+    const matches = sql.match(/CREATE TABLE IF NOT EXISTS\s+(\w+)/gi) || [];
+    return matches.map(m => m.replace(/CREATE TABLE IF NOT EXISTS\s+/i, '').trim());
+  }
+
+  /**
    * 初始化数据库连接
    */
   async initialize(): Promise<void> {
@@ -109,22 +117,23 @@ export class PostgresDatabase {
       const result = await client.query('SELECT NOW() as current_time');
       console.log(`🐘 PostgreSQL数据库已连接: ${result.rows[0].current_time}`);
 
+      // 从 SQL 自动抽取表名，不再手写白名单
+      const requiredTables = this.extractRequiredTableNames(this.getCreateTablesSQL());
+      if (requiredTables.length === 0) {
+        throw new Error('无法从 createTablesSQL 抽取表名，schema 损坏');
+      }
+
       // 检查表是否存在
-      const tablesResult = await client.query(`
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name IN (
-          'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats',
-          'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache',
-          'llm_providers', 'llm_models', 'llm_active_setting', 'content_inventory'
-        )
-      `);
+      const tablesResult = await client.query(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = ANY($1)`,
+        [requiredTables]
+      );
 
       const existingTables = tablesResult.rows.map(row => row.table_name);
-      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache', 'llm_providers', 'llm_models', 'llm_active_setting', 'content_inventory'];
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
 
-      console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
+      console.log(`📋 数据库表状态: 发现${existingTables.length}/${requiredTables.length}个表`);
 
       // 如果有缺失的表，自动创建
       if (missingTables.length > 0) {
@@ -156,10 +165,40 @@ export class PostgresDatabase {
   }
 
   /**
-   * 自动创建数据库表结构
+   * 单条 seed 执行 helper：失败时完整暴露 pg 错误详情，不阻断其他 seed。
    */
-  private async createTables(client: any): Promise<void> {
-    const createTablesSQL = `
+  private async runSeedStatements(
+    client: PoolClient,
+    statements: Array<{ name: string; sql: string }>
+  ): Promise<{ ok: number; failed: number }> {
+    let ok = 0, failed = 0;
+    for (const stmt of statements) {
+      try {
+        await client.query(stmt.sql);
+        ok++;
+      } catch (error: any) {
+        failed++;
+        // pg 错误对象有 .message / .detail / .constraint / .table / .column
+        console.error(`❌ Seed 失败 [${stmt.name}]:`, {
+          message: error?.message,
+          detail: error?.detail,
+          hint: error?.hint,
+          constraint: error?.constraint,
+          table: error?.table,
+          column: error?.column,
+          code: error?.code,
+        });
+        // 单条失败不影响其他条；不要 throw
+      }
+    }
+    return { ok, failed };
+  }
+
+  /**
+   * 返回完整的建表 SQL（供 initialize 抽取表名 + createTables 执行）。
+   */
+  private getCreateTablesSQL(): string {
+    return `
       -- 创建新闻缓存表
       CREATE TABLE IF NOT EXISTS news_cache (
           id SERIAL PRIMARY KEY,
@@ -524,6 +563,13 @@ export class PostgresDatabase {
         ADD COLUMN IF NOT EXISTS job_role VARCHAR(20) NOT NULL DEFAULT 'mixed'
         CHECK (job_role IN ('producer', 'consumer', 'mixed'));
     `;
+  }
+
+  /**
+   * 自动创建数据库表结构
+   */
+  private async createTables(client: PoolClient): Promise<void> {
+    const createTablesSQL = this.getCreateTablesSQL();
 
     try {
       await client.query(createTablesSQL);
@@ -533,65 +579,48 @@ export class PostgresDatabase {
       throw error;
     }
 
-    // Seed LLM providers & models (幂等)
-    const seedSQL = `
-      INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-      SELECT 'siliconflow', 'SiliconFlow (via copilot)', 'https://copilot.logic.heiyu.space/providers/siliconflow/v1', 'dummy', 'openai-completions'
-      WHERE NOT EXISTS (SELECT 1 FROM llm_providers);
-
-      INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-      SELECT 'kimi-for-coding', 'Kimi For Coding (via copilot)', 'https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1', 'sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP', 'openai-completions'
-      WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='kimi-for-coding');
-
-      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-      SELECT p.id, 'deepseek-ai/DeepSeek-V4-Flash', 'DeepSeek V4-Flash', 64000, 8192, true
-      FROM llm_providers p WHERE p.slug='siliconflow'
-      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V4-Flash');
-
-      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-      SELECT p.id, 'deepseek-ai/DeepSeek-V3', 'DeepSeek V3', 64000, 8192, true
-      FROM llm_providers p WHERE p.slug='siliconflow'
-      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V3');
-
-      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-      SELECT p.id, 'Pro/zai-org/GLM-5.1', 'GLM 5.1', 32000, 8192, true
-      FROM llm_providers p WHERE p.slug='siliconflow'
-      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='Pro/zai-org/GLM-5.1');
-
-      INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens)
-      SELECT p.id, 'kimi-for-coding', 'Kimi For Coding', 128000, 8192
-      FROM llm_providers p WHERE p.slug='kimi-for-coding'
-      AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='kimi-for-coding');
-
-      INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
-      SELECT 1,
-        (SELECT id FROM llm_providers WHERE slug='siliconflow'),
-        (SELECT id FROM llm_models WHERE model_id='deepseek-ai/DeepSeek-V4-Flash')
-      WHERE NOT EXISTS (SELECT 1 FROM llm_active_setting);
-    `;
-    try {
-      await client.query(seedSQL);
-      console.log('🔧 LLM providers seed 完成');
-    } catch (error) {
-      console.error('❌ LLM providers seed 失败:', error);
-      throw error;
-    }
+    // Seed LLM providers & models (幂等，单条失败不阻断其他)
+    const llmSeedStatements = [
+      { name: 'siliconflow provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+        SELECT 'siliconflow', 'SiliconFlow (via copilot)', 'https://copilot.logic.heiyu.space/providers/siliconflow/v1', 'dummy', 'openai-completions'
+        WHERE NOT EXISTS (SELECT 1 FROM llm_providers)` },
+      { name: 'kimi-for-coding provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+        SELECT 'kimi-for-coding', 'Kimi For Coding (via copilot)', 'https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1', 'sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP', 'openai-completions'
+        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='kimi-for-coding')` },
+      { name: 'DeepSeek-V4-Flash model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+        SELECT p.id, 'deepseek-ai/DeepSeek-V4-Flash', 'DeepSeek V4-Flash', 64000, 8192, true
+        FROM llm_providers p WHERE p.slug='siliconflow'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V4-Flash')` },
+      { name: 'DeepSeek-V3 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+        SELECT p.id, 'deepseek-ai/DeepSeek-V3', 'DeepSeek V3', 64000, 8192, true
+        FROM llm_providers p WHERE p.slug='siliconflow'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V3')` },
+      { name: 'GLM 5.1 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+        SELECT p.id, 'Pro/zai-org/GLM-5.1', 'GLM 5.1', 32000, 8192, true
+        FROM llm_providers p WHERE p.slug='siliconflow'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='Pro/zai-org/GLM-5.1')` },
+      { name: 'kimi-for-coding model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens)
+        SELECT p.id, 'kimi-for-coding', 'Kimi For Coding', 128000, 8192
+        FROM llm_providers p WHERE p.slug='kimi-for-coding'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='kimi-for-coding')` },
+      { name: 'active setting', sql: `INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
+        SELECT 1,
+          (SELECT id FROM llm_providers WHERE slug='siliconflow'),
+          (SELECT id FROM llm_models WHERE model_id='deepseek-ai/DeepSeek-V4-Flash')
+        WHERE NOT EXISTS (SELECT 1 FROM llm_active_setting)` },
+    ];
+    const llmResult = await this.runSeedStatements(client, llmSeedStatements);
+    console.log(`🔧 LLM providers seed: ${llmResult.ok} ok, ${llmResult.failed} failed`);
 
     // Seed job roles for producer/consumer architecture
-    const jobRoleSeedSQL = `
-      UPDATE news_scheduler_jobs SET job_role='producer' WHERE id='multi-source-rotation' AND job_role='mixed';
-
-      INSERT INTO news_scheduler_jobs (id, name, enabled, data_source, processor, renderer, rss_source, category, interval_ms, job_role, index_strategy)
-      SELECT 'device-content-rotator', '设备内容轮播器', true, 'inventory', 'passthrough', 'local-eink', 'inventory', 'inventory', 60000, 'consumer', '{"type":"fair-rotation","poolSize":10,"startIndex":0,"cooldownHours":24,"maxPushCount":5,"rotateAfterEachPush":true,"skipEmptySource":true}'::jsonb
-      WHERE NOT EXISTS (SELECT 1 FROM news_scheduler_jobs WHERE id='device-content-rotator');
-    `;
-    try {
-      await client.query(jobRoleSeedSQL);
-      console.log('🔧 Job role seed 完成');
-    } catch (error) {
-      console.error('❌ Job role seed 失败:', error);
-      throw error;
-    }
+    const jobRoleSeedStatements = [
+      { name: 'set multi-source-rotation as producer', sql: `UPDATE news_scheduler_jobs SET job_role='producer' WHERE id='multi-source-rotation' AND job_role='mixed'` },
+      { name: 'insert device-content-rotator consumer', sql: `INSERT INTO news_scheduler_jobs (id, name, enabled, data_source, processor, renderer, rss_source, category, interval_ms, job_role, index_strategy)
+        SELECT 'device-content-rotator', '设备内容轮播器', true, 'inventory', 'passthrough', 'local-eink', 'inventory', 'inventory', 60000, 'consumer', '{"type":"fair-rotation","poolSize":10,"startIndex":0,"cooldownHours":24,"maxPushCount":5,"rotateAfterEachPush":true,"skipEmptySource":true}'::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM news_scheduler_jobs WHERE id='device-content-rotator')` },
+    ];
+    const jobResult = await this.runSeedStatements(client, jobRoleSeedStatements);
+    console.log(`🔧 Job role seed: ${jobResult.ok} ok, ${jobResult.failed} failed`);
   }
 
   /**

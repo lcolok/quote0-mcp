@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { WeatherData } from '../types.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
 interface CompactWeatherWidgetProps {
   data: WeatherData;
@@ -29,8 +30,8 @@ export const CompactWeatherWidget: React.FC<CompactWeatherWidgetProps> = ({ data
 
   // 容器样式 - 占满整个屏幕
   const containerStyle: React.CSSProperties = {
-    width: '296px',
-    height: '152px',
+    width: `${EINK_DEVICE_WIDTH}px`,
+    height: `${EINK_DEVICE_HEIGHT}px`,
     backgroundColor: '#FFFFFF',
     color: '#000000',
     fontFamily: 'Arial, sans-serif',

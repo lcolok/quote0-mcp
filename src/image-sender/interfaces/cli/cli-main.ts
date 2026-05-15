@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { ImageSender, EnvLoader, MonochromeOptimizer, DEVICE_SCREEN_SIZE, OUTPUT_DIRECTORIES } from '../../index.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../../../react-widgets/core/device-constants.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -45,7 +46,7 @@ async function main() {
     console.log('水墨屏优化功能:');
     console.log('  - 自动抖动算法优化显示效果');
     console.log('  - 预览模式生成原始和优化对比图片');
-    console.log('  - 图片自动调整为 296x152 像素');
+    console.log(`  - 图片自动调整为 ${EINK_DEVICE_WIDTH}x${EINK_DEVICE_HEIGHT} 像素`);
     process.exit(0);
   }
 

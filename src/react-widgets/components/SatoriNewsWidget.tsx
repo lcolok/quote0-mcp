@@ -14,6 +14,7 @@
 import React from 'react';
 import { WidgetProps } from '../core/widget-plugin.js';
 import { HighlightedWord } from '../services/llm-workflow-engine.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
 export interface NewsData {
   title: string;
@@ -82,8 +83,8 @@ export const SatoriNewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
   
   return (
     <div style={{
-      width: '296px',
-      height: '152px',
+      width: `${EINK_DEVICE_WIDTH}px`,
+      height: `${EINK_DEVICE_HEIGHT}px`,
       backgroundColor: '#FFFFFF',
       fontFamily: 'FusionPixelFont',
       fontSize: '12px',

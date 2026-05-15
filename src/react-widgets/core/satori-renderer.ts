@@ -19,6 +19,7 @@ import { ReactElement } from 'react';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { RenderOptions } from '../types.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from './device-constants.js';
 
 export interface SatoriRenderOptions extends RenderOptions {
   width?: number;
@@ -155,8 +156,8 @@ export class SatoriRenderer {
     await this.initialize();
 
     const {
-      width = 296,
-      height = 152,
+      width = EINK_DEVICE_WIDTH,
+      height = EINK_DEVICE_HEIGHT,
       format = 'png',
       backgroundColor = '#FFFFFF'
     } = options;

@@ -5,9 +5,8 @@
  */
 
 import sharp from 'sharp';
+import { EINK_DEVICE_WIDTH as EINK_WIDTH, EINK_DEVICE_HEIGHT as EINK_HEIGHT } from '../react-widgets/core/device-constants.js';
 
-const EINK_WIDTH = 296;
-const EINK_HEIGHT = 152;
 const EINK_BITMAP_SIZE = (EINK_WIDTH * EINK_HEIGHT) / 8; // 5624
 
 export interface EinkDevice {

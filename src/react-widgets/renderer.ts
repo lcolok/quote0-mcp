@@ -10,6 +10,7 @@ import { RenderOptions } from './types.js';
 import { FontLoader } from './font-loader.js';
 import { EnhancedFontLoader } from './core/enhanced-font-loader.js';
 import { LocalFontServer } from './local-font-server.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from './core/device-constants.js';
 
 export class WidgetRenderer {
   private browser: Browser | null = null;
@@ -59,8 +60,8 @@ export class WidgetRenderer {
       
       // 设置视口为水墨屏尺寸，确保像素完美
       await page.setViewport({
-        width: 296,
-        height: 152,
+        width: EINK_DEVICE_WIDTH,
+        height: EINK_DEVICE_HEIGHT,
         deviceScaleFactor: 1, // 1:1像素比，避免缩放
         hasTouch: false,
         isMobile: false
@@ -155,7 +156,7 @@ export class WidgetRenderer {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=296, height=152">
+    <meta name="viewport" content={`width=${EINK_DEVICE_WIDTH}, height=${EINK_DEVICE_HEIGHT}`}>
     <title>Widget Render</title>
     <style>
         * {
@@ -167,8 +168,8 @@ export class WidgetRenderer {
         ${smartFontCSS}
         
         body {
-            width: 296px;
-            height: 152px;
+            width: ${EINK_DEVICE_WIDTH}px;
+            height: ${EINK_DEVICE_HEIGHT}px;
             background-color: ${backgroundColor};
             font-family: ${FontLoader.getFusionPixelFontFamily()};
             overflow: hidden;
