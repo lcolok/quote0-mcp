@@ -27,8 +27,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
   const config: NewsProcessingConfig = {
     border: (body.options?.border || '0') as '0' | '1',
-    width: body.options?.width || 640,
-    height: body.options?.height || 384
+    // 设备真实分辨率 296×152（v1.0.22 起 satori widget 统一按此渲染）
+    width: body.options?.width || 296,
+    height: body.options?.height || 152
   };
 
   // 如果提供了mockData，注入到环境中

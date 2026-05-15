@@ -94,8 +94,9 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
         },
         renderingConfig: {
           border: params.border || '0',
-          width: 640,
-          height: 384
+          // 设备真实分辨率 296×152（v1.0.22 起 widget 统一按此渲染）
+          width: 296,
+          height: 152
         }
       });
       
@@ -244,10 +245,10 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
         rssSource,
         force 
       },
-      config: { 
+      config: {
         border: '0',
-        width: 640,
-        height: 384
+        width: 296,
+        height: 152
       }
     };
   }
