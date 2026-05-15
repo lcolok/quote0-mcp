@@ -582,7 +582,7 @@ export class PostgresDatabase {
       UPDATE news_scheduler_jobs SET job_role='producer' WHERE id='multi-source-rotation' AND job_role='mixed';
 
       INSERT INTO news_scheduler_jobs (id, name, enabled, data_source, processor, renderer, rss_source, category, interval_ms, job_role, index_strategy)
-      SELECT 'device-content-rotator', '设备内容轮播器', true, 'inventory', 'passthrough', 'local-eink', NULL, NULL, 60000, 'consumer', '{"type":"fair-rotation","poolSize":10,"startIndex":0,"cooldownHours":24,"maxPushCount":5,"rotateAfterEachPush":true,"skipEmptySource":true}'::jsonb
+      SELECT 'device-content-rotator', '设备内容轮播器', true, 'inventory', 'passthrough', 'local-eink', 'inventory', 'inventory', 60000, 'consumer', '{"type":"fair-rotation","poolSize":10,"startIndex":0,"cooldownHours":24,"maxPushCount":5,"rotateAfterEachPush":true,"skipEmptySource":true}'::jsonb
       WHERE NOT EXISTS (SELECT 1 FROM news_scheduler_jobs WHERE id='device-content-rotator');
     `;
     try {
