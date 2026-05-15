@@ -472,14 +472,22 @@ export class NewsScheduler {
 
       const candidate = selection.candidate;
 
+      // producer 用 news renderer（只渲染上传 MinIO 不推送设备）；
+      // 但 news renderer 默认 640×384，必须注入设备尺寸 296×152 保持一致
+      const isProducer = job.config.jobRole === 'producer';
+      const baseOptions = (job.config.options || {}) as Record<string, any>;
+      const producerOptions = isProducer
+        ? { ...baseOptions, width: baseOptions.width || 296, height: baseOptions.height || 152 }
+        : baseOptions;
+
       const request: NewsProcessRequest = {
         category: job.config.category,
         dataSource: job.config.dataSource,
         rssSource: currentRssSource,
         processor: job.config.processor,
-        renderer: job.config.jobRole === 'producer' ? 'news' : job.config.renderer,
+        renderer: isProducer ? 'news' : job.config.renderer,
         index: candidate.index,
-        options: job.config.options,
+        options: producerOptions,
         context: candidate.context
       };
 
