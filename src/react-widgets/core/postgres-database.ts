@@ -115,12 +115,13 @@ export class PostgresDatabase {
         FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name IN (
           'news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats',
-          'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache'
+          'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache',
+          'llm_providers', 'llm_models', 'llm_active_setting'
         )
       `);
 
       const existingTables = tablesResult.rows.map(row => row.table_name);
-      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache'];
+      const requiredTables = ['news_cache', 'processing_tasks', 'rss_snapshots', 'image_cache', 'cache_stats', 'news_scheduler_jobs', 'news_push_stats', 'news_push_log', 'quality_annotations', 'llm_call_cache', 'llm_providers', 'llm_models', 'llm_active_setting'];
       const missingTables = requiredTables.filter(table => !existingTables.includes(table));
 
       console.log(`📋 数据库表状态: 发现${existingTables.length}个表`);
