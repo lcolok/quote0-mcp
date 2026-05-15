@@ -589,13 +589,12 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
   private validateConfiguration(): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
     
-    // API密钥检查
+    // API密钥检查：只拒绝未配置/默认占位符；不再用长度判断真伪
+    // （某些代理端点透传 dummy key，长度可以 < 10）
     if (!this.config.apiKey) {
       errors.push('LLM_API_KEY 未配置');
     } else if (this.config.apiKey === 'your_api_key_here') {
       errors.push('LLM_API_KEY 仍为占位符，请设置真实API密钥');
-    } else if (this.config.apiKey.length < 10) {
-      errors.push('LLM_API_KEY 格式可能不正确 (长度过短)');
     }
     
     // 端点URL检查
@@ -889,7 +888,7 @@ export class ProcessingRegistry {
       
       // 验证配置并注册模块
       if (llmConfig.baseURL) {
-        console.log(`🔗 检测到自定义LLM端点: ${llmConfig.baseURL || llmConfig.baseUrl}`);
+        console.log(`🔗 检测到自定义LLM端点: ${llmConfig.baseURL}`);
         console.log(`🔑 API密钥状态: ${llmConfig.apiKey === 'your_api_key_here' ? '占位符' : '已配置'}`);
         console.log(`🤖 LLM模型: ${llmConfig.model}`);
 
