@@ -14,79 +14,15 @@
 
 import React from 'react';
 import { WeatherData } from '../types.js';
+import { getWeatherIconDataUri } from './weather-pixel-icons.js';
 
 interface SatoriWeatherWidgetProps {
   data: WeatherData;
   invertedBanner?: boolean;
 }
 
-// 天气图标映射 - 用 FusionPixelFont 支持的中文单字代替 emoji
-// 历史教训：satori 未加载 emoji 字体，SMP 范围（🌧🌦🌨🌫💨）全渲染为方框 □；
-// BMP 范围（☀☁⛅⛈❄）部分也不在 FusionPixelFont 子集里。
-// 用中文单字 100% 可显示，下方仍保留完整中文描述（"大雨"/"雷阵雨"）。
-const getWeatherIconText = (weather: string): string => {
-  const weatherLower = weather.toLowerCase();
-
-  // 雷阵雨 / 雷雨（雷优先级高于雨，避免被普通雨匹配）
-  if (weatherLower.includes('雷阵雨') || weatherLower.includes('雷雨') ||
-      weatherLower.includes('雷') || weatherLower.includes('thunder') || weatherLower.includes('storm')) {
-    return '雷';
-  }
-
-  // 雨夹雪 / 雨雪（混合天气优先于纯雨/纯雪）
-  if (weatherLower.includes('雨夹雪') || weatherLower.includes('雨雪') || weatherLower.includes('sleet')) {
-    return '雪';
-  }
-
-  // 冰雹
-  if (weatherLower.includes('冰雹') || weatherLower.includes('hail')) {
-    return '雹';
-  }
-
-  // 阵雨 / 淋雨 / 普通雨
-  if (weatherLower.includes('阵雨') || weatherLower.includes('shower') ||
-      weatherLower.includes('雨') || weatherLower.includes('rain') || weatherLower.includes('drizzle')) {
-    return '雨';
-  }
-
-  // 雪天
-  if (weatherLower.includes('雪') || weatherLower.includes('snow')) {
-    return '雪';
-  }
-
-  // 雾天
-  if (weatherLower.includes('雾') || weatherLower.includes('fog')) {
-    return '雾';
-  }
-
-  // 霾 / 烟雾
-  if (weatherLower.includes('霾') || weatherLower.includes('haze') || weatherLower.includes('smog')) {
-    return '霾';
-  }
-
-  // 大风
-  if (weatherLower.includes('大风') || weatherLower.includes('windy') || weatherLower.includes('gust')) {
-    return '风';
-  }
-
-  // 晴天
-  if (weatherLower.includes('晴') || weatherLower.includes('sunny') || weatherLower.includes('clear')) {
-    return '晴';
-  }
-
-  // 阴天
-  if (weatherLower.includes('阴') || weatherLower.includes('overcast')) {
-    return '阴';
-  }
-
-  // 多云
-  if (weatherLower.includes('多云') || weatherLower.includes('cloudy') || weatherLower.includes('partly')) {
-    return '云';
-  }
-
-  // 默认 - 多云
-  return '云';
-};
+// 天气图标：用 12×12 像素 SVG（data URI）通过 <img> 加载
+// 详见 weather-pixel-icons.ts 头部注释
 
 // 湿度图标（用中文字代替 emoji，FusionPixelFont 不支持 emoji）
 const getHumidityIcon = (): string => {
@@ -211,7 +147,7 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           </div>
         </div>
 
-        {/* 天气图标 + 文字：上下排列让"阴/多云"也能完整显示 */}
+        {/* 天气图标 + 文字：12×12 SVG 像素图标 6x 放大到 72px，下方完整描述 */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
@@ -219,15 +155,12 @@ const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, inverte
           justifyContent: 'center',
           gap: '2px'
         }}>
-          <div style={{
-            display: 'flex',
-            fontFamily: 'FusionPixelFont',
-            fontSize: '72px',
-            lineHeight: '72px',
-            textAlign: 'center'
-          }}>
-            {getWeatherIconText(data.weather)}
-          </div>
+          <img
+            src={getWeatherIconDataUri(data.weather)}
+            width={72}
+            height={72}
+            style={{ display: 'flex' }}
+          />
           <div style={{
             display: 'flex',
             fontFamily: 'FusionPixelFont',
