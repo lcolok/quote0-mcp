@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.0.36
+version: 1.0.37
 
 # 应用名称
 name: Quote0 新闻服务
@@ -155,7 +155,7 @@ services:
 
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.36
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.37
     environment:
       NODE_ENV: production
       PORT: "3001"

@@ -343,6 +343,29 @@ export class NewsScheduler {
     return job.config;
   }
 
+  async patchJob(id: string, body: Partial<NewsSchedulerJobConfig>): Promise<NormalizedSchedulerJob> {
+    const patch: any = { ...body };
+    delete patch.id;
+
+    // 支持 intervalMinutes / initialDelayMinutes 的便捷写法
+    if (body.intervalMinutes !== undefined && body.intervalMs === undefined) {
+      patch.intervalMs = body.intervalMinutes * 60_000;
+    }
+    if (body.initialDelayMinutes !== undefined && body.initialDelayMs === undefined) {
+      patch.initialDelayMs = body.initialDelayMinutes * 60_000;
+    }
+    delete patch.intervalMinutes;
+    delete patch.initialDelayMinutes;
+
+    await this.postgres.patchSchedulerJob(id, patch);
+    await this.reloadJobs();
+    const job = this.jobs.get(id);
+    if (!job) {
+      throw new Error(`任务 ${id} 未能加载`);
+    }
+    return job.config;
+  }
+
   async deleteJob(id: string): Promise<void> {
     await this.postgres.deleteSchedulerJob(id);
     await this.reloadJobs();

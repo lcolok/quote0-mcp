@@ -410,6 +410,25 @@ app.put('/api/news/scheduler/jobs/:id', async (c) => {
   }
 });
 
+app.patch('/api/news/scheduler/jobs/:id', async (c) => {
+  if (!schedulerEnabledByConfig) {
+    return c.json({ success: false, error: '调度器已在配置中禁用' }, 503);
+  }
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json<Partial<NewsSchedulerJobConfig>>();
+    const scheduler = await ensureSchedulerStarted();
+    if (!scheduler) {
+      return c.json({ success: false, error: '调度器未启用' }, 503);
+    }
+    const job = await scheduler.patchJob(id, body);
+    return c.json({ success: true, job });
+  } catch (error) {
+    console.error('❌ PATCH 调度任务失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 400);
+  }
+});
+
 app.delete('/api/news/scheduler/jobs/:id', async (c) => {
   if (!schedulerEnabledByConfig) {
     return c.json({ success: false, error: '调度器已在配置中禁用' }, 503);
@@ -1158,6 +1177,23 @@ app.get('/api/scheduler/jobs/:jobId', async (c) => {
       success: false,
       error: error instanceof Error ? error.message : '获取调度任务失败'
     }, 500);
+  }
+});
+
+// 局部更新调度任务（PATCH 语义，未传字段保留原值）
+app.patch('/api/scheduler/jobs/:jobId', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const body = await c.req.json<Partial<NewsSchedulerJobConfig>>();
+    const scheduler = await getSchedulerInstance();
+    if (!scheduler) {
+      return c.json({ success: false, error: '调度器未启动' }, 400);
+    }
+    const job = await scheduler.patchJob(jobId, body);
+    return c.json({ success: true, data: job });
+  } catch (error) {
+    console.error('PATCH 调度任务失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'PATCH 调度任务失败' }, 500);
   }
 });
 

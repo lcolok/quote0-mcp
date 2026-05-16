@@ -11,6 +11,7 @@ import {
   Settings,
   Brain,
   Package,
+  Settings2,
 } from 'lucide-react';
 
 function Layout() {
@@ -31,6 +32,7 @@ function Layout() {
     { to: '/export', icon: Download, label: '导出样本' },
     { to: '/training', icon: Zap, label: 'AX训练' },
     { to: '/scheduler', icon: Calendar, label: '调度器' },
+    { to: '/jobs', icon: Settings2, label: '任务管理' },
     { to: '/sources', icon: Settings, label: 'RSS源管理' },
     { to: '/llm-providers', icon: Brain, label: 'LLM 切换' },
     { to: '/inventory', icon: Package, label: '素材库' },

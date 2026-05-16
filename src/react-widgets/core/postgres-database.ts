@@ -1250,6 +1250,126 @@ export class PostgresDatabase {
     }
   }
 
+  /**
+   * 局部更新调度任务（HTTP PATCH 语义）。
+   * 未传字段（undefined / null）保留 DB 原值，符合 RFC 5789 PATCH 语义。
+   * 不同于 upsertSchedulerJob 的"全替换"行为。
+   *
+   * 关于 jsonb 字段（rssSources/options/indexStrategy/disabledSources）的语义：
+   * - undefined / null → 保留 DB 原值（COALESCE 接收 SQL NULL）
+   * - [] / {} 等显式值 → 替换为对应 JSON 值
+   * 注意：若要显式清空 rss_sources，请传 [] 而非 null；null 被视为保留原值。
+   *
+   * @param id 任务 id（必填）
+   * @param partial 待更新字段（任意子集）
+   * @returns 更新后的 job 完整 record（用于回传给客户端）
+   */
+  async patchSchedulerJob(
+    id: string,
+    partial: {
+      name?: string;
+      description?: string;
+      category?: string;
+      dataSource?: string;
+      rssSource?: string;
+      rssSources?: string[] | null;
+      processor?: string;
+      renderer?: string;
+      intervalMs?: number;
+      initialDelayMs?: number;
+      options?: Record<string, any>;
+      indexStrategy?: Record<string, any>;
+      enabled?: boolean;
+      jobRole?: 'producer' | 'consumer' | 'mixed';
+      disabledSources?: string[];
+    }
+  ): Promise<any> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `UPDATE news_scheduler_jobs SET
+          name             = COALESCE($2,  name),
+          description      = COALESCE($3,  description),
+          category         = COALESCE($4,  category),
+          data_source      = COALESCE($5,  data_source),
+          rss_source       = COALESCE($6,  rss_source),
+          rss_sources      = COALESCE($7,  rss_sources),
+          processor        = COALESCE($8,  processor),
+          renderer         = COALESCE($9,  renderer),
+          interval_ms      = COALESCE($10, interval_ms),
+          initial_delay_ms = COALESCE($11, initial_delay_ms),
+          options          = COALESCE($12, options),
+          index_strategy   = COALESCE($13, index_strategy),
+          enabled          = COALESCE($14, enabled),
+          job_role         = COALESCE($15, job_role),
+          disabled_sources = COALESCE($16, disabled_sources),
+          updated_at       = CURRENT_TIMESTAMP
+        WHERE id = $1
+        RETURNING *`,
+        [
+          id,
+          partial.name ?? null,
+          partial.description ?? null,
+          partial.category ?? null,
+          partial.dataSource ?? null,
+          partial.rssSource ?? null,
+          // undefined / null 均视为保留原值；显式清空请传 []
+          partial.rssSources === undefined || partial.rssSources === null
+            ? null
+            : partial.rssSources,
+          partial.processor ?? null,
+          partial.renderer ?? null,
+          partial.intervalMs ?? null,
+          partial.initialDelayMs ?? null,
+          partial.options === undefined || partial.options === null
+            ? null
+            : partial.options,
+          partial.indexStrategy === undefined || partial.indexStrategy === null
+            ? null
+            : partial.indexStrategy,
+          partial.enabled ?? null,
+          partial.jobRole ?? null,
+          partial.disabledSources === undefined || partial.disabledSources === null
+            ? null
+            : partial.disabledSources,
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        throw new Error(`patchSchedulerJob: 任务 id="${id}" 不存在`);
+      }
+
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        category: row.category,
+        dataSource: row.data_source,
+        rssSource: row.rss_source,
+        rssSources: row.rss_sources || undefined,
+        disabledSources: row.disabled_sources || [],
+        currentSourceIndex: row.current_source_index || 0,
+        processor: row.processor,
+        renderer: row.renderer,
+        intervalMs: row.interval_ms,
+        initialDelayMs: row.initial_delay_ms,
+        options: row.options || {},
+        indexStrategy: row.index_strategy || {},
+        enabled: row.enabled,
+        createdAt: row.created_at?.toISOString?.() || row.created_at,
+        updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
+        lastRunAt: row.last_run_at?.toISOString?.() || row.last_run_at,
+        nextRunAt: row.next_run_at?.toISOString?.() || row.next_run_at,
+        state: row.state || {},
+        metadata: row.metadata || {},
+        jobRole: row.job_role || 'mixed',
+      };
+    } finally {
+      client.release();
+    }
+  }
+
   async deleteSchedulerJob(id: string): Promise<void> {
     const client = await this.pool.connect();
     try {

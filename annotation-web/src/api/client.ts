@@ -220,6 +220,38 @@ class AnnotationApiClient {
   }
 
   /**
+   * 局部更新调度任务（PATCH 语义，未传字段保留原值）
+   */
+  async patchSchedulerJob(jobId: string, updates: Partial<any>): Promise<ApiResponse<any>> {
+    const response = await this.client.patch<ApiResponse<any>>(
+      `/api/scheduler/jobs/${jobId}`,
+      updates
+    );
+    return response.data;
+  }
+
+  /**
+   * 创建调度任务
+   */
+  async createSchedulerJob(body: any): Promise<ApiResponse<any>> {
+    const response = await this.client.post<ApiResponse<any>>(
+      '/api/news/scheduler/jobs',
+      body
+    );
+    return response.data;
+  }
+
+  /**
+   * 删除调度任务
+   */
+  async deleteSchedulerJob(jobId: string): Promise<ApiResponse<void>> {
+    const response = await this.client.delete<ApiResponse<void>>(
+      `/api/news/scheduler/jobs/${jobId}`
+    );
+    return response.data;
+  }
+
+  /**
    * 重新加载调度器配置
    */
   async reloadScheduler(): Promise<ApiResponse<void>> {
