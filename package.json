@@ -25,6 +25,7 @@
     "widget:weather-new": "tsx src/react-widgets/cli/weather-cli-new.ts",
     "widget:news": "tsx src/react-widgets/cli/news-cli.ts",
     "widget:modular-news": "bunx tsx src/react-widgets/cli/modular-news-cli.ts",
+    "widget:label": "tsx src/react-widgets/cli/label-print.ts",
     "api:dev": "bun --watch src/api/server.ts",
     "api:start": "bun src/api/server.ts",
     "api:deploy": "bun scripts/deploy-api.ts",

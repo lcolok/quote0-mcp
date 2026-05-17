@@ -28,7 +28,7 @@ export const LABEL_T40X20_TARGET: RenderTarget = {
   dpi: 203,
   colorMode: 'mono-1bit',
   physical: { widthMm: 40, heightMm: 20 },
-  defaultFontStack: ['source-han-sans', 'inter'],   // Phase B 才真正加载字体，本 phase 仅元数据
+  defaultFontStack: ['smiley-sans'],                // Phase B: 得意黑已下载并加载
 };
 
 export const BUILTIN_TARGETS: RenderTarget[] = [EINK_TARGET, LABEL_T40X20_TARGET];
