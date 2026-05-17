@@ -6,8 +6,8 @@ WORKDIR /app
 # 复制package.json
 COPY package.json ./
 
-# 安装依赖（用淘宝镜像，LC03 无法访问 registry.npmjs.org）
-RUN bun install --registry=https://registry.npmmirror.com/
+# 安装依赖（LC03 现已可直连 npmjs.org；npmmirror 偶发解析失败）
+RUN bun install --registry=https://registry.npmjs.org/
 
 # 复制源代码
 COPY . .
