@@ -19,6 +19,8 @@ import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
 import inventoryApp from './inventory-api.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
+import { labelPrintOrchestrator } from '../react-widgets/core/label-print-orchestrator.js';
+import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -42,6 +44,55 @@ function formatToChinaTime(input: Date | string): string {
   const second = pad(shanghaiDate.getSeconds());
 
   return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
+}
+
+/**
+ * 解析 targetId 到 RenderTarget。优先 BUILTIN_TARGETS（内存常量），
+ * 否则查 DB render_targets 表（允许后续运维通过 SQL 增删 target 无需改代码）。
+ * 找不到返回 null。
+ */
+async function resolveLabelTarget(targetId: string): Promise<RenderTarget | null> {
+  const builtin = BUILTIN_TARGETS.find(t => t.id === targetId);
+  if (builtin) return builtin;
+
+  try {
+    const db = await getPostgresDatabase();
+    const result = await db.getPool().query<{
+      id: string;
+      kind: string;
+      width_px: number;
+      height_px: number;
+      dpi: number;
+      color_mode: string;
+      default_font_stack: string[];
+      push_endpoint: string | null;
+      physical_w_mm: number | null;
+      physical_h_mm: number | null;
+    }>(
+      `SELECT id, kind, width_px, height_px, dpi, color_mode,
+              default_font_stack, push_endpoint, physical_w_mm, physical_h_mm
+       FROM render_targets WHERE id = $1`,
+      [targetId]
+    );
+    if (result.rows.length === 0) return null;
+    const r = result.rows[0];
+    return {
+      id: r.id,
+      kind: r.kind as 'eink' | 'thermal-label',
+      widthPx: r.width_px,
+      heightPx: r.height_px,
+      dpi: r.dpi,
+      colorMode: r.color_mode as 'mono-1bit' | '3-color',
+      defaultFontStack: r.default_font_stack,
+      pushEndpoint: r.push_endpoint ?? undefined,
+      physical: r.physical_w_mm != null && r.physical_h_mm != null
+        ? { widthMm: r.physical_w_mm, heightMm: r.physical_h_mm }
+        : undefined,
+    };
+  } catch (err) {
+    console.error('❌ resolveLabelTarget DB 查询失败:', err);
+    return null;
+  }
 }
 
 // RSS源信息
@@ -1284,6 +1335,85 @@ app.post('/api/scheduler/jobs/:jobId/toggle-source', async (c) => {
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '切换RSS源状态失败'
+    }, 500);
+  }
+});
+
+/**
+ * 热敏标签打印 — ADR-0002 Phase C
+ * 调用链: REST → labelPrintOrchestrator → thermal-label-rendering → niimbot-push → ESP32
+ */
+app.post('/api/labels/print', async (c) => {
+  try {
+    const body = await c.req.json<{
+      targetId?: string;
+      content: { title: string; subtitle?: string };
+      niimbotEndpoint?: string;
+      timeout?: number;
+    }>();
+
+    // 输入校验
+    if (!body.content || typeof body.content.title !== 'string' || body.content.title.trim() === '') {
+      return c.json({ success: false, error: 'content.title 必填，且不能为空字符串' }, 400);
+    }
+
+    // Target 解析（默认 label-T40x20-320）
+    const targetId = body.targetId ?? 'label-T40x20-320';
+    const target = await resolveLabelTarget(targetId);
+    if (!target) {
+      return c.json({ success: false, error: `未知 targetId: ${targetId}` }, 400);
+    }
+    if (target.kind !== 'thermal-label') {
+      return c.json({ success: false, error: `target ${targetId} kind=${target.kind} 不是热敏标签` }, 400);
+    }
+
+    // Endpoint 4 级 fallback
+    const endpoint =
+      body.niimbotEndpoint
+      ?? target.pushEndpoint
+      ?? process.env.NIIMBOT_ENDPOINT
+      ?? null;
+    if (!endpoint) {
+      return c.json({
+        success: false,
+        error: '缺少 niimbot endpoint：请提供 body.niimbotEndpoint、配置 render_targets.push_endpoint 列、或设置 NIIMBOT_ENDPOINT 环境变量',
+      }, 400);
+    }
+
+    console.log(`🏷️  REST 打印请求: targetId=${targetId} title="${body.content.title}" endpoint=${endpoint}`);
+
+    const res = await labelPrintOrchestrator.print({
+      data: { title: body.content.title, subtitle: body.content.subtitle },
+      target,
+      endpoint,
+      timeout: body.timeout,
+    });
+
+    if (res.success) {
+      return c.json({
+        success: true,
+        printId: res.printId,
+        bytes: res.bytes,
+        httpStatus: res.httpStatus,
+        targetId,
+        endpoint,
+      }, 200);
+    }
+
+    // 失败：render 阶段 → 500 (内部错误)，push 阶段 → 502 (下游不可达)
+    const statusCode = res.stage === 'render' ? 500 : 502;
+    return c.json({
+      success: false,
+      error: res.error,
+      stage: res.stage,
+      printId: res.printId,
+      httpStatus: res.httpStatus,
+    }, statusCode);
+  } catch (error) {
+    console.error('❌ POST /api/labels/print 失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误',
     }, 500);
   }
 });
