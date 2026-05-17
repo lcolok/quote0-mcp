@@ -10,6 +10,39 @@ const labelsApp = new Hono();
 const imageStorage = getImageStorage();
 const MINIO_BUCKET = process.env.MINIO_BUCKET || 'quote0-images';
 
+/**
+ * 把 DB row (snake_case) 转成 API 输出 (camelCase)，与 label-web 前端 type 对齐。
+ * print_history jsonb 数组内字段也要 transform：
+ *   DB 写入 key 是 printed_at / endpoint / http_status / bytes
+ *   前端 type 是  printedAt  / niimbotEndpoint / httpStatus / bytes
+ */
+function rowToLabel(row: any): any {
+  return {
+    id: row.id,
+    prompt: row.prompt,
+    svg: row.svg,
+    pngPath: row.png_path,
+    pngUrl: row.png_path ? `/api/minio-proxy/${row.png_path}` : null,
+    binBytes: row.bin_bytes,
+    targetId: row.target_id,
+    llmModel: row.llm_model,
+    llmLatencyMs: row.llm_latency_ms,
+    status: row.status,
+    printCount: row.print_count ?? 0,
+    printHistory: Array.isArray(row.print_history)
+      ? row.print_history.map((p: any) => ({
+          printedAt: p.printed_at ?? p.printedAt,
+          niimbotEndpoint: p.endpoint ?? p.niimbotEndpoint,
+          httpStatus: p.http_status ?? p.httpStatus,
+          bytes: p.bytes,
+        }))
+      : [],
+    tags: row.tags ?? [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 // POST /generate
 labelsApp.post('/generate', async (c) => {
   try {
@@ -112,7 +145,7 @@ labelsApp.get('/', async (c) => {
     args.push(limit);
     sql += ` ORDER BY created_at DESC LIMIT $${args.length}`;
     const result = await db.getPool().query(sql, args);
-    return c.json({ success: true, labels: result.rows });
+    return c.json({ success: true, labels: result.rows.map(rowToLabel) });
   } catch (error) {
     console.error('❌ GET /api/labels 失败:', error);
     return c.json(
@@ -137,7 +170,7 @@ labelsApp.get('/:id', async (c) => {
     if (result.rows.length === 0) {
       return c.json({ success: false, error: '标签不存在' }, 404);
     }
-    return c.json({ success: true, label: result.rows[0] });
+    return c.json({ success: true, label: rowToLabel(result.rows[0]) });
   } catch (error) {
     console.error('❌ GET /api/labels/:id 失败:', error);
     return c.json(
