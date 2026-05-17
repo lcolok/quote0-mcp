@@ -14,7 +14,7 @@
 import React from 'react';
 import { WidgetProps } from '../core/widget-plugin.js';
 import { HighlightedWord } from '../services/llm-workflow-engine.js';
-import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
+import { EINK_TARGET, RenderTarget } from '../core/render-targets.js';
 
 export interface NewsData {
   title: string;
@@ -27,7 +27,11 @@ export interface NewsData {
   highlights?: HighlightedWord[];
 }
 
-export const SatoriNewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
+interface SatoriNewsWidgetProps extends WidgetProps<NewsData> {
+  target?: RenderTarget;
+}
+
+export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target = EINK_TARGET }) => {
   const { title, message, source, highlights } = data;
   
   // 渲染带高亮的文本
@@ -83,8 +87,8 @@ export const SatoriNewsWidget: React.FC<WidgetProps<NewsData>> = ({ data }) => {
   
   return (
     <div style={{
-      width: `${EINK_DEVICE_WIDTH}px`,
-      height: `${EINK_DEVICE_HEIGHT}px`,
+      width: `${target.widthPx}px`,
+      height: `${target.heightPx}px`,
       backgroundColor: '#FFFFFF',
       fontFamily: 'FusionPixelFont',
       fontSize: '12px',

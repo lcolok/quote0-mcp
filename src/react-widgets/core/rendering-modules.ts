@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT, EINK_DEVICE_SIZE_LABEL } from './device-constants.js';
+import { EINK_TARGET } from './render-targets.js';
 import { 
   RenderingModule, 
   ProcessedDataItem, 
@@ -169,8 +169,8 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
           border: borderColor 
         }),
         {
-          width: config.width || EINK_DEVICE_WIDTH,
-          height: config.height || EINK_DEVICE_HEIGHT,
+          width: config.width || EINK_TARGET.widthPx,
+          height: config.height || EINK_TARGET.heightPx,
           backgroundColor: config.backgroundColor || '#ffffff'
         }
       );
@@ -785,7 +785,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
       const metadata = {
         widgetType: 'news',
         cacheKey: `modular_${data.id}_${timestamp}`,
-        renderConfig: { border: config.border, width: config.width || EINK_DEVICE_WIDTH, height: config.height || EINK_DEVICE_HEIGHT }
+        renderConfig: { border: config.border, width: config.width || EINK_TARGET.widthPx, height: config.height || EINK_TARGET.heightPx }
       };
       const uploadResult = await imageStorage.uploadImage(localImagePath, metadata);
       const imageUrl = uploadResult.url;
@@ -859,7 +859,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
         renderingCapacity: devices.length > 0 ? 10 : 0,
         fontStatus: 'loaded',
         additionalInfo: {
-          targetResolution: EINK_DEVICE_SIZE_LABEL,
+          targetResolution: `${EINK_TARGET.widthPx}x${EINK_TARGET.heightPx}`,
           bitmapFormat: '1-bit MSB-first',
           deviceCount: devices.length,
           devices: devices.map(d => ({ id: d.id, name: d.name }))

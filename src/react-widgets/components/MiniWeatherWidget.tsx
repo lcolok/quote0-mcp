@@ -5,17 +5,18 @@
 
 import React from 'react';
 import { WeatherData } from '../types.js';
-import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
+import { EINK_TARGET, RenderTarget } from '../core/render-targets.js';
 
 interface MiniWeatherWidgetProps {
   data: WeatherData;
+  target?: RenderTarget;
 }
 
-export const MiniWeatherWidget: React.FC<MiniWeatherWidgetProps> = ({ data }) => {
+export const MiniWeatherWidget: React.FC<MiniWeatherWidgetProps> = ({ data, target = EINK_TARGET }) => {
   
   const containerStyle: React.CSSProperties = {
-    width: `${EINK_DEVICE_WIDTH}px`,
-    height: `${EINK_DEVICE_HEIGHT}px`,
+    width: `${target.widthPx}px`,
+    height: `${target.heightPx}px`,
     backgroundColor: '#FFFFFF',
     color: '#000000',
     fontFamily: 'Arial, sans-serif',

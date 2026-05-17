@@ -15,10 +15,12 @@
 import React from 'react';
 import { WeatherData } from '../types.js';
 import { getWeatherIconDataUri } from './weather-pixel-icons.js';
+import { EINK_TARGET, RenderTarget } from '../core/render-targets.js';
 
 interface SatoriWeatherWidgetProps {
   data: WeatherData;
   invertedBanner?: boolean;
+  target?: RenderTarget;
 }
 
 // 天气图标：用 12×12 像素 SVG（data URI）通过 <img> 加载
@@ -29,7 +31,7 @@ const getHumidityIcon = (): string => {
   return '湿';
 };
 
-const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, invertedBanner = true }) => {
+const SatoriWeatherWidget: React.FC<SatoriWeatherWidgetProps> = ({ data, invertedBanner = true, target = EINK_TARGET }) => {
   // 构建城市显示文本：简化版本，依赖动态获取的准确数据
   const getCityDisplayText = () => {
     // 如果有省份和城市信息，进行基本格式化

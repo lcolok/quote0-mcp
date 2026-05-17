@@ -8,13 +8,14 @@ import {
 } from 'react-icons/wi';
 import { FaTint } from 'react-icons/fa';
 import { BsDroplet } from 'react-icons/bs';
-import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
+import { EINK_TARGET, RenderTarget } from '../core/render-targets.js';
 
 interface EnhancedMiniWeatherWidgetProps {
   data: WeatherData;
+  target?: RenderTarget;
 }
 
-const EnhancedMiniWeatherWidget: React.FC<EnhancedMiniWeatherWidgetProps> = ({ data }) => {
+const EnhancedMiniWeatherWidget: React.FC<EnhancedMiniWeatherWidgetProps> = ({ data, target = EINK_TARGET }) => {
   // 根据天气状况选择图标
   const getWeatherIcon = (weather: string) => {
     const iconProps = { size: 56, color: '#000' };
@@ -44,8 +45,8 @@ const EnhancedMiniWeatherWidget: React.FC<EnhancedMiniWeatherWidgetProps> = ({ d
   };
 
   const containerStyle: React.CSSProperties = {
-    width: `${EINK_DEVICE_WIDTH}px`,
-    height: `${EINK_DEVICE_HEIGHT}px`,
+    width: `${target.widthPx}px`,
+    height: `${target.heightPx}px`,
     backgroundColor: 'white',
     color: 'black',
     padding: '4px',

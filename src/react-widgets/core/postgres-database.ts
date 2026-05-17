@@ -562,6 +562,27 @@ export class PostgresDatabase {
       ALTER TABLE news_scheduler_jobs
         ADD COLUMN IF NOT EXISTS job_role VARCHAR(20) NOT NULL DEFAULT 'mixed'
         CHECK (job_role IN ('producer', 'consumer', 'mixed'));
+
+      -- 渲染目标配置表（Phase A：多目标渲染抽象）
+      CREATE TABLE IF NOT EXISTS render_targets (
+        id              text PRIMARY KEY,
+        kind            text NOT NULL CHECK (kind IN ('eink','thermal-label')),
+        width_px        int  NOT NULL,
+        height_px       int  NOT NULL,
+        dpi             int  NOT NULL,
+        color_mode      text NOT NULL,
+        default_font_stack jsonb NOT NULL,
+        push_endpoint   text,
+        physical_w_mm   int,
+        physical_h_mm   int,
+        created_at      timestamptz NOT NULL DEFAULT now()
+      );
+
+      INSERT INTO render_targets (id, kind, width_px, height_px, dpi, color_mode, default_font_stack, physical_w_mm, physical_h_mm)
+      VALUES
+        ('eink-296x152', 'eink', 296, 152, 250, 'mono-1bit', '["fusion-pixel-12"]'::jsonb, NULL, NULL),
+        ('label-T40x20-320', 'thermal-label', 320, 160, 203, 'mono-1bit', '["source-han-sans","inter"]'::jsonb, 40, 20)
+      ON CONFLICT (id) DO NOTHING;
     `;
   }
 

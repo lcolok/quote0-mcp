@@ -5,13 +5,14 @@
 
 import React from 'react';
 import { WeatherData } from '../types.js';
-import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
+import { EINK_TARGET, RenderTarget } from '../core/render-targets.js';
 
 interface CompactWeatherWidgetProps {
   data: WeatherData;
+  target?: RenderTarget;
 }
 
-export const CompactWeatherWidget: React.FC<CompactWeatherWidgetProps> = ({ data }) => {
+export const CompactWeatherWidget: React.FC<CompactWeatherWidgetProps> = ({ data, target = EINK_TARGET }) => {
   // 获取简化的天气图标
   const getWeatherIcon = (weather: string): string => {
     const iconMap: Record<string, string> = {
@@ -30,8 +31,8 @@ export const CompactWeatherWidget: React.FC<CompactWeatherWidgetProps> = ({ data
 
   // 容器样式 - 占满整个屏幕
   const containerStyle: React.CSSProperties = {
-    width: `${EINK_DEVICE_WIDTH}px`,
-    height: `${EINK_DEVICE_HEIGHT}px`,
+    width: `${target.widthPx}px`,
+    height: `${target.heightPx}px`,
     backgroundColor: '#FFFFFF',
     color: '#000000',
     fontFamily: 'Arial, sans-serif',
