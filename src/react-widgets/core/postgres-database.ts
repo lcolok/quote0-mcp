@@ -583,6 +583,28 @@ export class PostgresDatabase {
         ('eink-296x152', 'eink', 296, 152, 250, 'mono-1bit', '["fusion-pixel-12"]'::jsonb, NULL, NULL),
         ('label-T40x20-320', 'thermal-label', 320, 160, 203, 'mono-1bit', '["source-han-sans","inter"]'::jsonb, 40, 20)
       ON CONFLICT (id) DO NOTHING;
+
+      -- 标签管理（Phase D：LLM-Gen 标签管理系统）
+      CREATE TABLE IF NOT EXISTS labels (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        prompt          text NOT NULL,
+        svg             text NOT NULL,
+        png_path        text,                     -- MinIO object key (labels/<id>.png)
+        bin_bytes       int,                      -- 1-bit packed bitmap size
+        target_id       text NOT NULL DEFAULT 'label-T40x20-320',
+        llm_model       text,
+        llm_latency_ms  int,
+        status          text NOT NULL DEFAULT 'draft'
+                        CHECK (status IN ('draft','approved','printed','archived')),
+        print_count     int NOT NULL DEFAULT 0,
+        print_history   jsonb NOT NULL DEFAULT '[]'::jsonb,
+        tags            text[] NOT NULL DEFAULT ARRAY[]::text[],
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        updated_at      timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS labels_status_idx ON labels(status);
+      CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
+      CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
     `;
   }
 

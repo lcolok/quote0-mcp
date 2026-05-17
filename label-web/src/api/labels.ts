@@ -1,0 +1,37 @@
+import axios from 'axios';
+import type { Label, GenerateRequest, PrintRequest } from '@/types/label';
+
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
+
+const client = axios.create({ baseURL: API_BASE, timeout: 30000 });
+
+export const labelsApi = {
+  generate: (req: GenerateRequest) =>
+    client
+      .post<{ success: boolean; id: string; svg: string; pngUrl: string }>('/labels/generate', req)
+      .then((r) => r.data),
+
+  list: (params?: { status?: string; tag?: string; limit?: number }) =>
+    client
+      .get<{ success: boolean; labels: Label[] }>('/labels', { params })
+      .then((r) => r.data.labels),
+
+  get: (id: string) =>
+    client.get<{ success: boolean; label: Label }>(`/labels/${id}`).then((r) => r.data.label),
+
+  print: (id: string, req?: PrintRequest) =>
+    client
+      .post<{ success: boolean; printId: string; bytes: number; httpStatus: number }>(
+        `/labels/${id}/print`,
+        req ?? {}
+      )
+      .then((r) => r.data),
+
+  regenerate: (id: string) =>
+    client
+      .post<{ success: boolean; svg: string; pngUrl: string }>(`/labels/${id}/regenerate`)
+      .then((r) => r.data),
+
+  delete: (id: string) =>
+    client.delete<{ success: boolean }>(`/labels/${id}`).then((r) => r.data),
+};

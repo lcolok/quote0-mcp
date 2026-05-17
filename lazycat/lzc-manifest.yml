@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.0.38
+version: 1.0.39
 
 # 应用名称
 name: Quote0 新闻服务
@@ -40,11 +40,18 @@ application:
       title: 新闻标注系统
       path: /
       prefix_domain: annotation
-  
+    - id: labels
+      title: 热敏标签设计
+      path: /
+      prefix_domain: labels
+
   upstreams:
     - location: /
       domain_prefix: annotation
       backend: http://annotation-web.me.friday.quote0-mcp.lzcapp:80
+    - location: /
+      domain_prefix: labels
+      backend: http://label-web.me.friday.quote0-mcp.lzcapp:80
 
   depends_on:
     - postgres
@@ -153,9 +160,22 @@ services:
       start_period: 10s
     mem_limit: 128m
 
+  # ADR-0002 Phase D：LLM-Gen 标签管理系统 Web 应用（React SPA + Nginx）
+  label-web:
+    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.0.39
+    depends_on:
+      - news-api
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 64m
+
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.38
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.39
     environment:
       NODE_ENV: production
       PORT: "3001"
