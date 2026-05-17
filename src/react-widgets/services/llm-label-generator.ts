@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import type { ActiveLLMConfig } from '../core/llm-config.js';
 import type { RenderTarget } from '../core/render-targets.js';
+import { packFromPng } from '../core/bitmap-packer.js';
 
 export interface LLMLabelGenResult {
   svg: string;
@@ -124,26 +125,7 @@ export class LLMLabelGenerator {
       })
       .png()
       .toBuffer();
-
-    const { data: raw } = await sharp(pngBuffer)
-      .grayscale()
-      .threshold(128)
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    const bytesPerRow = target.widthPx / 8;
-    const bitmapBuffer = Buffer.alloc(bytesPerRow * target.heightPx);
-
-    for (let y = 0; y < target.heightPx; y++) {
-      for (let x = 0; x < target.widthPx; x++) {
-        if (raw[y * target.widthPx + x] === 0) {
-          const byteIdx = y * bytesPerRow + Math.floor(x / 8);
-          const bitIdx = 7 - (x % 8);
-          bitmapBuffer[byteIdx] |= 1 << bitIdx;
-        }
-      }
-    }
-
+    const bitmapBuffer = await packFromPng(pngBuffer, target);
     return { pngBuffer, bitmapBuffer };
   }
 }

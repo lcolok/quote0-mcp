@@ -605,6 +605,11 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS labels_status_idx ON labels(status);
       CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
       CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
+
+      -- Phase F (ADR-0004): BizyAir 图像驱动标签
+      ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'svg';
+      ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_model text;
+      ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_image_url text;
     `;
   }
 

@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { ImageIcon } from 'lucide-react';
 import type { Label } from '@/types/label';
 import StatusBadge from './StatusBadge';
 
@@ -26,7 +27,15 @@ export default function LabelCard({ label }: LabelCardProps) {
       </div>
       <p className="text-sm font-medium text-gray-800 truncate">{shortPrompt}</p>
       <div className="mt-1 flex items-center justify-between">
-        <StatusBadge status={label.status} />
+        <div className="flex items-center gap-2">
+          <StatusBadge status={label.status} />
+          {label.sourceType === 'image' && (
+            <span className="inline-flex items-center gap-0.5 text-xs text-purple-600" title={`AI: ${label.sourceModel ?? ''}`}>
+              <ImageIcon className="h-3 w-3" />
+              {label.sourceModel ?? 'AI'}
+            </span>
+          )}
+        </div>
         <span className="text-xs text-gray-400">{dateStr}</span>
       </div>
     </Link>

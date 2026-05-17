@@ -1,12 +1,13 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeft, Printer, RefreshCw, Archive } from 'lucide-react';
+import { ArrowLeft, Printer, RefreshCw, Archive, ImageIcon } from 'lucide-react';
 import { labelsApi } from '@/api/labels';
 import StatusBadge from '@/components/StatusBadge';
 
 export default function DetailPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
 
   const { data: label, isLoading, refetch } = useQuery({
@@ -38,6 +39,17 @@ export default function DetailPage() {
     },
   });
 
+  const reditherMutation = useMutation({
+    mutationFn: () => labelsApi.redither(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['label', id] });
+      toast.success('重新 dither 完成');
+    },
+    onError: () => {
+      toast.error('重新 dither 失败');
+    },
+  });
+
   const archiveMutation = useMutation({
     mutationFn: labelsApi.delete,
     onSuccess: () => {
@@ -59,6 +71,11 @@ export default function DetailPage() {
   const handleRegenerate = () => {
     if (!label) return;
     regenerateMutation.mutate(label.id);
+  };
+
+  const handleRedither = () => {
+    if (!label) return;
+    reditherMutation.mutate();
   };
 
   const handleArchive = () => {
@@ -104,18 +121,43 @@ export default function DetailPage() {
         </div>
 
         <div className="flex flex-col md:flex-row gap-6">
-          <div className="shrink-0">
+          <div className="shrink-0 space-y-3">
             <img
               src={label.pngUrl}
               alt={label.prompt}
               className="w-full max-w-[480px] aspect-[2/1] rounded-lg border border-gray-300 object-contain bg-white"
             />
+            {label.sourceType === 'image' && label.sourceImageUrl && (
+              <div>
+                <span className="text-xs text-gray-500 mb-1 block">AI 原图</span>
+                <img
+                  src={label.sourceImageUrl}
+                  alt="AI 原图"
+                  className="w-full max-w-[480px] rounded-lg border border-gray-200 object-contain bg-gray-50"
+                />
+              </div>
+            )}
           </div>
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">
               <span className="text-gray-500">targetId:</span>
               <span className="font-mono text-gray-800">{label.targetId}</span>
             </div>
+            {label.sourceType && (
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500">来源:</span>
+                <span className="inline-flex items-center gap-1 text-gray-800">
+                  {label.sourceType === 'image' && <ImageIcon className="h-3 w-3 text-purple-600" />}
+                  {label.sourceType === 'image' ? '图像（AI）' : label.sourceType}
+                </span>
+              </div>
+            )}
+            {label.sourceModel && (
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500">模型:</span>
+                <span className="text-gray-800">{label.sourceModel}</span>
+              </div>
+            )}
             {label.llmModel && (
               <div className="flex items-center gap-2">
                 <span className="text-gray-500">LLM:</span>
@@ -176,6 +218,17 @@ export default function DetailPage() {
             <RefreshCw className={`h-4 w-4 ${regenerateMutation.isPending ? 'animate-spin' : ''}`} />
             {regenerateMutation.isPending ? '重新生成中...' : '重新生成'}
           </button>
+          {label.sourceType === 'image' && (
+            <button
+              onClick={handleRedither}
+              disabled={reditherMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-all-smooth"
+              title="不重新调 AI，仅重新 dither"
+            >
+              <RefreshCw className={`h-4 w-4 ${reditherMutation.isPending ? 'animate-spin' : ''}`} />
+              {reditherMutation.isPending ? '重新 dither 中...' : '重新 dither'}
+            </button>
+          )}
           <button
             onClick={handleArchive}
             disabled={archiveMutation.isPending}

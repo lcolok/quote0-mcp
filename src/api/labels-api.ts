@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { llmLabelGenerator } from '../react-widgets/services/llm-label-generator.js';
+import { imageLabelGenerator } from '../react-widgets/services/image-label-generator.js';
+import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
@@ -40,6 +42,9 @@ function rowToLabel(row: any): any {
     tags: row.tags ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    sourceType: row.source_type ?? 'svg',
+    sourceModel: row.source_model ?? null,
+    sourceImageUrl: row.source_image_url ?? null,
   };
 }
 
@@ -123,6 +128,139 @@ labelsApp.post('/generate', async (c) => {
   }
 });
 
+// POST /generate-image
+labelsApp.post('/generate-image', async (c) => {
+  try {
+    const body = await c.req.json<{
+      prompt: string;
+      model: 'sd5' | 'sd5-3k' | 'nb2' | 'nbp' | 'gpt2';
+      targetId?: string;
+      tags?: string[];
+      modelOptions?: Record<string, any>;
+    }>();
+    if (!body.prompt || body.prompt.trim() === '') {
+      return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
+    }
+    if (!['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2'].includes(body.model)) {
+      return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
+    }
+
+    const target =
+      BUILTIN_TARGETS.find((t) => t.id === (body.targetId ?? 'label-T40x20-320')) ??
+      LABEL_T40X20_TARGET;
+
+    const db = getPostgresDatabase();
+
+    // 调 BizyAir 出图（可能失败）
+    let result;
+    try {
+      result = await imageLabelGenerator.generate(body.prompt, body.model, target, body.modelOptions);
+    } catch (e) {
+      return c.json({
+        success: false,
+        stage: 'bizyair',
+        error: e instanceof Error ? e.message : String(e),
+      }, 502);
+    }
+
+    // 插 DB
+    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
+      `INSERT INTO labels (prompt, svg, target_id, llm_model, llm_latency_ms, bin_bytes, tags,
+                            source_type, source_model, source_image_url)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, 'image', $7, $8)
+       RETURNING id, created_at`,
+      [
+        body.prompt,
+        target.id,
+        body.model,                     // llm_model 列复用存模型名
+        result.bizyairLatencyMs,        // llm_latency_ms 列复用存 BizyAir 耗时
+        result.bitmapBuffer.length,
+        body.tags ?? [],
+        body.model,
+        result.sourceImageUrl,
+      ]
+    );
+    const labelId = insertRes.rows[0].id;
+
+    // 上传 dither 后 PNG 到 MinIO
+    const pngPath = `labels/${labelId}.png`;
+    await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=86400',
+    });
+    await db.getPool().query(`UPDATE labels SET png_path = $1 WHERE id = $2`, [pngPath, labelId]);
+
+    return c.json({
+      success: true,
+      id: labelId,
+      sourceType: 'image',
+      sourceModel: body.model,
+      sourceImageUrl: result.sourceImageUrl,
+      pngPath,
+      pngUrl: `/api/minio-proxy/${pngPath}`,
+      targetId: target.id,
+      prompt: body.prompt,
+      bizyairLatencyMs: result.bizyairLatencyMs,
+      status: 'draft',
+    }, 201);
+  } catch (error) {
+    console.error('❌ POST /api/labels/generate-image 失败:', error);
+    return c.json({
+      success: false,
+      stage: 'unknown',
+      error: error instanceof Error ? error.message : '未知错误',
+    }, 500);
+  }
+});
+
+// POST /:id/redither
+labelsApp.post('/:id/redither', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const db = getPostgresDatabase();
+    const labelRes = await db.getPool().query(
+      `SELECT target_id, source_type, source_image_url FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
+      [id]
+    );
+    if (labelRes.rows.length === 0) {
+      return c.json({ success: false, error: '标签不存在或已归档' }, 404);
+    }
+    const row = labelRes.rows[0];
+    if (row.source_type !== 'image') {
+      return c.json({ success: false, error: 'redither 仅支持 source_type=image 的标签' }, 400);
+    }
+    if (!row.source_image_url) {
+      return c.json({ success: false, error: '该标签缺 source_image_url' }, 400);
+    }
+
+    const target = BUILTIN_TARGETS.find((t) => t.id === row.target_id) ?? LABEL_T40X20_TARGET;
+    const { pngBuffer, bitmapBuffer } = await imageLabelGenerator.redither(row.source_image_url, target);
+
+    const pngPath = `labels/${id}.png`;
+    await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, pngBuffer, pngBuffer.length, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=86400',
+    });
+    await db.getPool().query(
+      `UPDATE labels SET png_path = $1, bin_bytes = $2, updated_at = now() WHERE id = $3`,
+      [pngPath, bitmapBuffer.length, id]
+    );
+
+    return c.json({
+      success: true,
+      id,
+      pngPath,
+      pngUrl: `/api/minio-proxy/${pngPath}`,
+    });
+  } catch (error) {
+    console.error('❌ POST /api/labels/:id/redither 失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误',
+    }, 500);
+  }
+});
+
 // GET / (列表，支持 ?status= 和 ?tag= 筛选)
 labelsApp.get('/', async (c) => {
   try {
@@ -131,7 +269,7 @@ labelsApp.get('/', async (c) => {
     const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500));
 
     const db = getPostgresDatabase();
-    let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, created_at, updated_at
+    let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, created_at, updated_at
                FROM labels WHERE 1=1`;
     const args: any[] = [];
     if (status) {
@@ -211,8 +349,20 @@ labelsApp.post('/:id/print', async (c) => {
 
     const target = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
 
-    // SVG → 1-bit bitmap
-    const { bitmapBuffer } = await llmLabelGenerator.svgToBitmap(label.svg, target);
+    // 按 source_type 分发 bitmap 获取
+    let bitmapBuffer: Buffer;
+    if (label.source_type === 'image') {
+      // 从 MinIO 下载 dither 后的 1-bit PNG，重新 pack
+      const pngObj = await imageStorage.getClient().getObject(MINIO_BUCKET, label.png_path);
+      const chunks: Buffer[] = [];
+      for await (const chunk of pngObj) chunks.push(chunk as Buffer);
+      const pngBuffer = Buffer.concat(chunks);
+      bitmapBuffer = await packFromPng(pngBuffer, target);
+    } else {
+      // 默认 / svg：原 SVG → bitmap 路径
+      const result = await llmLabelGenerator.svgToBitmap(label.svg, target);
+      bitmapBuffer = result.bitmapBuffer;
+    }
 
     // push 到 niimbot
     const pushResult = await niimbotPush.push(bitmapBuffer, target, endpoint, {
@@ -265,24 +415,46 @@ labelsApp.post('/:id/print', async (c) => {
   }
 });
 
-// POST /:id/regenerate (用原 prompt 再调一次 LLM)
+// POST /:id/regenerate (用原 prompt 再调一次 LLM / BizyAir)
 labelsApp.post('/:id/regenerate', async (c) => {
   try {
     const id = c.req.param('id');
     const db = getPostgresDatabase();
 
     const labelRes = await db.getPool().query(
-      `SELECT prompt, target_id FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
+      `SELECT prompt, target_id, source_type, source_model FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
       [id]
     );
     if (labelRes.rows.length === 0) {
       return c.json({ success: false, error: '标签不存在或已归档' }, 404);
     }
-    const { prompt, target_id } = labelRes.rows[0];
+    const { prompt, target_id, source_type, source_model } = labelRes.rows[0];
 
     const target = BUILTIN_TARGETS.find((t) => t.id === target_id) ?? LABEL_T40X20_TARGET;
-    const llmCfg = await getActiveLLMConfig(db);
 
+    if (source_type === 'image') {
+      // BizyAir 路径
+      const result = await imageLabelGenerator.generate(prompt, source_model, target);
+      const pngPath = `labels/${id}.png`;
+      await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=86400',
+      });
+      await db.getPool().query(
+        `UPDATE labels
+         SET png_path = $2, source_image_url = $3, llm_latency_ms = $4, bin_bytes = $5, updated_at = now()
+         WHERE id = $1`,
+        [id, pngPath, result.sourceImageUrl, result.bizyairLatencyMs, result.bitmapBuffer.length]
+      );
+      return c.json({
+        success: true, id, sourceType: 'image', sourceModel: source_model,
+        sourceImageUrl: result.sourceImageUrl, pngPath, pngUrl: `/api/minio-proxy/${pngPath}`,
+        bizyairLatencyMs: result.bizyairLatencyMs,
+      });
+    }
+
+    // 默认 / svg：原逻辑
+    const llmCfg = await getActiveLLMConfig(db);
     const result = await llmLabelGenerator.generate(prompt, target, llmCfg);
 
     // 覆盖上传 PNG

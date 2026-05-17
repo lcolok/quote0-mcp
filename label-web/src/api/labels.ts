@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, PrintRequest } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, PrintRequest } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -9,6 +9,21 @@ export const labelsApi = {
   generate: (req: GenerateRequest) =>
     client
       .post<{ success: boolean; id: string; svg: string; pngUrl: string }>('/labels/generate', req)
+      .then((r) => r.data),
+
+  generateImage: (req: GenerateImageRequest) =>
+    client
+      .post<{
+        success: boolean;
+        id: string;
+        sourceType: string;
+        sourceModel: string;
+        sourceImageUrl: string;
+        pngPath: string;
+        pngUrl: string;
+        targetId: string;
+        bizyairLatencyMs: number;
+      }>('/labels/generate-image', req, { timeout: 130_000 })
       .then((r) => r.data),
 
   list: (params?: { status?: string; tag?: string; limit?: number }) =>
@@ -30,6 +45,13 @@ export const labelsApi = {
   regenerate: (id: string) =>
     client
       .post<{ success: boolean; svg: string; pngUrl: string }>(`/labels/${id}/regenerate`)
+      .then((r) => r.data),
+
+  redither: (id: string) =>
+    client
+      .post<{ success: boolean; id: string; pngPath: string; pngUrl: string }>(
+        `/labels/${id}/redither`
+      )
       .then((r) => r.data),
 
   delete: (id: string) =>
