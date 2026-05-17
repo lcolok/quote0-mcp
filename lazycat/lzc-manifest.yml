@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.0.37
+version: 1.0.38
 
 # 应用名称
 name: Quote0 新闻服务
@@ -155,7 +155,7 @@ services:
 
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.37
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.38
     environment:
       NODE_ENV: production
       PORT: "3001"
@@ -185,6 +185,8 @@ services:
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
       NEWS_SCHEDULER_EXTRA_RENDERERS: 'local-eink'
       AMAP_API_KEY: dae9a4112f54312a2cef32517cc1ecbe
+      # ADR-0002 Phase C: niimbot 热敏标签机 push endpoint（4 级 fallback 链的 env 兜底）
+      NIIMBOT_ENDPOINT: http://192.168.31.186/api/print/raw
     depends_on:
       - postgres
       - minio
