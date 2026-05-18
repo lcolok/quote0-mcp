@@ -57,29 +57,30 @@ ${fontList}
    - 诗词 / 文学 / 优雅 → "lxgw-wenkai"
    - 时尚 / 标识 / 个性 → "smiley-sans"
 7. 装饰 decoratorCode（可选，JS 函数代码字符串）：
-   - 字段值是 JS 代码字符串，必须包含 function generate(ctx) {...} 返回 string[]（SVG path d 数组）
-   - ctx API：
-     * ctx.width=320, ctx.height=160
-     * ctx.safeZone={x:24,y:24,w:272,h:112}（**文字区，必须避开**）
-     * ctx.corners=[{x:0,y:0},{x:320,y:0},{x:0,y:160},{x:320,y:160}]
-     * ctx.edges={top:{x1,y,x2},bottom,left,right}
-     * ctx.Math（仅这些）：sin/cos/tan/PI/sqrt/pow/abs/floor/ceil/round/min/max/random/atan2
-   - 严禁：全局 Math（用 ctx.Math）/ eval / Function / require / import / process / setTimeout / fetch / Buffer
+   - **必须是字符串！内含 JS 代码 包含 function generate(ctx) {...} return paths**
+   - **绝对不能输出 frameSvgPaths 数组字段 — 那是 v1.5.0 老格式已废弃**
+   - props 里只放 decoratorCode 字符串，不要放 frameSvgPaths
+   - 字符串需 JSON escape（双引号 \\"、反斜杠 \\\\、换行 \\n）
 
-**【创造性要求 — 必须】**
-- 你必须为**这个具体 prompt** 设计**全新原创**的装饰算法
-- 禁止使用通用的「snowflake/cloud/vine」模板套用
-- 思考 prompt 的语义独特性 → 设计专属几何/装饰元素
-- 加入 ctx.Math.random() 让每次执行结果有微小不同
-- 你可以画的元素（仅参考意图，不要照搬）：
-  * 角装饰（几何形 / 自然元素 / 文化符号 / 主题元素）
-  * 边花纹（节奏图案 / 重复元素 / 渐变密度）
-  * 边框（线条变奏 / 间隔节奏 / 粗细对比）
-  * 散落元素（避开 safeZone 的小装饰）
+ctx API（仅这些，函数内部用 ctx.xxx 访问，不能用全局 Math）：
+- ctx.width=320, ctx.height=160
+- ctx.safeZone={x:24,y:24,w:272,h:112}（文字区，装饰必须避开）
+- ctx.corners=[{x:0,y:0},{x:320,y:0},{x:0,y:160},{x:320,y:160}]
+- ctx.edges={top:{x1,y,x2},bottom,left,right}
+- ctx.Math 仅：sin/cos/tan/PI/sqrt/pow/abs/floor/ceil/round/min/max/random/atan2
 
-代码骨架（仅参考结构，禁止套用具体逻辑）：定义若干 helper 函数生成 path d 字符串；定义 function generate(ctx) 调用 helpers，返回 string[]。helper 名字 + 参数 + 算法你自己设计（针对当前 prompt 主题专门）。
+严禁：全局 Math / eval / Function / require / import / process / setTimeout / fetch / Buffer
 
-不适合输出 decoratorCode 的场景：用户描述含"极简/简洁/纯文字/不要装饰"等。
+【创造性要求 — 必须】
+- 为这个 prompt 设计原创算法，不要套用通用模板
+- 思考 prompt 的主题元素：番茄→果实/茎叶；圣诞→雪花/铃铛/松针；中秋→月圆/玉兔；婴儿→奶瓶/玩具；工业→齿轮/管道；...
+- 用 ctx.Math.random() 引入变化让每次结果不同
+- 可画：角装饰 / 边花纹 / 边框 / 散落小元素（避开 safeZone）
+
+最小骨架（仅展示结构，你必须替换内容设计专属算法）：
+"function makeStar(cx,cy,r,M){let d='';for(let i=0;i<5;i++){...}return d;} function generate(ctx){const M=ctx.Math;const paths=[];/* 你的算法 */ return paths;}"
+
+不适合输出 decoratorCode 的场景：用户描述含"极简/简洁/纯文字/不要装饰"等 → props 里不放 decoratorCode 字段。
 
 [输出示例]
 用户："请保持安静的提示，配安静图标"
@@ -128,7 +129,7 @@ export class TextLabelGenerator {
           { role: 'user', content: userContent },
         ],
         temperature: 0.9,
-        max_tokens: 2000,
+        max_tokens: 4000,
         presence_penalty: 0.4,
         frequency_penalty: 0.3,
         response_format: { type: 'json_object' },
