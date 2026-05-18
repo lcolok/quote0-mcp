@@ -70,7 +70,22 @@ export class TextLabelGenerator {
     llmConfig: ActiveLLMConfig,
     override?: TextLabelOverride
   ): Promise<TextLabelGenResult> {
-    // 1. LLM 调用
+    // 1. LLM 调用 —— override 时把用户偏好塞进 user message，让 LLM 按对应 widget 的
+    //    propsSchema 输出 props（否则 LLM 自由选 widget，override 替换 widgetId 后
+    //    props 就和新 widget 的 propsSchema 不匹配，缺 required 字段触发验证失败）
+    let userContent = userPrompt;
+    const hints: string[] = [];
+    if (override?.widgetId) {
+      const w = getWidget(override.widgetId);
+      hints.push(`【强制 widget】"${override.widgetId}"（${w?.displayName ?? ''}）—— 必须严格按该 widget 的 propsSchema 填 props 所有 required 字段`);
+    }
+    if (override?.fontFamily) {
+      hints.push(`【强制字体】"${override.fontFamily}"`);
+    }
+    if (hints.length > 0) {
+      userContent += '\n\n' + hints.join('\n');
+    }
+
     const t0 = Date.now();
     const url = llmConfig.baseUrl.replace(/\/$/, '') + '/chat/completions';
     const res = await fetch(url, {
@@ -83,7 +98,7 @@ export class TextLabelGenerator {
         model: llmConfig.model,
         messages: [
           { role: 'system', content: buildSystemPrompt() },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: userContent },
         ],
         temperature: 0.5,
         max_tokens: 1500,
