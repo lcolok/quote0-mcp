@@ -107,6 +107,34 @@ export class PostgresDatabase {
   }
 
   /**
+   * 显式 schema migration 语句列表
+   * 每次 initialize() 都会幂等执行（依赖 IF NOT EXISTS / IF EXISTS 子句）
+   * extractRequiredTableNames 仅扫 CREATE TABLE 不感知 ALTER，故 ALTER 放这里独立管理
+   */
+  private getMigrationStatements(): string[] {
+    return [
+      // Phase F (ADR-0004): BizyAir 图像驱动标签
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'svg'`,
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_model text`,
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_image_url text`,
+      // Phase F v1.2.1: async 生成需要新增 generating/failed 状态 + last_error 字段
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS last_error text`,
+      // status CHECK constraint 扩展：原 ('draft','approved','printed','archived') → 加 'generating','failed'
+      // Postgres 不支持 ALTER CHECK constraint，必须 DROP + ADD（用动态 DO block 安全做）
+      `DO $$
+     BEGIN
+       IF EXISTS (
+         SELECT 1 FROM pg_constraint WHERE conname = 'labels_status_check'
+       ) THEN
+         ALTER TABLE labels DROP CONSTRAINT labels_status_check;
+       END IF;
+       ALTER TABLE labels ADD CONSTRAINT labels_status_check
+         CHECK (status IN ('draft','approved','printed','archived','generating','failed'));
+     END $$`,
+    ];
+  }
+
+  /**
    * 初始化数据库连接
    */
   async initialize(): Promise<void> {
@@ -141,6 +169,19 @@ export class PostgresDatabase {
         await this.createTables(client);
         console.log(`✅ 数据库表结构初始化完成`);
       }
+
+      // 显式 migration runner（每次启动幂等执行，覆盖 if-missing-only 死路）
+      const migrations = this.getMigrationStatements();
+      console.log(`🔄 执行 ${migrations.length} 条 schema migrations...`);
+      for (const stmt of migrations) {
+        try {
+          await client.query(stmt);
+        } catch (e) {
+          // 记录但不中断启动（某些 migration 可能依赖另一个先跑）
+          console.warn(`⚠️ migration 跳过: ${stmt.slice(0, 80)}... 原因: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      console.log(`✅ schema migrations 执行完成`);
 
       client.release();
     } catch (error) {
@@ -606,10 +647,6 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
       CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
 
-      -- Phase F (ADR-0004): BizyAir 图像驱动标签
-      ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'svg';
-      ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_model text;
-      ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_image_url text;
     `;
   }
 

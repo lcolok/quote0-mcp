@@ -45,6 +45,7 @@ function rowToLabel(row: any): any {
     sourceType: row.source_type ?? 'svg',
     sourceModel: row.source_model ?? null,
     sourceImageUrl: row.source_image_url ?? null,
+    lastError: row.last_error ?? null,
   };
 }
 
@@ -151,58 +152,72 @@ labelsApp.post('/generate-image', async (c) => {
 
     const db = getPostgresDatabase();
 
-    // 调 BizyAir 出图（可能失败）
-    let result;
-    try {
-      result = await imageLabelGenerator.generate(body.prompt, body.model, target, body.modelOptions);
-    } catch (e) {
-      return c.json({
-        success: false,
-        stage: 'bizyair',
-        error: e instanceof Error ? e.message : String(e),
-      }, 502);
-    }
-
-    // 插 DB
+    // 1) 立刻 INSERT row 占位（status='generating'）
     const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
-      `INSERT INTO labels (prompt, svg, target_id, llm_model, llm_latency_ms, bin_bytes, tags,
-                            source_type, source_model, source_image_url)
-       VALUES ($1, NULL, $2, $3, $4, $5, $6, 'image', $7, $8)
+      `INSERT INTO labels (prompt, svg, target_id, llm_model, bin_bytes, tags,
+                            source_type, source_model, status)
+       VALUES ($1, NULL, $2, $3, 0, $4, 'image', $5, 'generating')
        RETURNING id, created_at`,
-      [
-        body.prompt,
-        target.id,
-        body.model,                     // llm_model 列复用存模型名
-        result.bizyairLatencyMs,        // llm_latency_ms 列复用存 BizyAir 耗时
-        result.bitmapBuffer.length,
-        body.tags ?? [],
-        body.model,
-        result.sourceImageUrl,
-      ]
+      [body.prompt, target.id, body.model, body.tags ?? [], body.model]
     );
     const labelId = insertRes.rows[0].id;
 
-    // 上传 dither 后 PNG 到 MinIO
-    const pngPath = `labels/${labelId}.png`;
-    await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
-      'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=86400',
-    });
-    await db.getPool().query(`UPDATE labels SET png_path = $1 WHERE id = $2`, [pngPath, labelId]);
-
-    return c.json({
+    // 2) 立刻返回 id（前端开始轮询）
+    const response = c.json({
       success: true,
       id: labelId,
+      status: 'generating',
       sourceType: 'image',
       sourceModel: body.model,
-      sourceImageUrl: result.sourceImageUrl,
-      pngPath,
-      pngUrl: `/api/minio-proxy/${pngPath}`,
-      targetId: target.id,
       prompt: body.prompt,
-      bizyairLatencyMs: result.bizyairLatencyMs,
-      status: 'draft',
+      targetId: target.id,
+      createdAt: insertRes.rows[0].created_at,
     }, 201);
+
+    // 3) 后台 fire-and-forget BizyAir 调用 + dither + 入完整数据
+    //    用 setImmediate 让 HTTP response 先发出（Hono 同步阶段结束）
+    setImmediate(async () => {
+      const t0 = Date.now();
+      try {
+        const result = await imageLabelGenerator.generate(body.prompt, body.model, target, body.modelOptions);
+
+        // 上传 PNG 到 MinIO
+        const pngPath = `labels/${labelId}.png`;
+        await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, max-age=86400',
+        });
+
+        // UPDATE row 成 draft
+        await db.getPool().query(
+          `UPDATE labels
+           SET status = 'draft',
+               png_path = $2,
+               source_image_url = $3,
+               llm_latency_ms = $4,
+               bin_bytes = $5,
+               last_error = NULL,
+               updated_at = now()
+           WHERE id = $1`,
+          [labelId, pngPath, result.sourceImageUrl, result.bizyairLatencyMs, result.bitmapBuffer.length]
+        );
+        console.log(`✅ image label ${labelId} 完成 (${Date.now() - t0}ms)`);
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        console.error(`❌ image label ${labelId} 失败:`, errMsg);
+        // UPDATE row 成 failed + 错误信息
+        await db.getPool().query(
+          `UPDATE labels
+           SET status = 'failed',
+               last_error = $2,
+               updated_at = now()
+           WHERE id = $1`,
+          [labelId, errMsg.slice(0, 500)]
+        ).catch((dbErr) => console.error('failed update 也炸了:', dbErr));
+      }
+    });
+
+    return response;
   } catch (error) {
     console.error('❌ POST /api/labels/generate-image 失败:', error);
     return c.json({
@@ -269,7 +284,7 @@ labelsApp.get('/', async (c) => {
     const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500));
 
     const db = getPostgresDatabase();
-    let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, created_at, updated_at
+    let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, source_image_url, last_error, created_at, updated_at
                FROM labels WHERE 1=1`;
     const args: any[] = [];
     if (status) {
@@ -346,6 +361,13 @@ labelsApp.post('/:id/print', async (c) => {
       return c.json({ success: false, error: '标签不存在或已归档' }, 404);
     }
     const label = labelRes.rows[0];
+
+    if (label.status === 'generating') {
+      return c.json({ success: false, error: '标签生成中，请稍候再打印' }, 400);
+    }
+    if (label.status === 'failed') {
+      return c.json({ success: false, error: `标签生成失败，无法打印: ${label.last_error ?? '未知错误'}` }, 400);
+    }
 
     const target = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
 
@@ -428,7 +450,14 @@ labelsApp.post('/:id/regenerate', async (c) => {
     if (labelRes.rows.length === 0) {
       return c.json({ success: false, error: '标签不存在或已归档' }, 404);
     }
-    const { prompt, target_id, source_type, source_model } = labelRes.rows[0];
+    const { prompt, target_id, source_type, source_model, status } = labelRes.rows[0];
+
+    if (status === 'generating') {
+      return c.json({ success: false, error: '标签生成中，请稍候再重新生成' }, 400);
+    }
+    if (status === 'failed') {
+      return c.json({ success: false, error: '标签生成失败，请先删除后重试' }, 400);
+    }
 
     const target = BUILTIN_TARGETS.find((t) => t.id === target_id) ?? LABEL_T40X20_TARGET;
 

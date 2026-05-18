@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, GenerateImageRequest, PrintRequest } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, PrintRequest } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -13,17 +13,7 @@ export const labelsApi = {
 
   generateImage: (req: GenerateImageRequest) =>
     client
-      .post<{
-        success: boolean;
-        id: string;
-        sourceType: string;
-        sourceModel: string;
-        sourceImageUrl: string;
-        pngPath: string;
-        pngUrl: string;
-        targetId: string;
-        bizyairLatencyMs: number;
-      }>('/labels/generate-image', req, { timeout: 130_000 })
+      .post<GenerateImageResponse>('/labels/generate-image', req, { timeout: 10_000 })
       .then((r) => r.data),
 
   list: (params?: { status?: string; tag?: string; limit?: number }) =>

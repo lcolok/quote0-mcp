@@ -5,7 +5,7 @@ export interface Label {
   pngPath: string;
   pngUrl: string;
   targetId: string;
-  status: 'draft' | 'approved' | 'printed' | 'archived';
+  status: 'draft' | 'approved' | 'printed' | 'archived' | 'generating' | 'failed';
   printCount: number;
   printHistory: Array<{
     printedAt: string;
@@ -21,6 +21,18 @@ export interface Label {
   sourceType?: 'svg' | 'component' | 'image';
   sourceModel?: string | null;
   sourceImageUrl?: string | null;
+  lastError?: string | null;
+}
+
+export interface GenerateImageResponse {
+  success: boolean;
+  id: string;
+  status: 'generating';
+  sourceType: 'image';
+  sourceModel: string;
+  prompt: string;
+  targetId: string;
+  createdAt: string;
 }
 
 export interface GenerateRequest {
