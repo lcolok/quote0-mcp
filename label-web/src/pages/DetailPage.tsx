@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, Printer, RefreshCw, Archive, ImageIcon } from 'lucide-react';
@@ -9,6 +9,21 @@ export default function DetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const from = searchParams.get('from');
+  const tabFromQuery = searchParams.get('tab');
+
+  const backPath = (() => {
+    if (from === 'design') {
+      return tabFromQuery ? `/?tab=${tabFromQuery}` : '/';
+    }
+    if (from === 'history') {
+      return '/history';
+    }
+    return '/history';
+  })();
+
+  const backLabel = from === 'design' ? '设计' : '历史';
 
   const { data: label, isLoading, refetch } = useQuery({
     queryKey: ['label', id],
@@ -54,7 +69,7 @@ export default function DetailPage() {
     mutationFn: labelsApi.delete,
     onSuccess: () => {
       toast.success('已归档（删除）');
-      navigate('/history');
+      navigate(backPath);
     },
     onError: () => {
       toast.error('归档失败');
@@ -105,11 +120,11 @@ export default function DetailPage() {
     <div className="mx-auto max-w-4xl px-4 py-6 space-y-6">
       <div className="flex items-center gap-4">
         <button
-          onClick={() => navigate('/history')}
+          onClick={() => navigate(backPath)}
           className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-all-smooth"
         >
           <ArrowLeft className="h-4 w-4" />
-          历史
+          {backLabel}
         </button>
         <h1 className="text-xl font-semibold text-gray-900">标签详情</h1>
       </div>

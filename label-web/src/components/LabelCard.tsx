@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ImageIcon, Loader2, AlertCircle } from 'lucide-react';
 import type { Label } from '@/types/label';
 import StatusBadge from './StatusBadge';
@@ -8,6 +8,18 @@ interface LabelCardProps {
 }
 
 export default function LabelCard({ label }: LabelCardProps) {
+  const location = useLocation();
+  const isDesign = location.pathname === '/';
+  const fromQuery = new URLSearchParams();
+  if (isDesign) {
+    fromQuery.set('from', 'design');
+    const currentTab = new URLSearchParams(location.search).get('tab');
+    if (currentTab) fromQuery.set('tab', currentTab);
+  } else {
+    fromQuery.set('from', 'history');
+  }
+  const toUrl = `/labels/${label.id}?${fromQuery.toString()}`;
+
   const shortPrompt = label.prompt.length > 12 ? label.prompt.slice(0, 12) + '…' : label.prompt;
   const dateStr = new Date(label.createdAt).toLocaleString('zh-CN', {
     month: 'short',
@@ -17,7 +29,7 @@ export default function LabelCard({ label }: LabelCardProps) {
   });
 
   return (
-    <Link to={`/labels/${label.id}`} className="group block rounded-lg border border-gray-200 bg-white p-3 hover:shadow-md transition-all-smooth">
+    <Link to={toUrl} className="group block rounded-lg border border-gray-200 bg-white p-3 hover:shadow-md transition-all-smooth">
       <div className="aspect-[2/1] overflow-hidden rounded-md bg-gray-50 mb-2 flex items-center justify-center">
         {label.status === 'generating' ? (
           <div className="flex flex-col items-center gap-1 text-purple-600">

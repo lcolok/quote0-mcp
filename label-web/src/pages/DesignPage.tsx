@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { History, Type, ImageIcon } from 'lucide-react';
@@ -14,7 +14,17 @@ import type { Label } from '@/types/label';
 export default function DesignPage() {
   const navigate = useNavigate();
   const [label, setLabel] = useState<Label | null>(null);
-  const [activeTab, setActiveTab] = useState<'text' | 'image'>('text');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab: 'text' | 'image' = searchParams.get('tab') === 'image' ? 'image' : 'text';
+  const setActiveTab = (tab: 'text' | 'image') => {
+    const next = new URLSearchParams(searchParams);
+    if (tab === 'text') {
+      next.delete('tab');
+    } else {
+      next.set('tab', tab);
+    }
+    setSearchParams(next, { replace: false });
+  };
 
   const generateMutation = useMutation({
     mutationFn: labelsApi.generate,
