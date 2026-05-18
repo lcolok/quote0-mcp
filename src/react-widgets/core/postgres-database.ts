@@ -119,6 +119,8 @@ export class PostgresDatabase {
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_image_url text`,
       // Phase F v1.2.1: async 生成需要新增 generating/failed 状态 + last_error 字段
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS last_error text`,
+      // Phase F: image 标签 INSERT 时 svg 为 NULL（仅 svg/component 路径填值）
+      `ALTER TABLE labels ALTER COLUMN svg DROP NOT NULL`,
       // status CHECK constraint 扩展：原 ('draft','approved','printed','archived') → 加 'generating','failed'
       // Postgres 不支持 ALTER CHECK constraint，必须 DROP + ADD（用动态 DO block 安全做）
       `DO $$
