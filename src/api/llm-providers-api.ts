@@ -259,4 +259,36 @@ app.post('/api/llm/test', async (c) => {
   }
 });
 
+// GET /api/llm/catalog —— enabled provider+model 合并扁平列表（v1.4.4 ModelSelector 用）
+app.get('/api/llm/catalog', async (c) => {
+  try {
+    const result = await postgres.getPool().query(`
+      SELECT
+        p.id AS provider_id, p.slug AS provider_slug, p.display_name AS provider_display_name,
+        p.api_type, m.id AS model_db_id, m.model_id, m.display_name AS model_display_name,
+        m.context_window, m.max_tokens, m.reasoning
+      FROM llm_models m
+      JOIN llm_providers p ON p.id = m.provider_id
+      WHERE p.enabled = true AND m.enabled = true
+      ORDER BY p.id, m.id
+    `);
+    return c.json({
+      success: true,
+      models: result.rows.map((r) => ({
+        providerId: r.provider_id,
+        providerSlug: r.provider_slug,
+        providerDisplayName: r.provider_display_name,
+        modelDbId: r.model_db_id,
+        modelId: r.model_id,
+        modelDisplayName: r.model_display_name,
+        contextWindow: r.context_window,
+        maxTokens: r.max_tokens,
+        reasoning: r.reasoning,
+      })),
+    });
+  } catch (error: any) {
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
 export { app as llmProvidersApp };

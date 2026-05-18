@@ -62,18 +62,36 @@ export const labelsApi = {
   delete: (id: string) =>
     client.delete<{ success: boolean }>(`/labels/${id}`).then((r) => r.data),
 
+  // v1.4.4 LLM 切换 —— 走 pre-existing /api/llm/* (llm-providers-api.ts)
   fetchLlmModels: () =>
     client
-      .get<{ success: boolean; models: LlmModelMeta[] }>('/llm/models')
+      .get<{ success: boolean; models: LlmModelMeta[] }>('/llm/catalog')
       .then((r) => r.data.models),
 
   fetchActiveLlm: () =>
     client
-      .get<{ success: boolean } & ActiveLlmInfo>('/llm/active')
-      .then((r) => r.data),
+      .get<{
+        success: boolean;
+        data: {
+          active_provider_id: number;
+          active_model_id: number;
+          provider_slug: string;
+          model_id_str: string;
+        } | null;
+      }>('/llm/active')
+      .then((r): ActiveLlmInfo | null => {
+        if (!r.data.data) return null;
+        return {
+          activeProviderId: r.data.data.active_provider_id,
+          activeModelDbId: r.data.data.active_model_id,
+          providerSlug: r.data.data.provider_slug,
+          modelId: r.data.data.model_id_str,
+          modelDisplayName: r.data.data.model_id_str,
+        };
+      }),
 
   setActiveLlm: (providerId: number, modelDbId: number) =>
     client
-      .post<{ success: boolean }>('/llm/active', { providerId, modelDbId })
+      .post<{ success: boolean }>('/llm/active', { provider_id: providerId, model_id: modelDbId })
       .then((r) => r.data),
 };
