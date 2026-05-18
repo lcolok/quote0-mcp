@@ -1,8 +1,8 @@
 import React from 'react';
-import { TextSingleWidget, TextSingleProps } from '../components/labels/text-single.js';
-import { TextTwoLinesWidget, TextTwoLinesProps } from '../components/labels/text-two-lines.js';
-import { TextWithIconWidget, TextWithIconProps } from '../components/labels/text-with-icon.js';
-import { PriceTagWidget, PriceTagProps } from '../components/labels/price-tag.js';
+import { TextSingleWidget } from '../components/labels/text-single.js';
+import { TextTwoLinesWidget } from '../components/labels/text-two-lines.js';
+import { TextWithIconWidget } from '../components/labels/text-with-icon.js';
+import { PriceTagWidget } from '../components/labels/price-tag.js';
 
 export type WidgetId = 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag';
 
@@ -53,12 +53,12 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     propsSchema: [
       { name: 'title', type: 'string', required: true, maxLength: 10, description: '主标题' },
       { name: 'subtitle', type: 'string', required: false, maxLength: 16, description: '副标题（可选）' },
-      { name: 'iconSvg', type: 'string', required: true, description: 'SVG viewBox="0 0 24 24"，会被注入到 80×80 icon slot' },
+      { name: 'iconSvg', type: 'string', required: true, description: 'SVG path 的 d 属性值（viewBox 0 0 24 24，单 path 描述完整图案，不要写 <svg> 标签）' },
     ],
     defaultProps: {
       title: '请勿打扰',
       subtitle: '会议中',
-      iconSvg: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 22h20L12 2zm0 6l6.5 12h-13L12 8z" fill="currentColor"/></svg>',
+      iconSvg: 'M12 2L2 22h20L12 2zm0 6l6.5 12h-13L12 8z',
     },
   },
   'price-tag': {

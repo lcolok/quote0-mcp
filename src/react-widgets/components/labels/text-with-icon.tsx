@@ -4,7 +4,7 @@ import type { RenderTarget } from '../../core/render-targets.js';
 export interface TextWithIconProps {
   title: string;
   subtitle?: string;
-  iconSvg: string;  // LLM 生成的 <svg viewBox="0 0 24 24">...</svg>
+  iconSvg: string;  // LLM 生成的 SVG path 的 d 属性值（viewBox 0 0 24 24）字段名沿用历史，内容是 path d
 }
 
 interface Props {
@@ -35,7 +35,7 @@ export const TextWithIconWidget: React.FC<Props> = ({ data, target, fontFamily }
       boxSizing: 'border-box',
       gap: '12px',
     }}>
-      {/* 左侧 icon slot — 固定大小，SVG 受 slot 约束不越界 */}
+      {/* 左侧 icon slot — 固定大小，SVG 元素直接 JSX 渲染（satori 不支持 dangerouslySetInnerHTML） */}
       <div style={{
         width: `${iconSize}px`,
         height: `${iconSize}px`,
@@ -43,10 +43,16 @@ export const TextWithIconWidget: React.FC<Props> = ({ data, target, fontFamily }
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-      }}
-        // @ts-ignore — satori 支持 dangerouslySetInnerHTML 注入 SVG 字符串
-        dangerouslySetInnerHTML={{ __html: data.iconSvg }}
-      />
+      }}>
+        <svg
+          width={iconSize}
+          height={iconSize}
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path d={data.iconSvg} fill="currentColor" stroke="currentColor" strokeWidth={0.3} />
+        </svg>
+      </div>
       {/* 右侧文字区域 */}
       <div style={{
         flex: 1,

@@ -44,10 +44,11 @@ ${fontList}
 3. props 字段名必须精确匹配 widget 的 propsSchema
 4. 字符串长度严格遵守 propsSchema 的 maxLength
 5. 仅 text-with-icon widget 需要 iconSvg：
-   - 格式：<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="..." fill="currentColor"/></svg>
-   - 笔画粗（stroke-width >= 2）保证 1-bit 二值化后清晰
-   - 使用 currentColor 让 SVG 继承文字颜色
-   - 禁用：<script> <foreignObject> on*= javascript:
+   - **iconSvg 字段值是 SVG <path> 元素的 d 属性字符串，不是完整 <svg> 标签**
+   - 坐标系：viewBox 0 0 24 24（24×24 单位）
+   - 单 path 描述完整图案（一笔画或多段子路径合并）
+   - 用 lucide / heroicons 风格（geometric, minimal, single-path）
+   - 笔画 / 填充足够粗实，保证 1-bit 二值化后清晰
 6. 字体选择规则：
    - 价签 / 公告 / 庄重场景 → "alibaba-puhuiti"
    - 诗词 / 文学 / 优雅 → "lxgw-wenkai"
@@ -55,7 +56,10 @@ ${fontList}
 
 [输出示例]
 用户："请保持安静的提示，配安静图标"
-输出: {"widgetId":"text-with-icon","fontFamily":"alibaba-puhuiti","props":{"title":"请保持安静","subtitle":"会议中","iconSvg":"<svg viewBox=\\"0 0 24 24\\" xmlns=\\"http://www.w3.org/2000/svg\\"><path d=\\"M12 1c-2 0-3 1-3 3v8c0 2 1 3 3 3s3-1 3-3V4c0-2-1-3-3-3zm-7 11c0 4 3 7 6 7v3h2v-3c3 0 6-3 6-7h-2c0 3-2 5-5 5s-5-2-5-5H5z\\" fill=\\"currentColor\\" stroke=\\"currentColor\\" stroke-width=\\"0.5\\"/></svg>"}}
+输出: {"widgetId":"text-with-icon","fontFamily":"alibaba-puhuiti","props":{"title":"请保持安静","subtitle":"会议中","iconSvg":"M12 1c-2 0-3 1-3 3v8c0 2 1 3 3 3s3-1 3-3V4c0-2-1-3-3-3zm-7 11c0 4 3 7 6 7v3h2v-3c3 0 6-3 6-7h-2c0 3-2 5-5 5s-5-2-5-5H5z"}}
+
+用户："警告，危险区域"
+输出: {"widgetId":"text-with-icon","fontFamily":"alibaba-puhuiti","props":{"title":"危险区域","subtitle":"请勿进入","iconSvg":"M12 2L1 22h22L12 2zm0 6l8 14H4l8-14zm-1 4v5h2v-5h-2zm0 7v2h2v-2h-2z"}}
 `;
 }
 
@@ -130,10 +134,10 @@ export class TextLabelGenerator {
       }
     }
 
-    // 7. sanitize iconSvg（如果 widget 用到）
+    // 7. sanitize iconSvg（path d 值，仅允许 SVG path 命令字符）
     let iconSvg: string | null = null;
     if (widgetId === 'text-with-icon' && props.iconSvg) {
-      iconSvg = this.sanitizeSVG(props.iconSvg);
+      iconSvg = this.sanitizePathD(props.iconSvg);
       props.iconSvg = iconSvg;
     }
 
@@ -172,15 +176,17 @@ export class TextLabelGenerator {
     };
   }
 
-  /** 复用 llm-label-generator 的轻量 SVG 黑名单清理 */
-  private sanitizeSVG(svg: string): string {
-    svg = svg.replace(/<script[\s\S]*?<\/script>/gi, '');
-    svg = svg.replace(/<script\s*\/>/gi, '');
-    svg = svg.replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '');
-    svg = svg.replace(/<foreignObject\s*\/>/gi, '');
-    svg = svg.replace(/href\s*=\s*["']javascript:[^"']*["']/gi, '');
-    svg = svg.replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
-    return svg;
+  /** sanitize path d 值：剥离 LLM 偶尔多出来的 <svg>/<path> 包装，仅保留 d 属性字符 */
+  private sanitizePathD(raw: string): string {
+    let s = raw.trim();
+    // 如果 LLM 误返回完整 <svg>...</svg>，抽出第一个 <path d="..."> 的 d 值
+    const pathMatch = s.match(/<path[^>]*\bd\s*=\s*["']([^"']+)["']/i);
+    if (pathMatch) {
+      s = pathMatch[1];
+    }
+    // 仅保留 SVG path 命令合法字符：字母 (M/L/H/V/C/S/Q/T/A/Z 大小写) + 数字 + 空格 + 逗号 + 小数点 + 负号 + 指数 e/E
+    s = s.replace(/[^a-zA-Z0-9\s,.\-+eE]/g, '');
+    return s.trim();
   }
 }
 
