@@ -11,6 +11,7 @@ export interface TextLabelGenResult {
   widgetId: WidgetId;
   props: Record<string, any>;
   iconSvg: string | null;
+  frameSvgPaths: string[] | null;
   fontFamily: SupportedFontFamily;
   pngBuffer: Buffer;
   bitmapBuffer: Buffer;
@@ -53,6 +54,18 @@ ${fontList}
    - 价签 / 公告 / 庄重场景 → "alibaba-puhuiti"
    - 诗词 / 文学 / 优雅 → "lxgw-wenkai"
    - 时尚 / 标识 / 个性 → "smiley-sans"
+7. 装饰 frameSvgPaths（可选）：
+   - 字段值是 string[]（path d 值数组），每个 element 是单个 path 的 d 字符串
+   - 坐标系：viewBox = 标签整张尺寸（例如 320 宽 × 160 高，对应 label-T40x20-320 target）
+   - **安全区**：中心 (24-296 x, 24-136 y) 是文字 layout 安全区，必须保持空白 — 装饰只在边缘
+   - 适合场景：用户描述含"花纹/边框/装饰/复古/中式/雕花"等关键词 → 输出 frameSvgPaths
+   - 不适合场景：用户只要"简洁/极简" → 不输出此字段
+   - 建议 4-8 个 path 描述 4 角 + 顶底装饰；笔画粗（fill/stroke 任意，currentColor 自动黑色）
+   - 禁止包含 <svg> <path> 标签，只给纯 d 值字符串
+
+[输出示例 - 带装饰]
+用户："番茄 9.9 元价签，四周花纹衬托"
+输出: {"widgetId":"price-tag","fontFamily":"alibaba-puhuiti","props":{"title":"番茄","price":"9.9","unit":"元","frameSvgPaths":["M0 0 L20 0 L0 20 Z","M300 0 L320 0 L320 20 Z","M0 140 L0 160 L20 160 Z","M300 160 L320 160 L320 140 Z","M40 4 Q160 0 280 4 L280 8 Q160 4 40 8 Z","M40 152 Q160 156 280 152 L280 156 Q160 152 40 156 Z"]}}
 
 [输出示例]
 用户："请保持安静的提示，配安静图标"
@@ -156,6 +169,18 @@ export class TextLabelGenerator {
       props.iconSvg = iconSvg;
     }
 
+    // 7.5 sanitize frameSvgPaths（数组，每个 path 单独 sanitize）
+    if (Array.isArray(props.frameSvgPaths)) {
+      props.frameSvgPaths = props.frameSvgPaths
+        .filter((p: any) => typeof p === 'string' && p.trim().length > 0)
+        .map((p: string) => this.sanitizePathD(p))
+        .filter((p: string) => p.length > 0)
+        .slice(0, 24);  // 最多 24 个 path 防 LLM 输出爆炸
+    } else if (props.frameSvgPaths !== undefined) {
+      // LLM 误输出非 array → 删除字段
+      delete props.frameSvgPaths;
+    }
+
     // 8. satori 渲染（复用 thermal-label-rendering-module 的模式）
     const fonts = await fontRegistry.getSatoriFonts([fontFamily]);
     if (fonts.length === 0) {
@@ -183,6 +208,7 @@ export class TextLabelGenerator {
       widgetId,
       props,
       iconSvg,
+      frameSvgPaths: Array.isArray(props.frameSvgPaths) ? props.frameSvgPaths : null,
       fontFamily,
       pngBuffer,
       bitmapBuffer,

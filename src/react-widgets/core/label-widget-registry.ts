@@ -31,6 +31,7 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     component: TextSingleWidget,
     propsSchema: [
       { name: 'text', type: 'string', required: true, maxLength: 12, description: '文字内容（≤12 字最佳）' },
+      { name: 'frameSvgPaths', type: 'string', required: false, description: '可选：装饰 SVG path d 值数组（绝对定位边缘装饰层，画在 widget 整张 viewBox。如 ["M0 0 L320 0 L320 8 ...", "M0 152 L320 152..."] 描述顶/底/4 角等花纹）。中心文字区 (24-296, 24-136) 保持空白避免遮挡' },
     ],
     defaultProps: { text: '会议室 A' },
   },
@@ -42,6 +43,7 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     propsSchema: [
       { name: 'title', type: 'string', required: true, maxLength: 10, description: '主标题（大字）' },
       { name: 'subtitle', type: 'string', required: true, maxLength: 20, description: '副标题（小字）' },
+      { name: 'frameSvgPaths', type: 'string', required: false, description: '可选：装饰 SVG path d 值数组（绝对定位边缘装饰层，画在 widget 整张 viewBox。如 ["M0 0 L320 0 L320 8 ...", "M0 152 L320 152..."] 描述顶/底/4 角等花纹）。中心文字区 (24-296, 24-136) 保持空白避免遮挡' },
     ],
     defaultProps: { title: '会议室 A', subtitle: '2F-201' },
   },
@@ -54,6 +56,7 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
       { name: 'title', type: 'string', required: true, maxLength: 10, description: '主标题' },
       { name: 'subtitle', type: 'string', required: false, maxLength: 16, description: '副标题（可选）' },
       { name: 'iconSvg', type: 'string', required: true, description: 'SVG path 的 d 属性值（viewBox 0 0 24 24，单 path 描述完整图案，不要写 <svg> 标签）' },
+      { name: 'frameSvgPaths', type: 'string', required: false, description: '可选：装饰 SVG path d 值数组（绝对定位边缘装饰层，画在 widget 整张 viewBox。如 ["M0 0 L320 0 L320 8 ...", "M0 152 L320 152..."] 描述顶/底/4 角等花纹）。中心文字区 (24-296, 24-136) 保持空白避免遮挡' },
     ],
     defaultProps: {
       title: '请勿打扰',
@@ -70,6 +73,7 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
       { name: 'title', type: 'string', required: true, maxLength: 10, description: '商品名' },
       { name: 'price', type: 'string', required: true, maxLength: 8, description: '价格数字（如 "9.9"）' },
       { name: 'unit', type: 'string', required: true, maxLength: 4, description: '单位（如 "元/斤"）' },
+      { name: 'frameSvgPaths', type: 'string', required: false, description: '可选：装饰 SVG path d 值数组（绝对定位边缘装饰层，画在 widget 整张 viewBox。如 ["M0 0 L320 0 L320 8 ...", "M0 152 L320 152..."] 描述顶/底/4 角等花纹）。中心文字区 (24-296, 24-136) 保持空白避免遮挡' },
     ],
     defaultProps: { title: '番茄', price: '9.9', unit: '元/斤' },
   },

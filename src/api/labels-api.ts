@@ -52,6 +52,7 @@ function rowToLabel(row: any): any {
     widgetProps: row.widget_props ?? null,
     fontFamily: row.font_family ?? null,
     iconSvg: row.icon_svg ?? null,
+    frameSvgPaths: row.frame_svg_paths ?? null,
     parentRevisionId: row.parent_revision_id ?? null,
   };
 }
@@ -354,9 +355,10 @@ labelsApp.post('/generate-text', async (c) => {
                widget_props = $4::jsonb,
                font_family = $5,
                icon_svg = $6,
-               llm_model = $7,
-               llm_latency_ms = $8,
-               bin_bytes = $9,
+               frame_svg_paths = $7::jsonb,
+               llm_model = $8,
+               llm_latency_ms = $9,
+               bin_bytes = $10,
                last_error = NULL,
                updated_at = now()
            WHERE id = $1`,
@@ -367,6 +369,7 @@ labelsApp.post('/generate-text', async (c) => {
             JSON.stringify(result.props),
             result.fontFamily,
             result.iconSvg,
+            result.frameSvgPaths ? JSON.stringify(result.frameSvgPaths) : null,
             result.llmModel,
             result.llmLatencyMs,
             result.bitmapBuffer.length,
@@ -413,7 +416,7 @@ labelsApp.get('/', async (c) => {
 
     const db = getPostgresDatabase();
     let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, source_image_url, last_error,
-               widget_props, font_family, icon_svg, parent_revision_id,
+               widget_props, font_family, icon_svg, frame_svg_paths, parent_revision_id,
                created_at, updated_at
                FROM labels WHERE 1=1`;
     const args: any[] = [];
@@ -646,13 +649,16 @@ labelsApp.post('/:id/regenerate', async (c) => {
       await db.getPool().query(
         `UPDATE labels
          SET png_path = $2, widget_props = $3::jsonb, font_family = $4, icon_svg = $5,
-             llm_latency_ms = $6, bin_bytes = $7, updated_at = now()
+             frame_svg_paths = $6::jsonb, llm_latency_ms = $7, bin_bytes = $8, updated_at = now()
          WHERE id = $1`,
-        [id, pngPath, JSON.stringify(result.props), result.fontFamily, result.iconSvg, result.llmLatencyMs, result.bitmapBuffer.length]
+        [id, pngPath, JSON.stringify(result.props), result.fontFamily, result.iconSvg,
+         result.frameSvgPaths ? JSON.stringify(result.frameSvgPaths) : null,
+         result.llmLatencyMs, result.bitmapBuffer.length]
       );
       return c.json({
         success: true, id, sourceType: 'widget', sourceModel: result.widgetId,
         widgetProps: result.props, fontFamily: result.fontFamily, iconSvg: result.iconSvg,
+        frameSvgPaths: result.frameSvgPaths,
         pngPath, pngUrl: `/api/minio-proxy/${pngPath}`, llmLatencyMs: result.llmLatencyMs,
       });
     }

@@ -199,6 +199,17 @@ export default function DetailPage() {
                     </div>
                   </div>
                 )}
+                {label.frameSvgPaths && label.frameSvgPaths.length > 0 && (
+                  <div className="space-y-1">
+                    <span className="text-xs text-muted-foreground">装饰 frame paths ({label.frameSvgPaths.length} 个):</span>
+                    <details className="text-xs">
+                      <summary className="text-muted-foreground cursor-pointer">展开 path d 值</summary>
+                      <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-auto">
+                        {label.frameSvgPaths.join('\n')}
+                      </pre>
+                    </details>
+                  </div>
+                )}
               </div>
             )}
           </div>

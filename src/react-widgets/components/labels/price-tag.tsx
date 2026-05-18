@@ -5,6 +5,7 @@ export interface PriceTagProps {
   title: string;     // 商品名
   price: string;     // 价格（含小数，如 "9.9"）
   unit: string;      // 单位，如 "元" / "kg" / "盒"
+  frameSvgPaths?: string[];  // 新增：装饰 path 数组（绝对定位边缘层）
 }
 
 interface Props {
@@ -34,6 +35,7 @@ export const PriceTagWidget: React.FC<Props> = ({ data, target, fontFamily }) =>
       backgroundColor: '#ffffff',
       color: '#000000',
       fontFamily,
+      position: 'relative',  // 新增：让装饰层 absolute 定位以 widget 容器为基准
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
@@ -42,6 +44,28 @@ export const PriceTagWidget: React.FC<Props> = ({ data, target, fontFamily }) =>
       boxSizing: 'border-box',
       gap: '2px',
     }}>
+      {/* 装饰层 — 绝对定位铺满，不进入 flexbox layout */}
+      {data.frameSvgPaths && data.frameSvgPaths.length > 0 && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: `${target.widthPx}px`,
+          height: `${target.heightPx}px`,
+          display: 'flex',  // satori 要求所有 div 用 display: flex
+        }}>
+          <svg
+            width={target.widthPx}
+            height={target.heightPx}
+            viewBox={`0 0 ${target.widthPx} ${target.heightPx}`}
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            {data.frameSvgPaths.map((d, i) => (
+              <path key={i} d={d} fill="currentColor" stroke="currentColor" strokeWidth={1} />
+            ))}
+          </svg>
+        </div>
+      )}
       {/* 商品名 — 上半 30% */}
       <span style={{
         fontSize: `${titleFontSize}px`,

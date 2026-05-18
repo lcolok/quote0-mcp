@@ -25,6 +25,7 @@ export interface Label {
   widgetProps?: Record<string, any> | null;
   fontFamily?: string | null;
   iconSvg?: string | null;
+  frameSvgPaths?: string[] | null;
   parentRevisionId?: string | null;
 }
 
