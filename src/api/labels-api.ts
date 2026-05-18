@@ -375,6 +375,7 @@ labelsApp.post('/generate-text', async (c) => {
       tags?: string[];
       preferredWidget?: string;
       preferredFont?: string;
+      forceDecoration?: boolean;
     }>();
     if (!body.prompt || body.prompt.trim() === '') {
       return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
@@ -421,6 +422,7 @@ labelsApp.post('/generate-text', async (c) => {
         const result = await textLabelGenerator.generate(body.prompt, target, llmCfg, {
           widgetId: body.preferredWidget as any,
           fontFamily: body.preferredFont as any,
+          forceDecoration: body.forceDecoration,
         });
 
         const pngPath = `labels/${labelId}.png`;

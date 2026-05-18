@@ -24,6 +24,7 @@ export interface TextLabelGenResult {
 export interface TextLabelOverride {
   widgetId?: WidgetId;
   fontFamily?: SupportedFontFamily;
+  forceDecoration?: boolean;  // v1.5.5: 强制 LLM 输出 decoratorCode 装饰
 }
 
 function buildSystemPrompt(): string {
@@ -142,6 +143,14 @@ export class TextLabelGenerator {
     }
     if (override?.fontFamily) {
       hints.push(`【强制字体】"${override.fontFamily}"`);
+    }
+    if (override?.forceDecoration) {
+      hints.push(
+        '【必须输出装饰】用户要求必须有装饰花纹。你**必须**输出 decoratorCode 字段（JS 函数代码字符串），调用 ctx.draw API 画图案。\n' +
+        '- 必须用 ctx.draw.icon(...) / ctx.draw.flower / ctx.draw.star / ctx.draw.line 等 API（**禁止直接输出 frameSvgPaths 数组**）\n' +
+        '- function generate(ctx) 必须 return ctx.draw.getPaths() 或自己累积的 string[]\n' +
+        '- 参考主题：从用户 prompt 提取主题元素（番茄→leaf/apple/sprout、圣诞→snowflake/gift、节日→star/sparkles 等）'
+      );
     }
     if (hints.length > 0) {
       userContent += '\n\n' + hints.join('\n');

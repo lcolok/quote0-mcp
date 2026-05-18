@@ -23,6 +23,7 @@ export default function TextDesignPanel() {
   const [prompt, setPrompt] = useState('');
   const [widgetChoice, setWidgetChoice] = useState<string>(AUTO);
   const [fontChoice, setFontChoice] = useState<string>(AUTO);
+  const [forceDecoration, setForceDecoration] = useState<boolean>(false);
   const [trackingId, setTrackingId] = useState<string | null>(null);
 
   // Catalog
@@ -105,6 +106,7 @@ export default function TextDesignPanel() {
     const req: GenerateTextRequest = { prompt: prompt.trim() };
     if (widgetChoice !== AUTO) req.preferredWidget = widgetChoice as any;
     if (fontChoice !== AUTO) req.preferredFont = fontChoice as any;
+    if (forceDecoration) req.forceDecoration = true;
     generateMutation.mutate(req);
   };
 
@@ -184,6 +186,23 @@ export default function TextDesignPanel() {
           </p>
         )}
       </div>
+
+      {/* 强制装饰开关 */}
+      <label className="flex items-center gap-3 cursor-pointer select-none rounded-lg border border-border bg-card px-3 py-2 hover:bg-accent transition-colors">
+        <input
+          type="checkbox"
+          checked={forceDecoration}
+          onChange={(e) => setForceDecoration(e.target.checked)}
+          className="h-4 w-4 accent-primary"
+          disabled={generateMutation.isPending}
+        />
+        <span className="text-sm font-medium flex-1">
+          ✨ 强制装饰花纹
+        </span>
+        <span className="text-xs text-muted-foreground">
+          让 LLM 必须输出 decoratorCode
+        </span>
+      </label>
 
       {/* 生成按钮 */}
       <Button

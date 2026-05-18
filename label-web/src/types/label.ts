@@ -61,6 +61,7 @@ export interface GenerateTextRequest {
   tags?: string[];
   preferredWidget?: 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag';
   preferredFont?: 'smiley-sans' | 'lxgw-wenkai' | 'alibaba-puhuiti';
+  forceDecoration?: boolean;
 }
 
 export interface GenerateTextResponse {
