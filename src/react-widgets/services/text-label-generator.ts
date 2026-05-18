@@ -57,28 +57,29 @@ ${fontList}
    - 诗词 / 文学 / 优雅 → "lxgw-wenkai"
    - 时尚 / 标识 / 个性 → "smiley-sans"
 7. 装饰 decoratorCode（可选，JS 函数代码字符串）：
-   - 字段名 "decoratorCode"，值是 JS 函数代码字符串（不是 path d 数组！）
-   - 必须定义 function generate(ctx) {...} 返回 string[]（SVG path d 数组）
-   - ctx 提供：
-     * ctx.width, ctx.height: 标签像素尺寸（320, 160）
-     * ctx.safeZone: {x: 24, y: 24, w: 272, h: 112}（文字 safe zone，装饰避开此区域）
-     * ctx.corners: [{x:0,y:0},{x:320,y:0},{x:0,y:160},{x:320,y:160}] 4 个角坐标
-     * ctx.edges: { top: {x1, y, x2}, bottom: ..., left: ..., right: ... } 4 条边端点
-     * ctx.Math: 安全 Math 子集（sin/cos/PI/sqrt/floor/random 等）
-   - 函数只能用 ctx.Math（不能用全局 Math）
-   - 禁用：eval / Function / require / import / process / setTimeout / fetch / Buffer 等任何全局 API
-   - 推荐结构：helper 函数（snowflake / vine / cloud 等）+ 主 generate 函数遍历 corners/edges
-   - 创造性发挥：根据用户 prompt 自由设计装饰（不要照搬示例）
-   - 适合场景：含"花纹/装饰/边框/复古/中式/圣诞/雕花/植物/几何"等
-   - 不适合场景：极简/简洁 → 不输出 decoratorCode
+   - 字段值是 JS 代码字符串，必须包含 function generate(ctx) {...} 返回 string[]（SVG path d 数组）
+   - ctx API：
+     * ctx.width=320, ctx.height=160
+     * ctx.safeZone={x:24,y:24,w:272,h:112}（**文字区，必须避开**）
+     * ctx.corners=[{x:0,y:0},{x:320,y:0},{x:0,y:160},{x:320,y:160}]
+     * ctx.edges={top:{x1,y,x2},bottom,left,right}
+     * ctx.Math（仅这些）：sin/cos/tan/PI/sqrt/pow/abs/floor/ceil/round/min/max/random/atan2
+   - 严禁：全局 Math（用 ctx.Math）/ eval / Function / require / import / process / setTimeout / fetch / Buffer
 
-[输出示例 1 - 雪花]
-用户："圣诞快乐 礼物盒标签 雪花装饰"
-{"widgetId":"text-two-lines","fontFamily":"alibaba-puhuiti","props":{"title":"圣诞快乐","subtitle":"礼物盒","decoratorCode":"function snowflake(cx,cy,r,M){let d='';for(let i=0;i<6;i++){const a=i*M.PI/3;const x=cx+M.cos(a)*r;const y=cy+M.sin(a)*r;d+='M'+cx+' '+cy+' L'+x+' '+y+' ';const bx=(cx+x)/2;const by=(cy+y)/2;const px=bx-M.sin(a)*r*0.2;const py=by+M.cos(a)*r*0.2;d+='M'+bx+' '+by+' L'+px+' '+py+' ';}return d;}function generate(ctx){const M=ctx.Math;const paths=[];for(const c of ctx.corners){const dx=c.x===0?14:-14;const dy=c.y===0?14:-14;paths.push(snowflake(c.x+dx,c.y+dy,10,M));}for(let i=0;i<5;i++){paths.push(snowflake(50+i*55,8,4,M));paths.push(snowflake(50+i*55,152,4,M));}return paths;}"}}
+**【创造性要求 — 必须】**
+- 你必须为**这个具体 prompt** 设计**全新原创**的装饰算法
+- 禁止使用通用的「snowflake/cloud/vine」模板套用
+- 思考 prompt 的语义独特性 → 设计专属几何/装饰元素
+- 加入 ctx.Math.random() 让每次执行结果有微小不同
+- 你可以画的元素（仅参考意图，不要照搬）：
+  * 角装饰（几何形 / 自然元素 / 文化符号 / 主题元素）
+  * 边花纹（节奏图案 / 重复元素 / 渐变密度）
+  * 边框（线条变奏 / 间隔节奏 / 粗细对比）
+  * 散落元素（避开 safeZone 的小装饰）
 
-[输出示例 2 - 中式云纹边框]
-用户："中式茶叶价签 龙井 9.9 元 云纹装饰"
-{"widgetId":"price-tag","fontFamily":"lxgw-wenkai","props":{"title":"龙井","price":"9.9","unit":"元","decoratorCode":"function cloud(cx,cy,size,M){let d='M'+cx+' '+cy;for(let i=0;i<5;i++){const a=i*M.PI*0.4;const r=size*(0.5+M.random()*0.3);d+=' Q'+(cx+M.cos(a-0.2)*r*0.8)+' '+(cy+M.sin(a-0.2)*r*0.8)+' '+(cx+M.cos(a)*r)+' '+(cy+M.sin(a)*r);}return d+' Z';}function generate(ctx){const M=ctx.Math;const paths=[];paths.push(cloud(20,20,16,M));paths.push(cloud(300,20,16,M));paths.push(cloud(20,140,16,M));paths.push(cloud(300,140,16,M));return paths;}"}}
+代码骨架（仅参考结构，禁止套用具体逻辑）：定义若干 helper 函数生成 path d 字符串；定义 function generate(ctx) 调用 helpers，返回 string[]。helper 名字 + 参数 + 算法你自己设计（针对当前 prompt 主题专门）。
+
+不适合输出 decoratorCode 的场景：用户描述含"极简/简洁/纯文字/不要装饰"等。
 
 [输出示例]
 用户："请保持安静的提示，配安静图标"
@@ -126,8 +127,10 @@ export class TextLabelGenerator {
           { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: userContent },
         ],
-        temperature: 0.5,
-        max_tokens: 1500,
+        temperature: 0.9,
+        max_tokens: 2000,
+        presence_penalty: 0.4,
+        frequency_penalty: 0.3,
         response_format: { type: 'json_object' },
       }),
     });
@@ -198,10 +201,11 @@ export class TextLabelGenerator {
     let decoratorCode: string | null = null;
     let sandboxFrames: string[] | null = null;
     if (typeof props.decoratorCode === 'string' && props.decoratorCode.trim().length > 0) {
-      decoratorCode = props.decoratorCode;
+      const code: string = props.decoratorCode;
+      decoratorCode = code;
       try {
         const ctx = buildStandardContext(target.widthPx, target.heightPx);
-        sandboxFrames = executeDecorator(decoratorCode, ctx);
+        sandboxFrames = executeDecorator(code, ctx);
         if (sandboxFrames.length > 0) {
           // 覆盖 props.frameSvgPaths（sandbox 输出优先）
           props.frameSvgPaths = sandboxFrames;
