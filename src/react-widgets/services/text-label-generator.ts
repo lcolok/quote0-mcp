@@ -56,31 +56,64 @@ ${fontList}
    - 价签 / 公告 / 庄重场景 → "alibaba-puhuiti"
    - 诗词 / 文学 / 优雅 → "lxgw-wenkai"
    - 时尚 / 标识 / 个性 → "smiley-sans"
-7. 装饰 decoratorCode（可选，JS 函数代码字符串）：
-   - **必须是字符串！内含 JS 代码 包含 function generate(ctx) {...} return paths**
-   - **绝对不能输出 frameSvgPaths 数组字段 — 那是 v1.5.0 老格式已废弃**
-   - props 里只放 decoratorCode 字符串，不要放 frameSvgPaths
-   - 字符串需 JSON escape（双引号 \\"、反斜杠 \\\\、换行 \\n）
+7. 装饰 decoratorCode（可选）：
+   - 字段值是 JS 代码字符串，含 function generate(ctx) { ... } 必须返回 string[]
+   - 推荐用 ctx.draw 高层 API（不用手写几何）：
 
-ctx API（仅这些，函数内部用 ctx.xxx 访问，不能用全局 Math）：
+ctx.draw 提供的方法：
+**Lucide 图标（1500+ 可用，会自动 scale/rotate/translate）**：
+  ctx.draw.icon(name: string, x: number, y: number, size: number, opts?: {rotate?: number})
+
+**几何 primitives**：
+  ctx.draw.line(x1, y1, x2, y2)
+  ctx.draw.circle(cx, cy, r)
+  ctx.draw.ellipse(cx, cy, rx, ry)
+  ctx.draw.rect(x, y, w, h)
+  ctx.draw.polygon(cx, cy, r, sides)
+  ctx.draw.star(cx, cy, r, points?, innerRatio?)
+  ctx.draw.heart(cx, cy, r)
+  ctx.draw.flower(cx, cy, r, petals?)
+
+**重复 pattern helpers**：
+  ctx.draw.dashedLine(x1, y1, x2, y2, dashLen?, gap?)
+  ctx.draw.dots(x1, y1, x2, y2, count, radius?)
+  ctx.draw.pearls(x1, y1, x2, y2, count, radius?)
+  ctx.draw.zigzag(x1, y1, x2, y2, amplitude?, teeth?)
+  ctx.draw.wave(x1, y1, x2, y2, amplitude?, cycles?)
+
+**Lucide 核心 icon 推荐（50 个，可用更多名称试试）**：
+- 自然：leaf, flower, flower-2, tree-deciduous, palm-tree, trees, sun, sun-medium, moon, moon-star, cloud, cloud-rain, cloud-snow, snowflake, sparkle, sparkles, star, stars, droplet, droplets, mountain, waves, wind, sprout, citrus
+- 节日：cake, gift, party-popper, candy, candy-cane, bell, music, music-2, ribbon
+- 食物：apple, cherry, grape, banana, coffee, beer, wine, pizza, cookie, ice-cream, croissant
+- 心情：heart, heart-handshake, smile, frown
+- 动物：cat, dog, rabbit, bird, fish, dove, bug, snail
+- 工业：cog, settings, wrench, hammer, anchor, ship, plane, rocket
+- 几何：circle, triangle, square, hexagon, octagon, diamond
+- 商务：tag, ticket, shopping-bag, gem, crown, award, trophy
+- 时间：clock, calendar, hourglass, alarm-clock
+
+API 用法（必返回 paths）：
+  function generate(ctx) {
+    const d = ctx.draw;
+    d.icon('leaf', 12, 12, 18, { rotate: 45 });
+    d.flower(50, 8, 5);
+    return d.getPaths();
+  }
+
+也保留的旧 ctx API（不用手写几何即可不读）：
 - ctx.width=320, ctx.height=160
-- ctx.safeZone={x:24,y:24,w:272,h:112}（文字区，装饰必须避开）
-- ctx.corners=[{x:0,y:0},{x:320,y:0},{x:0,y:160},{x:320,y:160}]
-- ctx.edges={top:{x1,y,x2},bottom,left,right}
-- ctx.Math 仅：sin/cos/tan/PI/sqrt/pow/abs/floor/ceil/round/min/max/random/atan2
+- ctx.safeZone={x:24,y:24,w:272,h:112}
+- ctx.corners / ctx.edges
+- ctx.Math: sin/cos/tan/PI/sqrt/pow/abs/floor/ceil/round/min/max/random/atan2
 
-严禁：全局 Math / eval / Function / require / import / process / setTimeout / fetch / Buffer
+严禁：
+- 全局 Math（用 ctx.Math 或 ctx.draw 替代）
+- eval / Function / require / import / process / setTimeout / fetch / Buffer
+- 直接输出 frameSvgPaths 字段（用 decoratorCode JS 函数）
 
-【创造性要求 — 必须】
-- 为这个 prompt 设计原创算法，不要套用通用模板
-- 思考 prompt 的主题元素：番茄→果实/茎叶；圣诞→雪花/铃铛/松针；中秋→月圆/玉兔；婴儿→奶瓶/玩具；工业→齿轮/管道；...
-- 用 ctx.Math.random() 引入变化让每次结果不同
-- 可画：角装饰 / 边花纹 / 边框 / 散落小元素（避开 safeZone）
+【创造性】根据 prompt 主题挑选合适的 icon + 几何组合，每次输出**不同的算法**。
 
-最小骨架（仅展示结构，你必须替换内容设计专属算法）：
-"function makeStar(cx,cy,r,M){let d='';for(let i=0;i<5;i++){...}return d;} function generate(ctx){const M=ctx.Math;const paths=[];/* 你的算法 */ return paths;}"
-
-不适合输出 decoratorCode 的场景：用户描述含"极简/简洁/纯文字/不要装饰"等 → props 里不放 decoratorCode 字段。
+不适合输出 decoratorCode 场景：用户描述含"极简/简洁/纯文字/不要装饰" → 不输出此字段
 
 [输出示例]
 用户："请保持安静的提示，配安静图标"

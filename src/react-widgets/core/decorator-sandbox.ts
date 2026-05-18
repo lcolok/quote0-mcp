@@ -1,6 +1,7 @@
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import * as vm from 'node:vm';
+import { DecoratorDrawingAPI } from './decorator-drawing-api.js';
 
 const DANGEROUS_IDENTIFIERS = new Set([
   'eval', 'Function', 'require', 'module', 'exports',
@@ -119,8 +120,14 @@ export function executeDecorator(code: string, ctx: DecoratorContext): string[] 
   // 第 2 层：vm.runInNewContext 执行 + timeout
   const wrappedCode = `${code}\n; result = generate(ctx);`;
 
+  const drawApi = new DecoratorDrawingAPI();
+  const enrichedCtx = {
+    ...ctx,
+    draw: drawApi,
+  };
+
   const sandboxGlobals: any = {
-    ctx,
+    ctx: enrichedCtx,
     result: null,
   };
 
@@ -145,15 +152,16 @@ export function executeDecorator(code: string, ctx: DecoratorContext): string[] 
   const result = sandboxGlobals.result;
 
   // 第 3 层：输出验证
-  if (!Array.isArray(result)) {
-    throw new DecoratorSandboxError(
-      `generate() must return string[], got: ${typeof result}`,
-      'output'
-    );
+  // v1.5.4: 如果 generate() 返回了非空 string[]，用那个；否则 fallback 到 ctx.draw 累积的 paths
+  let paths: string[];
+  if (Array.isArray(result) && result.length > 0) {
+    paths = result;
+  } else {
+    paths = drawApi.getPaths();
   }
 
   // sanitize 每个 path + 截 max 32 个 path 防爆炸
-  const cleaned = result
+  const cleaned = paths
     .filter((p: any) => typeof p === 'string' && p.trim().length > 0)
     .map((p: string) => sanitizePathD(p))
     .filter((p: string) => p.length > 0)

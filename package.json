@@ -67,6 +67,7 @@
     "dockerode": "^3.3.5",
     "epdoptimize": "^0.1.3",
     "hono": "^4.9.5",
+    "lucide-static": "^1.16.0",
     "minio": "^8.0.5",
     "openai": "^5.15.0",
     "pg": "^8.16.3",
