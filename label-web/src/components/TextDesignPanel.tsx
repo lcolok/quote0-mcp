@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Sparkles, Printer, RefreshCw, Loader2, AlertCircle, Wand2 } from 'lucide-react';
+import LlmModelSelector from './LlmModelSelector';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -126,6 +127,9 @@ export default function TextDesignPanel() {
           className="resize-none"
         />
       </div>
+
+      {/* LLM 模型选择 */}
+      <LlmModelSelector />
 
       {/* Widget 选择 */}
       <div className="space-y-2">

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
-import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
+import { getActiveLLMConfig, invalidateLLMConfigCache } from '../react-widgets/core/llm-config.js';
+import type { ActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { llmLabelGenerator } from '../react-widgets/services/llm-label-generator.js';
 import { imageLabelGenerator } from '../react-widgets/services/image-label-generator.js';
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
@@ -573,13 +574,13 @@ labelsApp.post('/:id/regenerate', async (c) => {
     const db = getPostgresDatabase();
 
     const labelRes = await db.getPool().query(
-      `SELECT prompt, target_id, source_type, source_model FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
+      `SELECT prompt, target_id, source_type, source_model, llm_model FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
       [id]
     );
     if (labelRes.rows.length === 0) {
       return c.json({ success: false, error: '标签不存在或已归档' }, 404);
     }
-    const { prompt, target_id, source_type, source_model, status } = labelRes.rows[0];
+    const { prompt, target_id, source_type, source_model, llm_model, status } = labelRes.rows[0];
 
     if (status === 'generating') {
       return c.json({ success: false, error: '标签生成中，请稍候再重新生成' }, 400);
@@ -612,7 +613,27 @@ labelsApp.post('/:id/regenerate', async (c) => {
     }
 
     if (source_type === 'widget') {
-      const llmCfg = await getActiveLLMConfig(db);
+      // v1.4.4 伴随任务记录：用 row.llm_model 反查 provider 调 LLM
+      //（不用 active model，保持 label 原作的 model 一致性）
+      const labelLlmModel = llm_model;
+      let llmCfg: ActiveLLMConfig;
+      if (labelLlmModel && labelLlmModel !== 'pending') {
+        const cfgRes = await db.getPool().query(
+          `SELECT p.base_url, p.api_key, p.api_type, m.model_id, m.context_window, m.max_tokens
+           FROM llm_models m JOIN llm_providers p ON p.id = m.provider_id
+           WHERE m.model_id = $1 AND m.enabled = true AND p.enabled = true LIMIT 1`,
+          [labelLlmModel]
+        );
+        if (cfgRes.rows.length > 0) {
+          const r = cfgRes.rows[0];
+          llmCfg = { baseUrl: r.base_url, apiKey: r.api_key, model: r.model_id, apiType: r.api_type, contextWindow: r.context_window, maxTokens: r.max_tokens };
+        } else {
+          // 原 model 已被禁用/删除 → fallback 到 active
+          llmCfg = await getActiveLLMConfig(db);
+        }
+      } else {
+        llmCfg = await getActiveLLMConfig(db);
+      }
       // 用原 prompt + 原 widget+font preference 重新 LLM 调用
       const result = await textLabelGenerator.generate(prompt, target, llmCfg, {
         widgetId: source_model as any,  // 保留原 widget 选择
@@ -705,6 +726,102 @@ labelsApp.delete('/:id', async (c) => {
       },
       500
     );
+  }
+});
+
+// GET /api/llm/models —— 返回所有 enabled provider+model 合并 catalog
+labelsApp.get('/llm/models', async (c) => {
+  try {
+    const db = getPostgresDatabase();
+    const result = await db.getPool().query(`
+      SELECT
+        p.id AS provider_id, p.slug AS provider_slug, p.display_name AS provider_display_name,
+        p.api_type, p.enabled AS provider_enabled,
+        m.id AS model_db_id, m.model_id, m.display_name AS model_display_name,
+        m.context_window, m.max_tokens, m.reasoning, m.enabled AS model_enabled
+      FROM llm_models m
+      JOIN llm_providers p ON p.id = m.provider_id
+      WHERE p.enabled = true AND m.enabled = true
+      ORDER BY p.id, m.id
+    `);
+    return c.json({
+      success: true,
+      models: result.rows.map((r) => ({
+        providerId: r.provider_id,
+        providerSlug: r.provider_slug,
+        providerDisplayName: r.provider_display_name,
+        modelDbId: r.model_db_id,
+        modelId: r.model_id,
+        modelDisplayName: r.model_display_name,
+        contextWindow: r.context_window,
+        maxTokens: r.max_tokens,
+        reasoning: r.reasoning,
+      })),
+    });
+  } catch (error) {
+    console.error('❌ GET /api/llm/models 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// GET /api/llm/active —— 当前选定
+labelsApp.get('/llm/active', async (c) => {
+  try {
+    const db = getPostgresDatabase();
+    const result = await db.getPool().query(`
+      SELECT s.active_provider_id, s.active_model_id, p.slug AS provider_slug,
+             m.model_id, m.display_name AS model_display_name
+      FROM llm_active_setting s
+      JOIN llm_providers p ON p.id = s.active_provider_id
+      JOIN llm_models m ON m.id = s.active_model_id
+      WHERE s.id = 1
+    `);
+    if (result.rows.length === 0) {
+      return c.json({ success: false, error: 'no active setting' }, 404);
+    }
+    const r = result.rows[0];
+    return c.json({
+      success: true,
+      activeProviderId: r.active_provider_id,
+      activeModelDbId: r.active_model_id,
+      providerSlug: r.provider_slug,
+      modelId: r.model_id,
+      modelDisplayName: r.model_display_name,
+    });
+  } catch (error) {
+    console.error('❌ GET /api/llm/active 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// POST /api/llm/active —— 切换 active + 清缓存
+labelsApp.post('/llm/active', async (c) => {
+  try {
+    const body = await c.req.json<{ providerId: number; modelDbId: number }>();
+    if (typeof body.providerId !== 'number' || typeof body.modelDbId !== 'number') {
+      return c.json({ success: false, error: 'providerId 和 modelDbId 必填且需为 number' }, 400);
+    }
+    const db = getPostgresDatabase();
+    // 验证 model 属于 provider 且 enabled
+    const check = await db.getPool().query(
+      `SELECT m.id FROM llm_models m JOIN llm_providers p ON p.id = m.provider_id
+       WHERE m.id = $1 AND p.id = $2 AND m.enabled = true AND p.enabled = true`,
+      [body.modelDbId, body.providerId]
+    );
+    if (check.rows.length === 0) {
+      return c.json({ success: false, error: 'model/provider 不存在或未启用' }, 400);
+    }
+    // 更新单行 llm_active_setting（id=1）
+    await db.getPool().query(
+      `UPDATE llm_active_setting SET active_provider_id = $1, active_model_id = $2, updated_at = now() WHERE id = 1`,
+      [body.providerId, body.modelDbId]
+    );
+    // 清 getActiveLLMConfig() 缓存
+    invalidateLLMConfigCache();
+    return c.json({ success: true, providerId: body.providerId, modelDbId: body.modelDbId });
+  } catch (error) {
+    console.error('❌ POST /api/llm/active 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
   }
 });
 

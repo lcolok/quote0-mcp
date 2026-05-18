@@ -138,6 +138,9 @@ export class PostgresDatabase {
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS font_family text`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS icon_svg text`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS parent_revision_id uuid REFERENCES labels(id) ON DELETE SET NULL`,
+      // v1.4.4: kimi-for-coding provider 改用 dummy api_key（与 siliconflow 一致，
+      // 依赖 Copilot 网关自动注入真实 key，避免硬编码 sk-kimi-... 暴露）
+      `UPDATE llm_providers SET api_key = 'dummy', updated_at = now() WHERE slug = 'kimi-for-coding' AND api_key LIKE 'sk-kimi-%'`,
     ];
   }
 

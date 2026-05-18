@@ -94,3 +94,23 @@ export interface FontMeta {
 export interface PrintRequest {
   niimbotEndpoint?: string;
 }
+
+export interface LlmModelMeta {
+  providerId: number;
+  providerSlug: string;
+  providerDisplayName: string;
+  modelDbId: number;
+  modelId: string;
+  modelDisplayName: string;
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+}
+
+export interface ActiveLlmInfo {
+  activeProviderId: number;
+  activeModelDbId: number;
+  providerSlug: string;
+  modelId: string;
+  modelDisplayName: string;
+}
