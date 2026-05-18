@@ -182,10 +182,21 @@ export default function DetailPage() {
                 {label.iconSvg && (
                   <div className="space-y-1">
                     <span className="text-xs text-muted-foreground">SVG icon (LLM 生成):</span>
-                    <div
-                      className="w-16 h-16 p-2 bg-muted rounded border border-border"
-                      dangerouslySetInnerHTML={{ __html: label.iconSvg }}
-                    />
+                    <div className="w-16 h-16 p-2 bg-muted rounded border border-border flex items-center justify-center">
+                      <svg
+                        width="48"
+                        height="48"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d={label.iconSvg}
+                          fill="currentColor"
+                          stroke="currentColor"
+                          strokeWidth={0.3}
+                        />
+                      </svg>
+                    </div>
                   </div>
                 )}
               </div>
