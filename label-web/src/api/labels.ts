@@ -59,6 +59,13 @@ export const labelsApi = {
       )
       .then((r) => r.data),
 
+  regenDecoration: (id: string) =>
+    client
+      .post<{ success: boolean; id: string; frameSvgPaths: string[]; pngUrl: string }>(
+        `/labels/${id}/regen-decoration`
+      )
+      .then((r) => r.data),
+
   delete: (id: string) =>
     client.delete<{ success: boolean }>(`/labels/${id}`).then((r) => r.data),
 

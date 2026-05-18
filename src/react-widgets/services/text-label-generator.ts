@@ -6,12 +6,14 @@ import { packFromPng } from '../core/bitmap-packer.js';
 import { WIDGETS, getWidget, SUPPORTED_FONTS, type WidgetId, type SupportedFontFamily } from '../core/label-widget-registry.js';
 import type { RenderTarget } from '../core/render-targets.js';
 import type { ActiveLLMConfig } from '../core/llm-config.js';
+import { executeDecorator, buildStandardContext, DecoratorSandboxError } from '../core/decorator-sandbox.js';
 
 export interface TextLabelGenResult {
   widgetId: WidgetId;
   props: Record<string, any>;
   iconSvg: string | null;
   frameSvgPaths: string[] | null;
+  decoratorCode: string | null;
   fontFamily: SupportedFontFamily;
   pngBuffer: Buffer;
   bitmapBuffer: Buffer;
@@ -54,18 +56,29 @@ ${fontList}
    - 价签 / 公告 / 庄重场景 → "alibaba-puhuiti"
    - 诗词 / 文学 / 优雅 → "lxgw-wenkai"
    - 时尚 / 标识 / 个性 → "smiley-sans"
-7. 装饰 frameSvgPaths（可选）：
-   - 字段值是 string[]（path d 值数组），每个 element 是单个 path 的 d 字符串
-   - 坐标系：viewBox = 标签整张尺寸（例如 320 宽 × 160 高，对应 label-T40x20-320 target）
-   - **安全区**：中心 (24-296 x, 24-136 y) 是文字 layout 安全区，必须保持空白 — 装饰只在边缘
-   - 适合场景：用户描述含"花纹/边框/装饰/复古/中式/雕花"等关键词 → 输出 frameSvgPaths
-   - 不适合场景：用户只要"简洁/极简" → 不输出此字段
-   - 建议 4-8 个 path 描述 4 角 + 顶底装饰；笔画粗（fill/stroke 任意，currentColor 自动黑色）
-   - 禁止包含 <svg> <path> 标签，只给纯 d 值字符串
+7. 装饰 decoratorCode（可选，JS 函数代码字符串）：
+   - 字段名 "decoratorCode"，值是 JS 函数代码字符串（不是 path d 数组！）
+   - 必须定义 function generate(ctx) {...} 返回 string[]（SVG path d 数组）
+   - ctx 提供：
+     * ctx.width, ctx.height: 标签像素尺寸（320, 160）
+     * ctx.safeZone: {x: 24, y: 24, w: 272, h: 112}（文字 safe zone，装饰避开此区域）
+     * ctx.corners: [{x:0,y:0},{x:320,y:0},{x:0,y:160},{x:320,y:160}] 4 个角坐标
+     * ctx.edges: { top: {x1, y, x2}, bottom: ..., left: ..., right: ... } 4 条边端点
+     * ctx.Math: 安全 Math 子集（sin/cos/PI/sqrt/floor/random 等）
+   - 函数只能用 ctx.Math（不能用全局 Math）
+   - 禁用：eval / Function / require / import / process / setTimeout / fetch / Buffer 等任何全局 API
+   - 推荐结构：helper 函数（snowflake / vine / cloud 等）+ 主 generate 函数遍历 corners/edges
+   - 创造性发挥：根据用户 prompt 自由设计装饰（不要照搬示例）
+   - 适合场景：含"花纹/装饰/边框/复古/中式/圣诞/雕花/植物/几何"等
+   - 不适合场景：极简/简洁 → 不输出 decoratorCode
 
-[输出示例 - 带装饰]
-用户："番茄 9.9 元价签，四周花纹衬托"
-输出: {"widgetId":"price-tag","fontFamily":"alibaba-puhuiti","props":{"title":"番茄","price":"9.9","unit":"元","frameSvgPaths":["M0 0 L20 0 L0 20 Z","M300 0 L320 0 L320 20 Z","M0 140 L0 160 L20 160 Z","M300 160 L320 160 L320 140 Z","M40 4 Q160 0 280 4 L280 8 Q160 4 40 8 Z","M40 152 Q160 156 280 152 L280 156 Q160 152 40 156 Z"]}}
+[输出示例 1 - 雪花]
+用户："圣诞快乐 礼物盒标签 雪花装饰"
+{"widgetId":"text-two-lines","fontFamily":"alibaba-puhuiti","props":{"title":"圣诞快乐","subtitle":"礼物盒","decoratorCode":"function snowflake(cx,cy,r,M){let d='';for(let i=0;i<6;i++){const a=i*M.PI/3;const x=cx+M.cos(a)*r;const y=cy+M.sin(a)*r;d+='M'+cx+' '+cy+' L'+x+' '+y+' ';const bx=(cx+x)/2;const by=(cy+y)/2;const px=bx-M.sin(a)*r*0.2;const py=by+M.cos(a)*r*0.2;d+='M'+bx+' '+by+' L'+px+' '+py+' ';}return d;}function generate(ctx){const M=ctx.Math;const paths=[];for(const c of ctx.corners){const dx=c.x===0?14:-14;const dy=c.y===0?14:-14;paths.push(snowflake(c.x+dx,c.y+dy,10,M));}for(let i=0;i<5;i++){paths.push(snowflake(50+i*55,8,4,M));paths.push(snowflake(50+i*55,152,4,M));}return paths;}"}}
+
+[输出示例 2 - 中式云纹边框]
+用户："中式茶叶价签 龙井 9.9 元 云纹装饰"
+{"widgetId":"price-tag","fontFamily":"lxgw-wenkai","props":{"title":"龙井","price":"9.9","unit":"元","decoratorCode":"function cloud(cx,cy,size,M){let d='M'+cx+' '+cy;for(let i=0;i<5;i++){const a=i*M.PI*0.4;const r=size*(0.5+M.random()*0.3);d+=' Q'+(cx+M.cos(a-0.2)*r*0.8)+' '+(cy+M.sin(a-0.2)*r*0.8)+' '+(cx+M.cos(a)*r)+' '+(cy+M.sin(a)*r);}return d+' Z';}function generate(ctx){const M=ctx.Math;const paths=[];paths.push(cloud(20,20,16,M));paths.push(cloud(300,20,16,M));paths.push(cloud(20,140,16,M));paths.push(cloud(300,140,16,M));return paths;}"}}
 
 [输出示例]
 用户："请保持安静的提示，配安静图标"
@@ -169,16 +182,45 @@ export class TextLabelGenerator {
       props.iconSvg = iconSvg;
     }
 
-    // 7.5 sanitize frameSvgPaths（数组，每个 path 单独 sanitize）
+    // 7.5 sanitize frameSvgPaths（数组，每个 path 单独 sanitize）—— 兼容 LLM 误回 path 数组
     if (Array.isArray(props.frameSvgPaths)) {
       props.frameSvgPaths = props.frameSvgPaths
         .filter((p: any) => typeof p === 'string' && p.trim().length > 0)
         .map((p: string) => this.sanitizePathD(p))
         .filter((p: string) => p.length > 0)
-        .slice(0, 24);  // 最多 24 个 path 防 LLM 输出爆炸
+        .slice(0, 24); // 最多 24 个 path 防 LLM 输出爆炸
     } else if (props.frameSvgPaths !== undefined) {
       // LLM 误输出非 array → 删除字段
       delete props.frameSvgPaths;
+    }
+
+    // 7.6 v1.5.1: decoratorCode 优先（按需生成）—— 沙箱执行 LLM JS 代码
+    let decoratorCode: string | null = null;
+    let sandboxFrames: string[] | null = null;
+    if (typeof props.decoratorCode === 'string' && props.decoratorCode.trim().length > 0) {
+      decoratorCode = props.decoratorCode;
+      try {
+        const ctx = buildStandardContext(target.widthPx, target.heightPx);
+        sandboxFrames = executeDecorator(decoratorCode, ctx);
+        if (sandboxFrames.length > 0) {
+          // 覆盖 props.frameSvgPaths（sandbox 输出优先）
+          props.frameSvgPaths = sandboxFrames;
+        } else {
+          // 空数组 → 视为无装饰
+          delete props.frameSvgPaths;
+        }
+      } catch (e) {
+        if (e instanceof DecoratorSandboxError) {
+          console.warn(`⚠️ decoratorCode sandbox 失败 (${e.stage}): ${e.message.slice(0, 200)}`);
+        } else {
+          console.warn(`⚠️ decoratorCode 未知错误: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        // 失败不阻塞 — 删 decoratorCode + frameSvgPaths（label 仍 OK 只是无装饰）
+        decoratorCode = null;
+        delete props.frameSvgPaths;
+      }
+      // 从 props 删除 decoratorCode 字段（不需要传给 widget）
+      delete props.decoratorCode;
     }
 
     // 8. satori 渲染（复用 thermal-label-rendering-module 的模式）
@@ -209,12 +251,47 @@ export class TextLabelGenerator {
       props,
       iconSvg,
       frameSvgPaths: Array.isArray(props.frameSvgPaths) ? props.frameSvgPaths : null,
+      decoratorCode,
       fontFamily,
       pngBuffer,
       bitmapBuffer,
       llmLatencyMs,
       llmModel: llmConfig.model,
     };
+  }
+
+  /**
+   * 仅重渲染 widget（不调用 LLM），用于 regen-decoration 等场景。
+   * 给定 widgetId + props + fontFamily + target，跑 satori → sharp → bitmap pack。
+   */
+  async rerenderWidget(
+    widgetId: WidgetId,
+    props: Record<string, any>,
+    fontFamily: SupportedFontFamily,
+    target: RenderTarget
+  ): Promise<{ pngBuffer: Buffer; bitmapBuffer: Buffer }> {
+    const widget = getWidget(widgetId);
+    if (!widget) {
+      throw new Error(`未知 widget: ${widgetId}`);
+    }
+    const fonts = await fontRegistry.getSatoriFonts([fontFamily]);
+    if (fonts.length === 0) {
+      throw new Error(`字体加载失败: ${fontFamily} (assets/fonts/${fontFamily}/ 目录是否有 ttf 文件?)`);
+    }
+    const element = React.createElement(widget.component, {
+      data: props,
+      target,
+      fontFamily,
+    });
+    const svg = await satori(element, {
+      width: target.widthPx,
+      height: target.heightPx,
+      fonts,
+      embedFont: true,
+    });
+    const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
+    const bitmapBuffer = await packFromPng(pngBuffer, target);
+    return { pngBuffer, bitmapBuffer };
   }
 
   /** sanitize path d 值：剥离 LLM 偶尔多出来的 <svg>/<path> 包装，仅保留 d 属性字符 */

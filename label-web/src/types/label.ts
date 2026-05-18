@@ -26,6 +26,7 @@ export interface Label {
   fontFamily?: string | null;
   iconSvg?: string | null;
   frameSvgPaths?: string[] | null;
+  decoratorCode?: string | null;
   parentRevisionId?: string | null;
 }
 

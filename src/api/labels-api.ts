@@ -53,6 +53,7 @@ function rowToLabel(row: any): any {
     fontFamily: row.font_family ?? null,
     iconSvg: row.icon_svg ?? null,
     frameSvgPaths: row.frame_svg_paths ?? null,
+    decoratorCode: row.decorator_code ?? null,
     parentRevisionId: row.parent_revision_id ?? null,
   };
 }
@@ -284,6 +285,87 @@ labelsApp.post('/:id/redither', async (c) => {
   }
 });
 
+// POST /:id/regen-decoration (不调 LLM，仅 re-run sandbox 代码 → 新装饰)
+labelsApp.post('/:id/regen-decoration', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const db = getPostgresDatabase();
+    const labelRes = await db.getPool().query(
+      `SELECT decorator_code, target_id, source_type, widget_props, font_family, icon_svg, prompt, source_model
+       FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
+      [id]
+    );
+    if (labelRes.rows.length === 0) {
+      return c.json({ success: false, error: '标签不存在或已归档' }, 404);
+    }
+    const row = labelRes.rows[0];
+    if (row.source_type !== 'widget') {
+      return c.json({ success: false, error: '仅 widget 类型 label 支持' }, 400);
+    }
+    if (!row.decorator_code) {
+      return c.json({ success: false, error: '该标签无 decoratorCode（生成时未带装饰）' }, 400);
+    }
+
+    const target = BUILTIN_TARGETS.find((t) => t.id === row.target_id) ?? LABEL_T40X20_TARGET;
+
+    // re-run sandbox
+    const { executeDecorator, buildStandardContext } = await import('../react-widgets/core/decorator-sandbox.js');
+    const ctx = buildStandardContext(target.widthPx, target.heightPx);
+    let newFrames: string[];
+    try {
+      newFrames = executeDecorator(row.decorator_code, ctx);
+    } catch (e) {
+      return c.json({ success: false, error: `sandbox 执行失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    }
+
+    // 重渲染 widget 用新 frames
+    const props = { ...(row.widget_props ?? {}), frameSvgPaths: newFrames.length > 0 ? newFrames : undefined };
+    if (row.icon_svg) {
+      props.iconSvg = row.icon_svg;
+    }
+
+    const { pngBuffer, bitmapBuffer } = await textLabelGenerator.rerenderWidget(
+      row.source_model,
+      props,
+      row.font_family ?? 'alibaba-puhuiti',
+      target
+    );
+
+    const pngPath = `labels/${id}.png`;
+    await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, pngBuffer, pngBuffer.length, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=86400',
+    });
+
+    await db.getPool().query(
+      `UPDATE labels
+       SET png_path = $2,
+           widget_props = $3::jsonb,
+           frame_svg_paths = $4::jsonb,
+           bin_bytes = $5,
+           updated_at = now()
+       WHERE id = $1`,
+      [
+        id,
+        pngPath,
+        JSON.stringify(props),
+        newFrames.length > 0 ? JSON.stringify(newFrames) : null,
+        bitmapBuffer.length,
+      ]
+    );
+
+    return c.json({
+      success: true,
+      id,
+      frameSvgPaths: newFrames,
+      pngUrl: `/api/minio-proxy/${pngPath}`,
+    });
+  } catch (error) {
+    console.error('❌ POST /api/labels/:id/regen-decoration 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
 // POST /generate-text (widget 模板库 + LLM 智能填充，async fire-and-forget)
 labelsApp.post('/generate-text', async (c) => {
   try {
@@ -356,9 +438,10 @@ labelsApp.post('/generate-text', async (c) => {
                font_family = $5,
                icon_svg = $6,
                frame_svg_paths = $7::jsonb,
-               llm_model = $8,
-               llm_latency_ms = $9,
-               bin_bytes = $10,
+               decorator_code = $8,
+               llm_model = $9,
+               llm_latency_ms = $10,
+               bin_bytes = $11,
                last_error = NULL,
                updated_at = now()
            WHERE id = $1`,
@@ -370,6 +453,7 @@ labelsApp.post('/generate-text', async (c) => {
             result.fontFamily,
             result.iconSvg,
             result.frameSvgPaths ? JSON.stringify(result.frameSvgPaths) : null,
+            result.decoratorCode,
             result.llmModel,
             result.llmLatencyMs,
             result.bitmapBuffer.length,
@@ -416,7 +500,7 @@ labelsApp.get('/', async (c) => {
 
     const db = getPostgresDatabase();
     let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, source_image_url, last_error,
-               widget_props, font_family, icon_svg, frame_svg_paths, parent_revision_id,
+               widget_props, font_family, icon_svg, frame_svg_paths, decorator_code, parent_revision_id,
                created_at, updated_at
                FROM labels WHERE 1=1`;
     const args: any[] = [];
@@ -649,16 +733,18 @@ labelsApp.post('/:id/regenerate', async (c) => {
       await db.getPool().query(
         `UPDATE labels
          SET png_path = $2, widget_props = $3::jsonb, font_family = $4, icon_svg = $5,
-             frame_svg_paths = $6::jsonb, llm_latency_ms = $7, bin_bytes = $8, updated_at = now()
+             frame_svg_paths = $6::jsonb, decorator_code = $7, llm_latency_ms = $8, bin_bytes = $9, updated_at = now()
          WHERE id = $1`,
         [id, pngPath, JSON.stringify(result.props), result.fontFamily, result.iconSvg,
          result.frameSvgPaths ? JSON.stringify(result.frameSvgPaths) : null,
+         result.decoratorCode,
          result.llmLatencyMs, result.bitmapBuffer.length]
       );
       return c.json({
         success: true, id, sourceType: 'widget', sourceModel: result.widgetId,
         widgetProps: result.props, fontFamily: result.fontFamily, iconSvg: result.iconSvg,
         frameSvgPaths: result.frameSvgPaths,
+        decoratorCode: result.decoratorCode,
         pngPath, pngUrl: `/api/minio-proxy/${pngPath}`, llmLatencyMs: result.llmLatencyMs,
       });
     }

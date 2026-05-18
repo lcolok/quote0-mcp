@@ -79,6 +79,17 @@ export default function DetailPage() {
     },
   });
 
+  const regenDecorationMut = useMutation({
+    mutationFn: (lid: string) => labelsApi.regenDecoration(lid),
+    onSuccess: () => {
+      toast.success('装饰重新生成完成');
+      queryClient.invalidateQueries({ queryKey: ['label', id] });
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.error || '重新生成装饰失败');
+    },
+  });
+
   const archiveMutation = useMutation({
     mutationFn: labelsApi.delete,
     onSuccess: () => {
@@ -206,6 +217,27 @@ export default function DetailPage() {
                       <summary className="text-muted-foreground cursor-pointer">展开 path d 值</summary>
                       <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-auto">
                         {label.frameSvgPaths.join('\n')}
+                      </pre>
+                    </details>
+                  </div>
+                )}
+                {label.decoratorCode && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">装饰函数代码 (LLM 生成):</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => regenDecorationMut.mutate(label.id)}
+                        disabled={regenDecorationMut.isPending}
+                      >
+                        🔀 重新生成装饰
+                      </Button>
+                    </div>
+                    <details className="text-xs">
+                      <summary className="text-muted-foreground cursor-pointer">展开 JS 代码</summary>
+                      <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-auto max-h-64">
+                        {label.decoratorCode}
                       </pre>
                     </details>
                   </div>

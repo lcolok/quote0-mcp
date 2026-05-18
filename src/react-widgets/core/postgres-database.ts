@@ -143,6 +143,8 @@ export class PostgresDatabase {
       `UPDATE llm_providers SET api_key = 'dummy', updated_at = now() WHERE slug = 'kimi-for-coding' AND api_key LIKE 'sk-kimi-%'`,
       // v1.5.0: widget 装饰层 SVG paths（绝对定位边缘装饰）
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS frame_svg_paths jsonb`,
+      // v1.5.1: 装饰函数代码（LLM 写的 JS generator，sandbox 执行产 frameSvgPaths）
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS decorator_code text`,
     ];
   }
 
