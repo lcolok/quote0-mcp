@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { ImageIcon, Loader2, AlertCircle } from 'lucide-react';
+import { ImageIcon, Loader2, AlertCircle, Type } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import StatusBadge from './StatusBadge';
@@ -64,6 +64,12 @@ export default function LabelCard({ label }: LabelCardProps) {
               <Badge variant="outline" className="text-xs border-purple-500/50 text-purple-600 dark:text-purple-400 gap-0.5" title={`AI: ${label.sourceModel ?? ''}`}>
                 <ImageIcon className="h-3 w-3" />
                 {label.sourceModel ?? 'AI'}
+              </Badge>
+            )}
+            {label.sourceType === 'widget' && (
+              <Badge variant="outline" className="text-xs border-blue-500/50 text-blue-600 dark:text-blue-400 gap-0.5" title={label.sourceModel ?? ''}>
+                <Type className="h-3 w-3" />
+                {label.sourceModel ? label.sourceModel.replace('text-', '').replace('-', ' ') : 'widget'}
               </Badge>
             )}
           </div>

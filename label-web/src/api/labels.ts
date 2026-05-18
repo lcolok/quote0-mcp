@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, PrintRequest } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -15,6 +15,21 @@ export const labelsApi = {
     client
       .post<GenerateImageResponse>('/labels/generate-image', req, { timeout: 10_000 })
       .then((r) => r.data),
+
+  generateText: (req: GenerateTextRequest) =>
+    client
+      .post<GenerateTextResponse>('/labels/generate-text', req, { timeout: 10_000 })
+      .then((r) => r.data),
+
+  fetchWidgets: () =>
+    client
+      .get<{ success: boolean; widgets: WidgetMeta[] }>('/labels/widgets')
+      .then((r) => r.data.widgets),
+
+  fetchFonts: () =>
+    client
+      .get<{ success: boolean; fonts: FontMeta[] }>('/labels/fonts')
+      .then((r) => r.data.fonts),
 
   list: (params?: { status?: string; tag?: string; limit?: number }) =>
     client

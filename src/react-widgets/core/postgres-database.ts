@@ -133,6 +133,11 @@ export class PostgresDatabase {
        ALTER TABLE labels ADD CONSTRAINT labels_status_check
          CHECK (status IN ('draft','approved','printed','archived','generating','failed'));
      END $$`,
+      // ADR-0005 (v1.4.0): widget 模板库 + 字体 + v2.0.0 revision 预留
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS widget_props jsonb`,
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS font_family text`,
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS icon_svg text`,
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS parent_revision_id uuid REFERENCES labels(id) ON DELETE SET NULL`,
     ];
   }
 

@@ -3,6 +3,8 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { llmLabelGenerator } from '../react-widgets/services/llm-label-generator.js';
 import { imageLabelGenerator } from '../react-widgets/services/image-label-generator.js';
+import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
+import { listWidgets, SUPPORTED_FONTS, getWidget } from '../react-widgets/core/label-widget-registry.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
@@ -46,6 +48,10 @@ function rowToLabel(row: any): any {
     sourceModel: row.source_model ?? null,
     sourceImageUrl: row.source_image_url ?? null,
     lastError: row.last_error ?? null,
+    widgetProps: row.widget_props ?? null,
+    fontFamily: row.font_family ?? null,
+    iconSvg: row.icon_svg ?? null,
+    parentRevisionId: row.parent_revision_id ?? null,
   };
 }
 
@@ -276,6 +282,127 @@ labelsApp.post('/:id/redither', async (c) => {
   }
 });
 
+// POST /generate-text (widget 模板库 + LLM 智能填充，async fire-and-forget)
+labelsApp.post('/generate-text', async (c) => {
+  try {
+    const body = await c.req.json<{
+      prompt: string;
+      targetId?: string;
+      tags?: string[];
+      preferredWidget?: string;
+      preferredFont?: string;
+    }>();
+    if (!body.prompt || body.prompt.trim() === '') {
+      return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
+    }
+    if (body.preferredWidget && !getWidget(body.preferredWidget)) {
+      return c.json({ success: false, stage: 'validate', error: `未知 widget: ${body.preferredWidget}` }, 400);
+    }
+    if (body.preferredFont && !SUPPORTED_FONTS.some((f) => f.family === body.preferredFont)) {
+      return c.json({ success: false, stage: 'validate', error: `未知字体: ${body.preferredFont}` }, 400);
+    }
+
+    const target =
+      BUILTIN_TARGETS.find((t) => t.id === (body.targetId ?? 'label-T40x20-320')) ??
+      LABEL_T40X20_TARGET;
+
+    const db = getPostgresDatabase();
+
+    // 1) 立刻 INSERT row 占位
+    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
+      `INSERT INTO labels (prompt, svg, target_id, llm_model, bin_bytes, tags,
+                            source_type, status)
+       VALUES ($1, NULL, $2, $3, 0, $4, 'widget', 'generating')
+       RETURNING id, created_at`,
+      [body.prompt, target.id, 'pending', body.tags ?? []]
+    );
+    const labelId = insertRes.rows[0].id;
+
+    // 2) 立刻返回 id
+    const response = c.json({
+      success: true,
+      id: labelId,
+      status: 'generating',
+      sourceType: 'widget',
+      prompt: body.prompt,
+      targetId: target.id,
+      createdAt: insertRes.rows[0].created_at,
+    }, 201);
+
+    // 3) 后台 fire-and-forget LLM + satori 渲染
+    setImmediate(async () => {
+      const t0 = Date.now();
+      try {
+        const llmCfg = await getActiveLLMConfig(db);
+        const result = await textLabelGenerator.generate(body.prompt, target, llmCfg, {
+          widgetId: body.preferredWidget as any,
+          fontFamily: body.preferredFont as any,
+        });
+
+        const pngPath = `labels/${labelId}.png`;
+        await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, max-age=86400',
+        });
+
+        await db.getPool().query(
+          `UPDATE labels
+           SET status = 'draft',
+               png_path = $2,
+               source_model = $3,
+               widget_props = $4::jsonb,
+               font_family = $5,
+               icon_svg = $6,
+               llm_model = $7,
+               llm_latency_ms = $8,
+               bin_bytes = $9,
+               last_error = NULL,
+               updated_at = now()
+           WHERE id = $1`,
+          [
+            labelId,
+            pngPath,
+            result.widgetId,
+            JSON.stringify(result.props),
+            result.fontFamily,
+            result.iconSvg,
+            result.llmModel,
+            result.llmLatencyMs,
+            result.bitmapBuffer.length,
+          ]
+        );
+        console.log(`✅ widget label ${labelId} 完成 (${Date.now() - t0}ms)`);
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        console.error(`❌ widget label ${labelId} 失败:`, errMsg);
+        await db.getPool().query(
+          `UPDATE labels SET status = 'failed', last_error = $2, updated_at = now() WHERE id = $1`,
+          [labelId, errMsg.slice(0, 500)]
+        ).catch((dbErr) => console.error('failed update 也炸了:', dbErr));
+      }
+    });
+
+    return response;
+  } catch (error) {
+    console.error('❌ POST /api/labels/generate-text 失败:', error);
+    return c.json({
+      success: false,
+      stage: 'unknown',
+      error: error instanceof Error ? error.message : '未知错误',
+    }, 500);
+  }
+});
+
+// GET /widgets
+labelsApp.get('/widgets', async (c) => {
+  return c.json({ success: true, widgets: listWidgets() });
+});
+
+// GET /fonts
+labelsApp.get('/fonts', async (c) => {
+  return c.json({ success: true, fonts: [...SUPPORTED_FONTS] });
+});
+
 // GET / (列表，支持 ?status= 和 ?tag= 筛选)
 labelsApp.get('/', async (c) => {
   try {
@@ -284,7 +411,9 @@ labelsApp.get('/', async (c) => {
     const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500));
 
     const db = getPostgresDatabase();
-    let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, source_image_url, last_error, created_at, updated_at
+    let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, source_image_url, last_error,
+               widget_props, font_family, icon_svg, parent_revision_id,
+               created_at, updated_at
                FROM labels WHERE 1=1`;
     const args: any[] = [];
     if (status) {
@@ -373,15 +502,15 @@ labelsApp.post('/:id/print', async (c) => {
 
     // 按 source_type 分发 bitmap 获取
     let bitmapBuffer: Buffer;
-    if (label.source_type === 'image') {
-      // 从 MinIO 下载 dither 后的 1-bit PNG，重新 pack
+    if (label.source_type === 'image' || label.source_type === 'widget') {
+      // 从 MinIO 下载 dither 后 PNG → 重新 pack
       const pngObj = await imageStorage.getClient().getObject(MINIO_BUCKET, label.png_path);
       const chunks: Buffer[] = [];
       for await (const chunk of pngObj) chunks.push(chunk as Buffer);
       const pngBuffer = Buffer.concat(chunks);
       bitmapBuffer = await packFromPng(pngBuffer, target);
     } else {
-      // 默认 / svg：原 SVG → bitmap 路径
+      // svg (老路径)
       const result = await llmLabelGenerator.svgToBitmap(label.svg, target);
       bitmapBuffer = result.bitmapBuffer;
     }
@@ -479,6 +608,31 @@ labelsApp.post('/:id/regenerate', async (c) => {
         success: true, id, sourceType: 'image', sourceModel: source_model,
         sourceImageUrl: result.sourceImageUrl, pngPath, pngUrl: `/api/minio-proxy/${pngPath}`,
         bizyairLatencyMs: result.bizyairLatencyMs,
+      });
+    }
+
+    if (source_type === 'widget') {
+      const llmCfg = await getActiveLLMConfig(db);
+      // 用原 prompt + 原 widget+font preference 重新 LLM 调用
+      const result = await textLabelGenerator.generate(prompt, target, llmCfg, {
+        widgetId: source_model as any,  // 保留原 widget 选择
+      });
+      const pngPath = `labels/${id}.png`;
+      await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=86400',
+      });
+      await db.getPool().query(
+        `UPDATE labels
+         SET png_path = $2, widget_props = $3::jsonb, font_family = $4, icon_svg = $5,
+             llm_latency_ms = $6, bin_bytes = $7, updated_at = now()
+         WHERE id = $1`,
+        [id, pngPath, JSON.stringify(result.props), result.fontFamily, result.iconSvg, result.llmLatencyMs, result.bitmapBuffer.length]
+      );
+      return c.json({
+        success: true, id, sourceType: 'widget', sourceModel: result.widgetId,
+        widgetProps: result.props, fontFamily: result.fontFamily, iconSvg: result.iconSvg,
+        pngPath, pngUrl: `/api/minio-proxy/${pngPath}`, llmLatencyMs: result.llmLatencyMs,
       });
     }
 

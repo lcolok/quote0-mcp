@@ -159,6 +159,37 @@ export default function DetailPage() {
                 />
               </div>
             )}
+            {label.sourceType === 'widget' && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Widget:</span>
+                  <span className="font-medium">{label.sourceModel}</span>
+                </div>
+                {label.fontFamily && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">字体:</span>
+                    <span>{label.fontFamily}</span>
+                  </div>
+                )}
+                {label.widgetProps && (
+                  <details className="text-xs">
+                    <summary className="text-muted-foreground cursor-pointer">Widget props JSON</summary>
+                    <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-auto">
+                      {JSON.stringify(label.widgetProps, null, 2)}
+                    </pre>
+                  </details>
+                )}
+                {label.iconSvg && (
+                  <div className="space-y-1">
+                    <span className="text-xs text-muted-foreground">SVG icon (LLM 生成):</span>
+                    <div
+                      className="w-16 h-16 p-2 bg-muted rounded border border-border"
+                      dangerouslySetInnerHTML={{ __html: label.iconSvg }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">

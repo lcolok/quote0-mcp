@@ -18,10 +18,14 @@ export interface Label {
   llmLatencyMs?: number;
   createdAt: string;
   updatedAt: string;
-  sourceType?: 'svg' | 'component' | 'image';
+  sourceType?: 'svg' | 'component' | 'image' | 'widget';
   sourceModel?: string | null;
   sourceImageUrl?: string | null;
   lastError?: string | null;
+  widgetProps?: Record<string, any> | null;
+  fontFamily?: string | null;
+  iconSvg?: string | null;
+  parentRevisionId?: string | null;
 }
 
 export interface GenerateImageResponse {
@@ -47,6 +51,44 @@ export interface GenerateImageRequest {
   targetId?: string;
   tags?: string[];
   modelOptions?: Record<string, any>;
+}
+
+export interface GenerateTextRequest {
+  prompt: string;
+  targetId?: string;
+  tags?: string[];
+  preferredWidget?: 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag';
+  preferredFont?: 'smiley-sans' | 'lxgw-wenkai' | 'alibaba-puhuiti';
+}
+
+export interface GenerateTextResponse {
+  success: boolean;
+  id: string;
+  status: 'generating';
+  sourceType: 'widget';
+  prompt: string;
+  targetId: string;
+  createdAt: string;
+}
+
+export interface WidgetMeta {
+  id: string;
+  displayName: string;
+  description: string;
+  propsSchema: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    maxLength?: number;
+    description: string;
+  }>;
+  defaultProps: Record<string, any>;
+}
+
+export interface FontMeta {
+  family: string;
+  displayName: string;
+  description: string;
 }
 
 export interface PrintRequest {
