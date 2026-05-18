@@ -270,6 +270,38 @@ export class TextLabelGenerator {
       delete props.decoratorCode;
     }
 
+    // 7.7 v1.5.6: forceDecoration fallback —— LLM 完全不出装饰时强制注入
+    // 适配 Kimi-for-coding 不听 forceDecoration hint / 短 prompt LLM 偷懒等场景
+    const hasFrames = Array.isArray(props.frameSvgPaths) && props.frameSvgPaths.length > 0;
+    if (override?.forceDecoration && !hasFrames) {
+      console.log(`🌸 forceDecoration fallback: LLM (${llmConfig.model}) 未出装饰，注入默认 sparkle 装饰`);
+      const fallbackCode = `function generate(ctx){
+  const d = ctx.draw;
+  const M = ctx.Math;
+  // 4 角 sparkle icon
+  d.icon('sparkles', 4, 4, 16);
+  d.icon('sparkles', 300, 4, 16);
+  d.icon('sparkles', 4, 140, 16);
+  d.icon('sparkles', 300, 140, 16);
+  // 顶底 dashedLine
+  d.dashedLine(28, 8, 292, 8, 3, 2);
+  d.dashedLine(28, 152, 292, 152, 3, 2);
+  // 左右散点装饰
+  for(let i=0;i<3;i++){ d.circle(8, 50+i*30, 1.5); d.circle(312, 50+i*30, 1.5); }
+  return d.getPaths();
+}`;
+      try {
+        const ctxFb = buildStandardContext(target.widthPx, target.heightPx);
+        const fbFrames = executeDecorator(fallbackCode, ctxFb);
+        if (fbFrames.length > 0) {
+          props.frameSvgPaths = fbFrames;
+          decoratorCode = fallbackCode;
+        }
+      } catch (e) {
+        console.warn(`⚠️ fallback decoratorCode 也失败:`, e instanceof Error ? e.message : String(e));
+      }
+    }
+
     // 8. satori 渲染（复用 thermal-label-rendering-module 的模式）
     const fonts = await fontRegistry.getSatoriFonts([fontFamily]);
     if (fonts.length === 0) {
