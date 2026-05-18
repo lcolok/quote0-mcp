@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.5.3
+version: 1.5.4
 
 # 应用名称
 name: Quote0 新闻服务
@@ -162,7 +162,7 @@ services:
 
   # ADR-0002 Phase D：LLM-Gen 标签管理系统 Web 应用（React SPA + Nginx）
   label-web:
-    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.5.3
+    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.5.4
     depends_on:
       - news-api
     healthcheck:
@@ -175,7 +175,7 @@ services:
 
   # 新闻 API 服务
   news-api:
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.5.3
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.5.4
     environment:
       NODE_ENV: production
       PORT: "3001"
