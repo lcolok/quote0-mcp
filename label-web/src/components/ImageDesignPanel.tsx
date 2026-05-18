@@ -2,6 +2,27 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ImageIcon, Printer, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { labelsApi } from '@/api/labels';
 import type { GenerateImageRequest } from '@/types/label';
 
@@ -102,9 +123,8 @@ export default function ImageDesignPanel() {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-gray-700">描述（prompt）</label>
-        <textarea
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+        <label className="block text-sm font-medium text-foreground">描述（prompt）</label>
+        <Textarea
           rows={3}
           placeholder="例如：一只可爱的卡通猫咪图标，圆润的线条"
           value={prompt}
@@ -114,107 +134,135 @@ export default function ImageDesignPanel() {
       </div>
 
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-gray-700">AI 模型</label>
-        <select
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+        <label className="block text-sm font-medium text-foreground">AI 模型</label>
+        <Select
           value={model}
-          onChange={(e) => setModel(e.target.value as GenerateImageRequest['model'])}
+          onValueChange={(v) => setModel(v as GenerateImageRequest['model'])}
           disabled={generateMutation.isPending}
         >
-          {MODELS.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label} — {m.hint}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-gray-500">当前选择：{currentModelInfo.hint}</p>
+          <SelectTrigger>
+            <SelectValue placeholder="选择模型" />
+          </SelectTrigger>
+          <SelectContent>
+            {MODELS.map((m) => (
+              <SelectItem key={m.value} value={m.value}>
+                {m.label} — {m.hint}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">当前选择：{currentModelInfo.hint}</p>
       </div>
 
-      <button
+      <Button
         onClick={handleGenerate}
         disabled={generateMutation.isPending || !prompt.trim()}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:bg-gray-300 transition-all-smooth"
+        className="w-full"
       >
-        <ImageIcon className="h-4 w-4" />
+        <ImageIcon className="h-4 w-4 mr-2" />
         {generateMutation.isPending ? '提交中…' : '🎨 提交生成任务'}
-      </button>
+      </Button>
 
       {isGenerating && trackedLabel && (
-        <div className="flex flex-col items-center justify-center py-12 space-y-3 border border-purple-200 bg-purple-50 rounded-lg">
-          <Loader2 className="h-10 w-10 animate-spin text-purple-600" />
-          <p className="text-sm text-purple-800 font-medium">
+        <Card className="flex flex-col items-center justify-center py-12 space-y-3 border-purple-200 bg-purple-50 dark:bg-purple-950/20">
+          <Loader2 className="h-10 w-10 animate-spin text-purple-600 dark:text-purple-400" />
+          <p className="text-sm text-purple-800 dark:text-purple-300 font-medium">
             AI 正在创作中… 预计 {currentModelInfo.hint.match(/~(\d+)s/)?.[1] ?? '?'}s
           </p>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-muted-foreground">
             可以刷新页面，任务在后台继续。完成后会在右侧列表中显示。
           </p>
-        </div>
+        </Card>
       )}
 
       {isFailed && trackedLabel && (
-        <div className="flex flex-col items-start gap-2 p-4 border border-red-200 bg-red-50 rounded-lg">
-          <div className="flex items-center gap-2 text-red-700 font-medium">
+        <Card className="flex flex-col items-start gap-2 p-4 border-destructive/50 bg-destructive/5">
+          <div className="flex items-center gap-2 text-destructive font-medium">
             <AlertCircle className="h-5 w-5" />
             生成失败
           </div>
-          <p className="text-xs text-red-600 break-all">{trackedLabel.lastError ?? '未知错误'}</p>
-          <button
+          <p className="text-xs text-destructive/80 break-all">{trackedLabel.lastError ?? '未知错误'}</p>
+          <Button
+            variant="link"
+            size="sm"
             onClick={() => regenMutation.mutate(trackedLabel.id)}
             disabled={regenMutation.isPending}
-            className="mt-1 inline-flex items-center gap-1 text-xs text-red-700 hover:text-red-800 underline"
+            className="mt-1 h-auto p-0 text-destructive hover:text-destructive/80"
           >
-            <RefreshCw className="h-3 w-3" /> 重试
-          </button>
-        </div>
+            <RefreshCw className="h-3 w-3 mr-1" /> 重试
+          </Button>
+        </Card>
       )}
 
       {isDraft && trackedLabel && (
-        <div className="border-t border-gray-200 pt-4 space-y-4">
+        <div className="border-t border-border pt-4 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <h3 className="text-xs font-medium text-gray-600">AI 原图（参考）</h3>
-              <div className="aspect-square overflow-hidden rounded-md bg-gray-50 border border-gray-200">
+              <h3 className="text-xs font-medium text-muted-foreground">AI 原图（参考）</h3>
+              <Card className="aspect-square overflow-hidden rounded-md p-0">
                 {trackedLabel.sourceImageUrl ? (
                   <img src={trackedLabel.sourceImageUrl} alt="AI 原图" className="h-full w-full object-contain" />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-gray-400">无原图</div>
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">无原图</div>
                 )}
-              </div>
+              </Card>
             </div>
             <div className="space-y-2">
-              <h3 className="text-xs font-medium text-gray-600">实物效果（dither 后）</h3>
-              <div className="aspect-[2/1] overflow-hidden rounded-md bg-gray-50 border border-gray-200">
+              <h3 className="text-xs font-medium text-muted-foreground">实物效果（dither 后）</h3>
+              <Card className="aspect-[2/1] overflow-hidden rounded-md p-0">
                 <img src={trackedLabel.pngUrl} alt="dither 预览" className="h-full w-full object-contain" />
-              </div>
+              </Card>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => window.confirm('确认打印此标签？') && printMutation.mutate(trackedLabel.id)}
-              disabled={printMutation.isPending}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:bg-gray-300 transition-all-smooth"
-            >
-              <Printer className="h-4 w-4" />
-              {printMutation.isPending ? '打印中…' : '打印到 niimbot'}
-            </button>
-            <button
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={printMutation.isPending}>
+                  <Printer className="h-4 w-4 mr-2" />
+                  {printMutation.isPending ? '打印中…' : '打印到 niimbot'}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>确认打印？</AlertDialogTitle>
+                  <AlertDialogDescription>将向 niimbot 热敏标签机推送本标签。</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>取消</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => printMutation.mutate(trackedLabel.id)}>打印</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <Button
+              variant="outline"
               onClick={() => reditherMutation.mutate(trackedLabel.id)}
               disabled={reditherMutation.isPending}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-all-smooth"
               title="不重新调 AI，仅重新 dither"
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className="h-4 w-4 mr-2" />
               重新 dither
-            </button>
-            <button
-              onClick={() => window.confirm('重新调 AI 生成？（会消耗一次 AI 调用）') && regenMutation.mutate(trackedLabel.id)}
-              disabled={regenMutation.isPending}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-all-smooth"
-            >
-              <RefreshCw className="h-4 w-4" />
-              重新生成
-            </button>
+            </Button>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" disabled={regenMutation.isPending}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  重新生成
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>确认重新生成？</AlertDialogTitle>
+                  <AlertDialogDescription>将重新调用 AI 生成图像（会消耗一次 AI 调用）。</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>取消</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => regenMutation.mutate(trackedLabel.id)}>重新生成</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
       )}

@@ -1,12 +1,13 @@
+import { Badge } from '@/components/ui/badge';
 import type { Label } from '@/types/label';
 
-const statusMap: Record<Label['status'], { text: string; className: string }> = {
-  draft: { text: '草稿', className: 'bg-gray-100 text-gray-700' },
-  approved: { text: '已批准', className: 'bg-blue-100 text-blue-700' },
-  printed: { text: '已打印', className: 'bg-green-100 text-green-700' },
-  archived: { text: '已归档', className: 'bg-yellow-100 text-yellow-700' },
-  generating: { text: '生成中', className: 'bg-purple-100 text-purple-700 animate-pulse' },
-  failed: { text: '失败', className: 'bg-red-100 text-red-700' },
+const statusConfig: Record<Label['status'], { text: string; variant: 'default' | 'secondary' | 'destructive' | 'outline'; className?: string }> = {
+  draft:      { text: '草稿',     variant: 'secondary' },
+  approved:   { text: '已批准',   variant: 'default' },
+  printed:    { text: '已打印',   variant: 'outline', className: 'border-green-500/50 text-green-700 dark:text-green-400' },
+  archived:   { text: '已归档',   variant: 'outline', className: 'border-yellow-500/50 text-yellow-700 dark:text-yellow-400' },
+  generating: { text: '生成中',   variant: 'outline', className: 'border-purple-500/50 text-purple-700 dark:text-purple-400 animate-pulse' },
+  failed:     { text: '失败',     variant: 'destructive' },
 };
 
 interface StatusBadgeProps {
@@ -14,10 +15,6 @@ interface StatusBadgeProps {
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  const { text, className } = statusMap[status];
-  return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}>
-      {text}
-    </span>
-  );
+  const { text, variant, className } = statusConfig[status];
+  return <Badge variant={variant} className={className}>{text}</Badge>;
 }

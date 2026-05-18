@@ -1,4 +1,16 @@
 import { Printer, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 interface ActionBarProps {
   onPrint: () => void;
@@ -25,37 +37,53 @@ export default function ActionBar({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <button
-        onClick={onPrint}
-        disabled={isPrinting}
-        className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-all-smooth"
-      >
-        <Printer className="h-4 w-4" />
-        {isPrinting ? '打印中...' : '打印'}
-      </button>
-      <button
-        onClick={onRegenerate}
-        disabled={isRegenerating}
-        className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-all-smooth"
-      >
-        <RefreshCw className={`h-4 w-4 ${isRegenerating ? 'animate-spin' : ''}`} />
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button variant="outline" disabled={isPrinting}>
+            <Printer className="h-4 w-4 mr-2" />
+            {isPrinting ? '打印中...' : '打印'}
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认打印？</AlertDialogTitle>
+            <AlertDialogDescription>将向 niimbot 热敏标签机推送本标签。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={onPrint}>打印</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Button variant="outline" onClick={onRegenerate} disabled={isRegenerating}>
+        <RefreshCw className={`h-4 w-4 mr-2 ${isRegenerating ? 'animate-spin' : ''}`} />
         {isRegenerating ? '重新生成中...' : '重新生成'}
-      </button>
-      <button
-        onClick={onSave}
-        className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-all-smooth"
-      >
-        <Save className="h-4 w-4" />
+      </Button>
+
+      <Button variant="outline" onClick={onSave}>
+        <Save className="h-4 w-4 mr-2" />
         保存
-      </button>
-      <button
-        onClick={onDiscard}
-        disabled={isDeleting}
-        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 transition-all-smooth"
-      >
-        <Trash2 className="h-4 w-4" />
-        {isDeleting ? '丢弃中...' : '丢弃'}
-      </button>
+      </Button>
+
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button variant="destructive" disabled={isDeleting}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            {isDeleting ? '丢弃中...' : '丢弃'}
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认丢弃？</AlertDialogTitle>
+            <AlertDialogDescription>此操作将删除当前标签，无法撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={onDiscard}>丢弃</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

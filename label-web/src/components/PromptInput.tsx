@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@/components/ui/button';
 
 interface PromptInputProps {
   onGenerate: (prompt: string) => void;
@@ -17,26 +19,22 @@ export default function PromptInput({ onGenerate, isLoading }: PromptInputProps)
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <label htmlFor="prompt" className="block text-sm font-medium text-gray-700">
+      <label htmlFor="prompt" className="block text-sm font-medium text-foreground">
         描述你想要的标签
       </label>
-      <textarea
+      <Textarea
         id="prompt"
         rows={3}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         placeholder="例: 会议室 A 门牌 / 番茄 9.9 元价签"
-        className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 resize-none"
+        className="resize-none"
       />
       <div className="flex justify-end">
-        <button
-          type="submit"
-          disabled={isLoading || !prompt.trim()}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 transition-all-smooth"
-        >
-          <Sparkles className="h-4 w-4" />
+        <Button type="submit" disabled={isLoading || !prompt.trim()}>
+          <Sparkles className="h-4 w-4 mr-2" />
           {isLoading ? '生成中...' : '生成'}
-        </button>
+        </Button>
       </div>
     </form>
   );
