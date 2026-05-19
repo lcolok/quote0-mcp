@@ -10,6 +10,7 @@ import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
+import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
 
 const labelsApp = new Hono();
 const imageStorage = getImageStorage();
@@ -447,6 +448,54 @@ labelsApp.get('/widgets', async (c) => {
 // GET /fonts
 labelsApp.get('/fonts', async (c) => {
   return c.json({ success: true, fonts: [...SUPPORTED_FONTS] });
+});
+
+// GET /current-target — 查询当前 niimbot 装载标签
+labelsApp.get('/current-target', async (c) => {
+  try {
+    const info = await niimbotClient.queryCurrentLabel();
+    if (!info) {
+      return c.json({
+        success: false,
+        error: 'niimbot 网关无响应或当前未装载 RFID 标签',
+        fallback: {
+          widthMm: 40,
+          heightMm: 20,
+          widthPx: 320,
+          heightPx: 160,
+          source: 'default',
+        },
+      });
+    }
+    return c.json({
+      success: true,
+      target: {
+        widthMm: info.spec.w,
+        heightMm: info.spec.h,
+        widthPx: info.widthPx,
+        heightPx: info.heightPx,
+        sku: info.spec.sku,
+        rfidBarcode: info.rfid.barcode,
+        totalMm: info.rfid.totalMm,
+        usedMm: info.rfid.usedMm,
+        remainingMm: info.rfid.totalMm - info.rfid.usedMm,
+        device: info.device
+          ? {
+              model: info.device.deviceType === 775 ? 'NiimBot B21' : `device_type=${info.device.deviceType}`,
+              battery: info.device.battery,
+              serial: info.device.serial,
+              swVersion: info.device.swVersion,
+            }
+          : null,
+        source: info.source,
+      },
+    });
+  } catch (e) {
+    return c.json({
+      success: false,
+      error: e instanceof Error ? e.message : String(e),
+    }, 500);
+  }
 });
 
 // ============ Image Presets ============

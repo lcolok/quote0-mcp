@@ -5,6 +5,9 @@ import { imageLabelGenerator } from '../react-widgets/services/image-label-gener
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
+import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
+import { buildThermalLabelPrompt, type ThermalLabelContext } from '../react-widgets/services/thermal-prompt-injector.js';
+import type { RenderTarget } from '../react-widgets/core/render-targets.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
 const TICK_MS = 5000;
@@ -156,17 +159,56 @@ async function executeWidgetJob(payload: any): Promise<string> {
 
 async function executeImageJob(payload: any): Promise<string> {
   const db = getPostgresDatabase();
-  const target =
-    BUILTIN_TARGETS.find((t) => t.id === (payload.targetId ?? 'label-T40x20-320')) ??
-    LABEL_T40X20_TARGET;
 
+  // 1. 查询 niimbot 当前装载（best-effort，失败 fallback）
+  const currentLabel = await niimbotClient.queryCurrentLabel();
+
+  // 2. resolve target —— 优先 RFID 推导，fallback BUILTIN_TARGETS
+  let target: RenderTarget;
+  let labelMeta: ThermalLabelContext;
+  if (currentLabel) {
+    target = {
+      id: `niimbot-rfid-${currentLabel.spec.sku || `${currentLabel.spec.w}x${currentLabel.spec.h}`}`,
+      kind: 'thermal-label',
+      widthPx: currentLabel.widthPx,
+      heightPx: currentLabel.heightPx,
+      dpi: 203,
+      colorMode: 'mono-1bit',
+      physical: { widthMm: currentLabel.spec.w, heightMm: currentLabel.spec.h },
+      defaultFontStack: ['smiley-sans'],
+    };
+    labelMeta = {
+      widthMm: currentLabel.spec.w,
+      heightMm: currentLabel.spec.h,
+      widthPx: currentLabel.widthPx,
+      heightPx: currentLabel.heightPx,
+    };
+    console.log(`🏷️ niimbot RFID 检测到: ${currentLabel.spec.w}×${currentLabel.spec.h}mm (${currentLabel.spec.sku}) [${currentLabel.source}]`);
+  } else {
+    target = BUILTIN_TARGETS.find((t) => t.id === (payload.targetId ?? 'label-T40x20-320')) ?? LABEL_T40X20_TARGET;
+    labelMeta = {
+      widthMm: target.physical?.widthMm,
+      heightMm: target.physical?.heightMm,
+      widthPx: target.widthPx,
+      heightPx: target.heightPx,
+    };
+    console.warn(`⚠️ niimbot RFID 不可用，fallback target=${target.id}`);
+  }
+
+  // 3. 注入热敏标签约束到 prompt
+  const enhancedPrompt = buildThermalLabelPrompt(payload.prompt, labelMeta);
+  console.log(`📝 enhanced prompt (${enhancedPrompt.length} chars): ${enhancedPrompt.slice(0, 100)}...`);
+
+  // 4. 调 BizyAir 生成（passing enhanced prompt）
   const result = await imageLabelGenerator.generate(
-    payload.prompt,
+    enhancedPrompt,
     payload.model,
     target,
     payload.modelOptions
   );
 
+  // 5. INSERT labels — 注意 prompt 字段存**原始用户 prompt**（让 preset/UI 显示干净）
+  //    enhanced prompt 不持久化（每次 redither/regenerate 重新构造，自动适配最新装载）
   const labelId = crypto.randomUUID();
   const pngPath = `labels/${labelId}.png`;
   const imageStorage = getImageStorage();
@@ -184,7 +226,7 @@ async function executeImageJob(payload: any): Promise<string> {
      VALUES ($1, $2, NULL, $3, $4, $5, $6, 'image', $7, $8, $9, $10, 'draft')`,
     [
       labelId,
-      payload.prompt,
+      payload.prompt,            // ← 原始 prompt
       target.id,
       payload.model,
       result.bitmapBuffer.length,

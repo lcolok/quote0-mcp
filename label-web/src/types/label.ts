@@ -151,3 +151,22 @@ export interface UpdatePresetRequest {
   prompt?: string;
   model?: string | null;
 }
+
+export interface CurrentTargetInfo {
+  widthMm: number;
+  heightMm: number;
+  widthPx: number;
+  heightPx: number;
+  sku?: string;
+  rfidBarcode?: string;
+  totalMm?: number;
+  usedMm?: number;
+  remainingMm?: number;
+  device?: {
+    model: string;
+    battery: number;
+    serial: string;
+    swVersion: string;
+  } | null;
+  source: 'spec-local' | 'spec-cloud' | 'default';
+}

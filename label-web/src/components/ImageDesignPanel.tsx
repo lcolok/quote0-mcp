@@ -41,6 +41,16 @@ export default function ImageDesignPanel() {
   const [model, setModel] = useState<GenerateImageRequest['model']>('sd5');
   const [trackingJobId, setTrackingJobId] = useState<string | null>(null);
 
+  const { data: targetData } = useQuery({
+    queryKey: ['niimbot-current-target'],
+    queryFn: () => labelsApi.getCurrentTarget(),
+    staleTime: 60_000,
+    refetchOnMount: 'always',
+  });
+
+  const currentTarget = targetData?.success ? targetData.target : null;
+  const fallbackTarget = targetData?.fallback;
+
   const generateMutation = useMutation({
     mutationFn: (req: GenerateImageRequest) => labelsApi.generateImage(req),
     onSuccess: (data) => {
@@ -132,6 +142,30 @@ export default function ImageDesignPanel() {
 
   return (
     <div className="space-y-4">
+      {/* 当前打印目标显示 */}
+      {targetData && (
+        <div className={`flex items-center gap-2 p-3 rounded border text-sm ${currentTarget ? 'bg-muted/50 border-border' : 'bg-destructive/10 border-destructive/30 text-destructive'}`}>
+          {currentTarget ? <Printer className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
+          <span>
+            {currentTarget ? (
+              <>
+                将打印到 <strong>{currentTarget.device?.model ?? 'NiimBot 打印机'}</strong>，
+                装载 <strong>{currentTarget.widthMm}×{currentTarget.heightMm}mm</strong> RFID 标签
+                {currentTarget.remainingMm !== undefined && currentTarget.totalMm !== undefined && (
+                  <span className="text-xs text-muted-foreground ml-2">
+                    （剩余 {currentTarget.remainingMm}/{currentTarget.totalMm}mm）
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                未检测到 niimbot 网关，按 <strong>{fallbackTarget?.widthMm}×{fallbackTarget?.heightMm}mm</strong> 默认尺寸生成
+              </>
+            )}
+          </span>
+        </div>
+      )}
+
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <label className="block text-sm font-medium text-foreground">描述（prompt）</label>
