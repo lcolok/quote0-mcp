@@ -123,3 +123,31 @@ export interface ActiveLlmInfo {
   modelId: string;
   modelDisplayName: string;
 }
+
+export interface ImagePreset {
+  id: string;
+  name: string;
+  prompt: string;
+  model: string | null;
+  modelOptions: Record<string, any> | null;
+  thumbnailUrl: string | null;
+  sourceLabelId: string | null;
+  useCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePresetRequest {
+  name: string;
+  prompt: string;
+  model?: string | null;
+  modelOptions?: Record<string, any> | null;
+  sourceLabelId?: string | null;
+}
+
+export interface UpdatePresetRequest {
+  name?: string;
+  prompt?: string;
+  model?: string | null;
+}

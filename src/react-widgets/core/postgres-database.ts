@@ -168,6 +168,24 @@ export class PostgresDatabase {
         WHERE state IN ('queued','running')`,
       `CREATE INDEX IF NOT EXISTS label_jobs_created_at_idx
         ON label_jobs(created_at DESC)`,
+      // v1.7.0: 图像 preset 表（提示词预设，复用 labels.png_path 作为缩略图）
+      `CREATE TABLE IF NOT EXISTS image_presets (
+        id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        name             text NOT NULL,
+        prompt           text NOT NULL,
+        model            text,
+        model_options    jsonb,
+        thumbnail_path   text,
+        source_label_id  uuid REFERENCES labels(id) ON DELETE SET NULL,
+        use_count        int NOT NULL DEFAULT 0,
+        last_used_at     timestamptz,
+        created_at       timestamptz NOT NULL DEFAULT now(),
+        updated_at       timestamptz NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS image_presets_created_at_idx
+        ON image_presets(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS image_presets_last_used_at_idx
+        ON image_presets(last_used_at DESC NULLS LAST)`,
     ];
   }
 

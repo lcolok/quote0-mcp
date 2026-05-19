@@ -2,6 +2,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, Printer, RefreshCw, Archive, ImageIcon } from 'lucide-react';
+import SavePresetDialog from '@/components/SavePresetDialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -348,6 +349,14 @@ export default function DetailPage() {
               <RefreshCw className={`h-4 w-4 mr-2 ${reditherMutation.isPending ? 'animate-spin' : ''}`} />
               {reditherMutation.isPending ? '重新 dither 中...' : '重新 dither'}
             </Button>
+          )}
+
+          {label.sourceType === 'image' && (
+            <SavePresetDialog
+              labelId={label.id}
+              defaultPrompt={label.prompt}
+              defaultModel={label.sourceModel}
+            />
           )}
 
           <AlertDialog>

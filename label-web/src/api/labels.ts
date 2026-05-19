@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob, ImagePreset, CreatePresetRequest, UpdatePresetRequest } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -104,4 +104,19 @@ export const labelsApi = {
     client
       .post<{ success: boolean }>('/llm/active', { provider_id: providerId, model_id: modelDbId })
       .then((r) => r.data),
+
+  listPresets: () =>
+    client.get<{ success: boolean; presets: ImagePreset[] }>('/labels/presets').then((r) => r.data.presets),
+
+  createPreset: (req: CreatePresetRequest) =>
+    client.post<{ success: boolean; id: string; createdAt: string }>('/labels/presets', req).then((r) => r.data),
+
+  updatePreset: (id: string, req: UpdatePresetRequest) =>
+    client.patch<{ success: boolean }>(`/labels/presets/${id}`, req).then((r) => r.data),
+
+  deletePreset: (id: string) =>
+    client.delete<{ success: boolean }>(`/labels/presets/${id}`).then((r) => r.data),
+
+  recordUsePreset: (id: string) =>
+    client.post<{ success: boolean }>(`/labels/presets/${id}/use`, {}).then((r) => r.data),
 };

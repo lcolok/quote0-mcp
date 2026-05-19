@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ImageIcon, Printer, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
+import PresetSelector from './PresetSelector';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -132,7 +133,17 @@ export default function ImageDesignPanel() {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-foreground">描述（prompt）</label>
+        <div className="flex items-center justify-between gap-2">
+          <label className="block text-sm font-medium text-foreground">描述（prompt）</label>
+          <PresetSelector
+            disabled={generateMutation.isPending}
+            onSelect={(p) => {
+              setPrompt(p.prompt);
+              if (p.model) setModel(p.model as any);
+              toast.success(`已应用预设：${p.name}`);
+            }}
+          />
+        </div>
         <Textarea
           rows={3}
           placeholder="例如：一只可爱的卡通猫咪图标，圆润的线条"

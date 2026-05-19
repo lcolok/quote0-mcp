@@ -156,10 +156,6 @@ labelsApp.post('/generate-image', async (c) => {
       return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
     }
 
-    const target =
-      BUILTIN_TARGETS.find((t) => t.id === (body.targetId ?? 'label-T40x20-320')) ??
-      LABEL_T40X20_TARGET;
-
     const db = getPostgresDatabase();
 
     // idempotency: 如果 clientRequestId 已存在，直接返回已有 job
@@ -174,7 +170,7 @@ labelsApp.post('/generate-image', async (c) => {
       }
     }
 
-    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
+    const insertRes = await db.getPool().query<{ id: string; state: string; created_at: Date }>(
       `INSERT INTO label_jobs (job_type, payload, client_request_id)
        VALUES ('image', $1::jsonb, $2)
        RETURNING id, state, created_at`,
@@ -360,10 +356,6 @@ labelsApp.post('/generate-text', async (c) => {
       return c.json({ success: false, stage: 'validate', error: `未知字体: ${body.preferredFont}` }, 400);
     }
 
-    const target =
-      BUILTIN_TARGETS.find((t) => t.id === (body.targetId ?? 'label-T40x20-320')) ??
-      LABEL_T40X20_TARGET;
-
     const db = getPostgresDatabase();
 
     // idempotency: 如果 clientRequestId 已存在，直接返回已有 job
@@ -378,7 +370,7 @@ labelsApp.post('/generate-text', async (c) => {
       }
     }
 
-    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
+    const insertRes = await db.getPool().query<{ id: string; state: string; created_at: Date }>(
       `INSERT INTO label_jobs (job_type, payload, client_request_id)
        VALUES ('widget', $1::jsonb, $2)
        RETURNING id, state, created_at`,
@@ -455,6 +447,154 @@ labelsApp.get('/widgets', async (c) => {
 // GET /fonts
 labelsApp.get('/fonts', async (c) => {
   return c.json({ success: true, fonts: [...SUPPORTED_FONTS] });
+});
+
+// ============ Image Presets ============
+// ⚠️ 必须放在 GET/DELETE /:id 之前，否则 Hono 会把 "presets" 当成 :id 参数
+
+// GET /api/labels/presets — 列表（按 last_used_at NULLS LAST, created_at DESC 排序）
+labelsApp.get('/presets', async (c) => {
+  try {
+    const db = getPostgresDatabase();
+    const r = await db.getPool().query(`
+      SELECT id, name, prompt, model, model_options,
+             thumbnail_path, source_label_id,
+             use_count, last_used_at, created_at, updated_at
+        FROM image_presets
+       ORDER BY last_used_at DESC NULLS LAST, created_at DESC
+    `);
+    const presets = r.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      prompt: row.prompt,
+      model: row.model,
+      modelOptions: row.model_options,
+      thumbnailUrl: row.thumbnail_path ? `/api/minio-proxy/${row.thumbnail_path}` : null,
+      sourceLabelId: row.source_label_id,
+      useCount: row.use_count,
+      lastUsedAt: row.last_used_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+    return c.json({ success: true, presets });
+  } catch (e) {
+    console.error('GET /presets 失败:', e);
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// POST /api/labels/presets — 新建（必填 name + prompt；可选 sourceLabelId 自动取 model/png_path）
+labelsApp.post('/presets', async (c) => {
+  try {
+    const body = await c.req.json();
+    if (!body.name || typeof body.name !== 'string' || !body.name.trim()) {
+      return c.json({ success: false, error: 'name 必填' }, 400);
+    }
+    if (!body.prompt || typeof body.prompt !== 'string' || !body.prompt.trim()) {
+      return c.json({ success: false, error: 'prompt 必填' }, 400);
+    }
+    const db = getPostgresDatabase();
+
+    // 如果给了 sourceLabelId，从 labels 表取 png_path / source_model 作为默认值
+    let thumbnailPath: string | null = null;
+    let resolvedModel: string | null = body.model ?? null;
+    if (body.sourceLabelId) {
+      const lr = await db.getPool().query(
+        `SELECT png_path, source_model FROM labels WHERE id = $1`,
+        [body.sourceLabelId]
+      );
+      if (lr.rows[0]) {
+        thumbnailPath = lr.rows[0].png_path ?? null;
+        if (!resolvedModel) resolvedModel = lr.rows[0].source_model ?? null;
+      }
+    }
+
+    const r = await db.getPool().query(
+      `INSERT INTO image_presets (name, prompt, model, model_options, thumbnail_path, source_label_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+       RETURNING id, created_at`,
+      [
+        body.name.trim().slice(0, 100),
+        body.prompt.trim().slice(0, 4000),
+        resolvedModel,
+        body.modelOptions ? JSON.stringify(body.modelOptions) : null,
+        thumbnailPath,
+        body.sourceLabelId ?? null,
+      ]
+    );
+    return c.json({ success: true, id: r.rows[0].id, createdAt: r.rows[0].created_at }, 201);
+  } catch (e) {
+    console.error('POST /presets 失败:', e);
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// PATCH /api/labels/presets/:id — 编辑 name / prompt / model
+labelsApp.patch('/presets/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    // 只允许改这三个字段；其他字段忽略
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+    if (typeof body.name === 'string') {
+      sets.push(`name = $${idx++}`);
+      vals.push(body.name.trim().slice(0, 100));
+    }
+    if (typeof body.prompt === 'string') {
+      sets.push(`prompt = $${idx++}`);
+      vals.push(body.prompt.trim().slice(0, 4000));
+    }
+    if (body.model !== undefined) {  // 允许传 null 清空
+      sets.push(`model = $${idx++}`);
+      vals.push(body.model);
+    }
+    if (sets.length === 0) {
+      return c.json({ success: false, error: '无可更新字段' }, 400);
+    }
+    sets.push(`updated_at = now()`);
+    vals.push(id);
+    const r = await getPostgresDatabase().getPool().query(
+      `UPDATE image_presets SET ${sets.join(', ')} WHERE id = $${idx} RETURNING id`,
+      vals
+    );
+    if (r.rowCount === 0) return c.json({ success: false, error: 'preset 不存在' }, 404);
+    return c.json({ success: true });
+  } catch (e) {
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// DELETE /api/labels/presets/:id
+labelsApp.delete('/presets/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const r = await getPostgresDatabase().getPool().query(
+      `DELETE FROM image_presets WHERE id = $1`, [id]
+    );
+    if (r.rowCount === 0) return c.json({ success: false, error: 'preset 不存在' }, 404);
+    return c.json({ success: true });
+  } catch (e) {
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// POST /api/labels/presets/:id/use — 记录使用（前端选 preset 时调，更新 use_count + last_used_at）
+labelsApp.post('/presets/:id/use', async (c) => {
+  try {
+    const id = c.req.param('id');
+    await getPostgresDatabase().getPool().query(
+      `UPDATE image_presets
+          SET use_count = use_count + 1,
+              last_used_at = now()
+        WHERE id = $1`,
+      [id]
+    );
+    return c.json({ success: true });
+  } catch (e) {
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
 });
 
 // GET / (列表，支持 ?status= 和 ?tag= 筛选)
