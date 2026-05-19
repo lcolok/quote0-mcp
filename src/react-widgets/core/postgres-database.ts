@@ -186,6 +186,31 @@ export class PostgresDatabase {
         ON image_presets(created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS image_presets_last_used_at_idx
         ON image_presets(last_used_at DESC NULLS LAST)`,
+      // v1.9.0: image_presets 升级为「视觉风格教学样本」
+      `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS style_mode text NOT NULL DEFAULT 'oneshot'`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'image_presets_style_mode_check') THEN
+          ALTER TABLE image_presets ADD CONSTRAINT image_presets_style_mode_check
+            CHECK (style_mode IN ('oneshot','static_suffix'));
+        END IF;
+      END $$`,
+      `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS static_suffix_text text`,
+      `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS source_image_url text`,
+      `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS display_order int NOT NULL DEFAULT 0`,
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS applied_preset_id uuid REFERENCES image_presets(id) ON DELETE SET NULL`,
+      // v1.9.0 内置 "🌡️ 热敏默认" 系统 preset（is_system=true, static_suffix 模式）
+      // static_suffix_text 是 v1.8.0 thermal-prompt-injector 的核心约束（英文，~580 字）
+      `INSERT INTO image_presets (id, name, prompt, is_system, style_mode, static_suffix_text, display_order)
+      SELECT gen_random_uuid(),
+             '🌡️ 热敏默认',
+             '黑白横向 1-bit 友好热敏标签风格',
+             true,
+             'static_suffix',
+             E'Output style: Designed for thermal label printer.\nComposition: horizontal wide banner layout, with sufficient white margin around all edges for printer alignment.\nColors: Pure black and white only — no grayscale, no gradients, no shadows, no anti-aliasing, no semi-transparent regions.\nStrokes: Use thick bold lines and large solid black or white shapes, optimized for clean 1-bit dithering at small print sizes.\nAesthetic: Minimal flat illustration / sticker / icon / decorative print, high visual clarity.',
+             -100
+      WHERE NOT EXISTS (SELECT 1 FROM image_presets WHERE is_system = true AND name = '🌡️ 热敏默认')`,
     ];
   }
 

@@ -6,7 +6,7 @@ import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
-import { buildThermalLabelPrompt, type ThermalLabelContext } from '../react-widgets/services/thermal-prompt-injector.js';
+import { promptOrchestrator } from '../react-widgets/services/prompt-orchestrator.js';
 import type { RenderTarget } from '../react-widgets/core/render-targets.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
@@ -165,7 +165,7 @@ async function executeImageJob(payload: any): Promise<string> {
 
   // 2. resolve target —— 优先 RFID 推导，fallback BUILTIN_TARGETS
   let target: RenderTarget;
-  let labelMeta: ThermalLabelContext;
+  let targetMeta: { widthMm?: number; heightMm?: number; widthPx: number; heightPx: number };
   if (currentLabel) {
     target = {
       id: `niimbot-rfid-${currentLabel.spec.sku || `${currentLabel.spec.w}x${currentLabel.spec.h}`}`,
@@ -177,16 +177,16 @@ async function executeImageJob(payload: any): Promise<string> {
       physical: { widthMm: currentLabel.spec.w, heightMm: currentLabel.spec.h },
       defaultFontStack: ['smiley-sans'],
     };
-    labelMeta = {
+    targetMeta = {
       widthMm: currentLabel.spec.w,
       heightMm: currentLabel.spec.h,
       widthPx: currentLabel.widthPx,
       heightPx: currentLabel.heightPx,
     };
-    console.log(`🏷️ niimbot RFID 检测到: ${currentLabel.spec.w}×${currentLabel.spec.h}mm (${currentLabel.spec.sku}) [${currentLabel.source}]`);
+    console.log(`🏷️ niimbot RFID 检测到: ${currentLabel.spec.w}×${currentLabel.spec.h}mm (${currentLabel.spec.sku})`);
   } else {
     target = BUILTIN_TARGETS.find((t) => t.id === (payload.targetId ?? 'label-T40x20-320')) ?? LABEL_T40X20_TARGET;
-    labelMeta = {
+    targetMeta = {
       widthMm: target.physical?.widthMm,
       heightMm: target.physical?.heightMm,
       widthPx: target.widthPx,
@@ -195,20 +195,83 @@ async function executeImageJob(payload: any): Promise<string> {
     console.warn(`⚠️ niimbot RFID 不可用，fallback target=${target.id}`);
   }
 
-  // 3. 注入热敏标签约束到 prompt
-  const enhancedPrompt = buildThermalLabelPrompt(payload.prompt, labelMeta);
-  console.log(`📝 enhanced prompt (${enhancedPrompt.length} chars): ${enhancedPrompt.slice(0, 100)}...`);
+  // 3. 解析 presetId —— v1.9.0 兼容策略：
+  //    - payload.presetId === 'none' → 不应用任何 preset（前端 v1.10 显式传）
+  //    - payload.presetId === undefined → 老前端兼容，自动应用系统 "热敏默认"
+  //    - payload.presetId === <uuid> → 应用指定 preset
+  let appliedPreset: import('../react-widgets/services/prompt-orchestrator.js').AppliedPreset | null = null;
+  let appliedPresetId: string | null = null;
 
-  // 4. 调 BizyAir 生成（passing enhanced prompt）
+  if (payload.presetId === 'none') {
+    appliedPreset = null;
+  } else if (payload.presetId && typeof payload.presetId === 'string') {
+    // 显式 preset
+    const pr = await db.getPool().query(
+      `SELECT id, name, prompt, source_image_url, thumbnail_path, style_mode, static_suffix_text
+         FROM image_presets WHERE id = $1`,
+      [payload.presetId]
+    );
+    if (pr.rows[0]) {
+      const p = pr.rows[0];
+      const srcUrl = p.source_image_url
+        ?? (p.thumbnail_path ? `/api/minio-proxy/${p.thumbnail_path}` : null);
+      if (!srcUrl && p.style_mode === 'oneshot') {
+        console.warn(`⚠️ preset ${p.id} (oneshot) 无 source image，回退 static_suffix 默认`);
+      } else {
+        appliedPreset = {
+          id: p.id,
+          name: p.name,
+          prompt: p.prompt,
+          sourceImageUrl: srcUrl ?? '',
+          styleMode: p.style_mode,
+          staticSuffixText: p.static_suffix_text,
+        };
+        appliedPresetId = p.id;
+      }
+    }
+  } else {
+    // payload.presetId 未传 (老前端 v1.7/1.8) → 自动应用系统 "热敏默认"
+    const pr = await db.getPool().query(
+      `SELECT id, name, prompt, source_image_url, thumbnail_path, style_mode, static_suffix_text
+         FROM image_presets WHERE is_system = true AND name = '🌡️ 热敏默认' LIMIT 1`
+    );
+    if (pr.rows[0]) {
+      const p = pr.rows[0];
+      appliedPreset = {
+        id: p.id,
+        name: p.name,
+        prompt: p.prompt,
+        sourceImageUrl: '',
+        styleMode: 'static_suffix',
+        staticSuffixText: p.static_suffix_text,
+      };
+      appliedPresetId = p.id;
+    }
+  }
+
+  // 4. ref image URLs（v1.10 前端会传，老前端不传）
+  const refImageUrls: string[] = Array.isArray(payload.refImageUrls) ? payload.refImageUrls : [];
+
+  // 5. 编排 final prompt（4 分支决策由 orchestrator 处理）
+  const llmCfg = await getActiveLLMConfig(db);
+  const orchestrated = await promptOrchestrator.orchestrate({
+    userPrompt: payload.prompt,
+    preset: appliedPreset,
+    refImageUrls,
+    target: targetMeta,
+    llmConfig: llmCfg,
+  });
+  console.log(`🎨 orchestrate mode=${orchestrated.mode}, llm=${orchestrated.llmLatencyMs}ms, prompt len=${orchestrated.finalPrompt.length}`);
+
+  // 6. 调 BizyAir 生成（passing final prompt）
   const result = await imageLabelGenerator.generate(
-    enhancedPrompt,
+    orchestrated.finalPrompt,
     payload.model,
     target,
     payload.modelOptions
   );
 
-  // 5. INSERT labels — 注意 prompt 字段存**原始用户 prompt**（让 preset/UI 显示干净）
-  //    enhanced prompt 不持久化（每次 redither/regenerate 重新构造，自动适配最新装载）
+  // 7. INSERT labels — prompt 字段存原始用户 prompt（让历史 / preset 复用清晰）
   const labelId = crypto.randomUUID();
   const pngPath = `labels/${labelId}.png`;
   const imageStorage = getImageStorage();
@@ -222,11 +285,12 @@ async function executeImageJob(payload: any): Promise<string> {
 
   await db.getPool().query(
     `INSERT INTO labels (id, prompt, svg, target_id, llm_model, bin_bytes, tags,
-                          source_type, source_model, png_path, source_image_url, llm_latency_ms, status)
-     VALUES ($1, $2, NULL, $3, $4, $5, $6, 'image', $7, $8, $9, $10, 'draft')`,
+                          source_type, source_model, png_path, source_image_url, llm_latency_ms,
+                          applied_preset_id, status)
+     VALUES ($1, $2, NULL, $3, $4, $5, $6, 'image', $7, $8, $9, $10, $11, 'draft')`,
     [
       labelId,
-      payload.prompt,            // ← 原始 prompt
+      payload.prompt,                  // 原始用户 prompt
       target.id,
       payload.model,
       result.bitmapBuffer.length,
@@ -234,7 +298,8 @@ async function executeImageJob(payload: any): Promise<string> {
       payload.model,
       pngPath,
       result.sourceImageUrl,
-      result.bizyairLatencyMs,
+      result.bizyairLatencyMs + orchestrated.llmLatencyMs,  // 总 latency 含 LLM 编排
+      appliedPresetId,                 // 追溯应用了哪个 preset
     ]
   );
   return labelId;

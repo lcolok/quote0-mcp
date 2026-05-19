@@ -149,6 +149,8 @@ labelsApp.post('/generate-image', async (c) => {
       tags?: string[];
       modelOptions?: Record<string, any>;
       clientRequestId?: string;
+      presetId?: string;          // 'none' / preset uuid / undefined（兼容老前端）
+      refImageUrls?: string[];    // MinIO ref 图 URL 数组
     }>();
     if (!body.prompt || body.prompt.trim() === '') {
       return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
@@ -182,6 +184,8 @@ labelsApp.post('/generate-image', async (c) => {
           modelOptions: body.modelOptions,
           targetId: body.targetId,
           tags: body.tags,
+          presetId: body.presetId ?? undefined,         // ← 新
+          refImageUrls: body.refImageUrls ?? [],        // ← 新
         }),
         body.clientRequestId ?? null,
       ]
@@ -450,6 +454,53 @@ labelsApp.get('/fonts', async (c) => {
   return c.json({ success: true, fonts: [...SUPPORTED_FONTS] });
 });
 
+// POST /api/labels/ref-images — 用户上传 ref 图（multipart/form-data, field name "file"）
+labelsApp.post('/ref-images', async (c) => {
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get('file');
+    if (!file || !(file instanceof File)) {
+      return c.json({ success: false, error: '缺少 file 字段' }, 400);
+    }
+    // size limit: 10MB
+    if (file.size > 10 * 1024 * 1024) {
+      return c.json({ success: false, error: '文件 > 10MB' }, 400);
+    }
+    const allowed = ['image/png', 'image/jpeg', 'image/webp'];
+    if (!allowed.includes(file.type)) {
+      return c.json({ success: false, error: `不支持的 content-type: ${file.type}` }, 400);
+    }
+
+    // 生成 object key
+    const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+    const objectKey = `user-refs/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
+
+    const buf = Buffer.from(await file.arrayBuffer());
+
+    // 用现有 quote0-images bucket 的 user-refs/ prefix（避免新建 bucket 复杂度）
+    await imageStorage.getClient().putObject(
+      MINIO_BUCKET,
+      objectKey,
+      buf,
+      buf.length,
+      {
+        'Content-Type': file.type,
+        'Cache-Control': 'public, max-age=86400',
+      }
+    );
+
+    return c.json({
+      success: true,
+      url: `/api/minio-proxy/${objectKey}`,
+      sizeBytes: buf.length,
+      contentType: file.type,
+    }, 201);
+  } catch (e) {
+    console.error('POST /ref-images 失败:', e);
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
 // GET /current-target — 查询当前 niimbot 装载标签
 labelsApp.get('/current-target', async (c) => {
   try {
@@ -501,16 +552,17 @@ labelsApp.get('/current-target', async (c) => {
 // ============ Image Presets ============
 // ⚠️ 必须放在 GET/DELETE /:id 之前，否则 Hono 会把 "presets" 当成 :id 参数
 
-// GET /api/labels/presets — 列表（按 last_used_at NULLS LAST, created_at DESC 排序）
+// GET /api/labels/presets — 列表（system 优先，按 display_order ASC，然后 last_used_at NULLS LAST）
 labelsApp.get('/presets', async (c) => {
   try {
     const db = getPostgresDatabase();
     const r = await db.getPool().query(`
       SELECT id, name, prompt, model, model_options,
              thumbnail_path, source_label_id,
-             use_count, last_used_at, created_at, updated_at
+             use_count, last_used_at, created_at, updated_at,
+             is_system, style_mode, static_suffix_text, source_image_url, display_order
         FROM image_presets
-       ORDER BY last_used_at DESC NULLS LAST, created_at DESC
+       ORDER BY display_order ASC, last_used_at DESC NULLS LAST, created_at DESC
     `);
     const presets = r.rows.map((row) => ({
       id: row.id,
@@ -519,11 +571,16 @@ labelsApp.get('/presets', async (c) => {
       model: row.model,
       modelOptions: row.model_options,
       thumbnailUrl: row.thumbnail_path ? `/api/minio-proxy/${row.thumbnail_path}` : null,
+      sourceImageUrl: row.source_image_url,
       sourceLabelId: row.source_label_id,
       useCount: row.use_count,
       lastUsedAt: row.last_used_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      isSystem: row.is_system,
+      styleMode: row.style_mode,
+      staticSuffixText: row.static_suffix_text,
+      displayOrder: row.display_order,
     }));
     return c.json({ success: true, presets });
   } catch (e) {
@@ -544,23 +601,25 @@ labelsApp.post('/presets', async (c) => {
     }
     const db = getPostgresDatabase();
 
-    // 如果给了 sourceLabelId，从 labels 表取 png_path / source_model 作为默认值
+    // 如果给了 sourceLabelId，从 labels 表取 png_path / source_model / source_image_url 作为默认值
     let thumbnailPath: string | null = null;
+    let sourceImageUrl: string | null = null;       // ← 新增
     let resolvedModel: string | null = body.model ?? null;
     if (body.sourceLabelId) {
       const lr = await db.getPool().query(
-        `SELECT png_path, source_model FROM labels WHERE id = $1`,
+        `SELECT png_path, source_model, source_image_url FROM labels WHERE id = $1`,
         [body.sourceLabelId]
       );
       if (lr.rows[0]) {
         thumbnailPath = lr.rows[0].png_path ?? null;
+        sourceImageUrl = lr.rows[0].source_image_url ?? null;
         if (!resolvedModel) resolvedModel = lr.rows[0].source_model ?? null;
       }
     }
 
     const r = await db.getPool().query(
-      `INSERT INTO image_presets (name, prompt, model, model_options, thumbnail_path, source_label_id)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+      `INSERT INTO image_presets (name, prompt, model, model_options, thumbnail_path, source_label_id, source_image_url)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
        RETURNING id, created_at`,
       [
         body.name.trim().slice(0, 100),
@@ -569,6 +628,7 @@ labelsApp.post('/presets', async (c) => {
         body.modelOptions ? JSON.stringify(body.modelOptions) : null,
         thumbnailPath,
         body.sourceLabelId ?? null,
+        sourceImageUrl,           // ← 新
       ]
     );
     return c.json({ success: true, id: r.rows[0].id, createdAt: r.rows[0].created_at }, 201);
@@ -619,6 +679,13 @@ labelsApp.patch('/presets/:id', async (c) => {
 labelsApp.delete('/presets/:id', async (c) => {
   try {
     const id = c.req.param('id');
+    // 防止删 system preset
+    const check = await getPostgresDatabase().getPool().query(
+      `SELECT is_system FROM image_presets WHERE id = $1`, [id]
+    );
+    if (check.rows[0]?.is_system) {
+      return c.json({ success: false, error: '系统预设不可删除' }, 403);
+    }
     const r = await getPostgresDatabase().getPool().query(
       `DELETE FROM image_presets WHERE id = $1`, [id]
     );
