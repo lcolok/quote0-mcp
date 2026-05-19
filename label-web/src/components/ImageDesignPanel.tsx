@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ImageIcon, Printer, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
-import PresetSelector from './PresetSelector';
+import StylePresetGrid, { NONE_PRESET_ID } from './StylePresetGrid';
+import RefImageUploader from './RefImageUploader';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -42,6 +43,8 @@ export default function ImageDesignPanel() {
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState<GenerateImageRequest['model']>('sd5');
   const [trackingJobId, setTrackingJobId] = useState<string | null>(null);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(NONE_PRESET_ID);
+  const [refImageUrls, setRefImageUrls] = useState<string[]>([]);
 
   const { data: targetData } = useQuery({
     queryKey: ['niimbot-current-target'],
@@ -133,7 +136,12 @@ export default function ImageDesignPanel() {
       toast.error('请输入 prompt');
       return;
     }
-    generateMutation.mutate({ prompt, model });
+    generateMutation.mutate({
+      prompt,
+      model,
+      presetId: selectedPresetId,
+      refImageUrls: refImageUrls.length > 0 ? refImageUrls : undefined,
+    });
   };
 
   const currentModelInfo = MODELS.find((m) => m.value === model)!;
@@ -168,18 +176,16 @@ export default function ImageDesignPanel() {
         </div>
       )}
 
+      {/* 风格预设网格 */}
+      <StylePresetGrid
+        selectedPresetId={selectedPresetId}
+        onSelect={setSelectedPresetId}
+        disabled={generateMutation.isPending}
+      />
+
+      {/* 用户 prompt */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <label className="block text-sm font-medium text-foreground">描述（prompt）</label>
-          <PresetSelector
-            disabled={generateMutation.isPending}
-            onSelect={(p) => {
-              setPrompt(p.prompt);
-              if (p.model) setModel(p.model as any);
-              toast.success(`已应用预设：${p.name}`);
-            }}
-          />
-        </div>
+        <label className="block text-sm font-medium text-foreground">描述（prompt）</label>
         <Textarea
           rows={3}
           placeholder="例如：一只可爱的卡通猫咪图标，圆润的线条"
@@ -188,6 +194,14 @@ export default function ImageDesignPanel() {
           disabled={generateMutation.isPending}
         />
       </div>
+
+      {/* 参考图（图生图 / 与 preset 叠加） */}
+      <RefImageUploader
+        urls={refImageUrls}
+        onChange={setRefImageUrls}
+        maxImages={8}
+        disabled={generateMutation.isPending}
+      />
 
       <div className="space-y-2">
         <label className="block text-sm font-medium text-foreground">AI 模型</label>

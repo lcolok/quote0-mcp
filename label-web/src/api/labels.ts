@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob, ImagePreset, CreatePresetRequest, UpdatePresetRequest, CurrentTargetInfo } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob, ImagePreset, CreatePresetRequest, UpdatePresetRequest, CurrentTargetInfo, RefImageUploadResponse } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -124,4 +124,12 @@ export const labelsApi = {
     client
       .get<{ success: boolean; target?: CurrentTargetInfo; fallback?: CurrentTargetInfo; error?: string }>('/labels/current-target')
       .then((r) => r.data),
+
+  uploadRefImage: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return client
+      .post<RefImageUploadResponse>('/labels/ref-images', fd, { timeout: 30_000 })
+      .then((r) => r.data);
+  },
 };

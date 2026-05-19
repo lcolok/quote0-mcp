@@ -49,6 +49,9 @@ export interface GenerateImageRequest {
   targetId?: string;
   tags?: string[];
   modelOptions?: Record<string, any>;
+  clientRequestId?: string;
+  presetId?: string;
+  refImageUrls?: string[];
 }
 
 export interface GenerateTextRequest {
@@ -131,11 +134,16 @@ export interface ImagePreset {
   model: string | null;
   modelOptions: Record<string, any> | null;
   thumbnailUrl: string | null;
+  sourceImageUrl: string | null;
   sourceLabelId: string | null;
   useCount: number;
   lastUsedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  isSystem: boolean;
+  styleMode: 'oneshot' | 'static_suffix';
+  staticSuffixText: string | null;
+  displayOrder: number;
 }
 
 export interface CreatePresetRequest {
@@ -150,6 +158,13 @@ export interface UpdatePresetRequest {
   name?: string;
   prompt?: string;
   model?: string | null;
+}
+
+export interface RefImageUploadResponse {
+  success: boolean;
+  url: string;
+  sizeBytes: number;
+  contentType: string;
 }
 
 export interface CurrentTargetInfo {
