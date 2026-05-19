@@ -27,12 +27,14 @@ import {
 import { labelsApi } from '@/api/labels';
 import type { GenerateImageRequest, Label as LabelType, LabelJob } from '@/types/label';
 
+// 注：分辨率不暴露给用户 —— 标签实际只需 320×160px，后端 bizyair-client 默认 1K 已绰绰有余。
+// sd5 是 Doubao Seedream（中文友好），nb2/nbp 是 Google Gemini，gpt2 是 OpenAI GPT-Image-2。
 const MODELS: Array<{ value: GenerateImageRequest['model']; label: string; hint: string }> = [
-  { value: 'sd5', label: 'SD5 2K', hint: '~21s · 便宜 · 中文友好' },
-  { value: 'sd5-3k', label: 'SD5 3K', hint: '~31s · 高清版' },
-  { value: 'nb2', label: 'NB2 4K', hint: '~60s · 画面完整 · 支持超宽' },
-  { value: 'nbp', label: 'NBP 4K', hint: '~80s · 最高画质 · 较贵' },
-  { value: 'gpt2', label: 'GPT-Image-2', hint: 'OpenAI 最新 · 多比例' },
+  { value: 'sd5', label: 'SD5', hint: '中文友好 · 经济快速' },
+  { value: 'sd5-3k', label: 'SD5 高清', hint: '更精细细节 · 略慢' },
+  { value: 'nb2', label: 'NB2', hint: 'Google Gemini Flash · 平衡' },
+  { value: 'nbp', label: 'NBP', hint: 'Google Gemini Pro · 最高质量' },
+  { value: 'gpt2', label: 'GPT-Image-2', hint: 'OpenAI · 多比例支持' },
 ];
 
 export default function ImageDesignPanel() {

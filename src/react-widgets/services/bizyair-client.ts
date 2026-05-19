@@ -45,11 +45,12 @@ export class BizyAirClient {
 
   private buildPayload(req: BizyAirRequest): Record<string, any> {
     const base: Record<string, any> = { prompt: req.prompt, ...(req.options ?? {}) };
-    // 模型默认参数
-    if (req.model === 'sd5-3k') base.size = '3K';
-    else if (req.model === 'sd5' && !base.size) base.size = '2K';
-    else if ((req.model === 'nb2' || req.model === 'nbp') && !base.resolution) base.resolution = '4K';
-    // gpt2 不强制默认参数（用户可在 options 里给 aspect_ratio / quality）
+    // 模型默认参数 —— v1.8.1: 标签实际只需 320×160px，4K/3K 是浪费（dither 阶段强行下采样）
+    // sd5 schema 最低 size 是 2K（doubao 不支持 1K，硬约束），其他统一默认 1K
+    if (req.model === 'sd5-3k') base.size = '3K';                           // 用户主动选高清才上 3K
+    else if (req.model === 'sd5' && !base.size) base.size = '2K';            // sd5 schema 最低档
+    else if ((req.model === 'nb2' || req.model === 'nbp') && !base.resolution) base.resolution = '1K';  // ↓ 4K
+    // gpt2 不强制默认（schema 选项 1k/2k/4k；用户可在 modelOptions 里指定）
     return base;
   }
 }
