@@ -187,7 +187,7 @@ export default function RefImageUploader({
       <div className="flex items-center justify-between">
         <label className="block text-sm font-medium text-foreground">参考图（可选）</label>
         <span className="text-xs text-muted-foreground">
-          {urls.length}/{maxImages} · 用于风格学习，不复制内容 · 大图自动压缩
+          {urls.length}/{maxImages} · AI 视觉输入 · 编辑/扩展/风格皆可 · 大图自动压缩
         </span>
       </div>
 

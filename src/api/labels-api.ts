@@ -454,7 +454,14 @@ labelsApp.get('/fonts', async (c) => {
   return c.json({ success: true, fonts: [...SUPPORTED_FONTS] });
 });
 
-// POST /api/labels/ref-images — 用户上传 ref 图（multipart/form-data, field name "file"）
+// POST /api/labels/ref-images — 用户上传 ref 图，转发到 BizyAir OSS 拿公网 URL
+// v1.11.0: 不再存 MinIO（BizyAir 服务端拿不到我们内网图）；走 BizyAir 一步上传
+//   (POST https://copilot.logic.heiyu.space/providers/bizyair/v1/upload)
+//   返回的 URL 形如 https://bizyair-prod.oss-cn-shanghai.aliyuncs.com/inputs/xxx.png
+//   BizyAir 各 model 的 images[] 字段能直接 fetch 该 URL 做 image-to-image
+const BIZYAIR_UPLOAD_URL =
+  process.env.BIZYAIR_UPLOAD_URL ?? 'https://copilot.logic.heiyu.space/providers/bizyair/v1/upload';
+
 labelsApp.post('/ref-images', async (c) => {
   try {
     const formData = await c.req.formData();
@@ -462,37 +469,41 @@ labelsApp.post('/ref-images', async (c) => {
     if (!file || !(file instanceof File)) {
       return c.json({ success: false, error: '缺少 file 字段' }, 400);
     }
-    // size limit: 10MB
     if (file.size > 10 * 1024 * 1024) {
-      return c.json({ success: false, error: '文件 > 10MB' }, 400);
+      return c.json({ success: false, error: '文件 > 10MB（前端应已 resize）' }, 400);
     }
     const allowed = ['image/png', 'image/jpeg', 'image/webp'];
     if (!allowed.includes(file.type)) {
       return c.json({ success: false, error: `不支持的 content-type: ${file.type}` }, 400);
     }
 
-    // 生成 object key
-    const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
-    const objectKey = `user-refs/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
-
-    const buf = Buffer.from(await file.arrayBuffer());
-
-    // 用现有 quote0-images bucket 的 user-refs/ prefix（避免新建 bucket 复杂度）
-    await imageStorage.getClient().putObject(
-      MINIO_BUCKET,
-      objectKey,
-      buf,
-      buf.length,
-      {
-        'Content-Type': file.type,
-        'Cache-Control': 'public, max-age=86400',
-      }
-    );
+    // 转发到 BizyAir 一步上传 endpoint
+    const forwardFd = new FormData();
+    forwardFd.append('file', file);
+    const upRes = await fetch(BIZYAIR_UPLOAD_URL, {
+      method: 'POST',
+      body: forwardFd,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!upRes.ok) {
+      const text = await upRes.text();
+      console.error(`BizyAir upload HTTP ${upRes.status}: ${text.slice(0, 200)}`);
+      return c.json({
+        success: false,
+        error: `BizyAir 上传失败 HTTP ${upRes.status}`,
+      }, 502);
+    }
+    const data: any = await upRes.json();
+    if (!data.success || !data.url) {
+      console.error('BizyAir upload 异常响应:', JSON.stringify(data).slice(0, 300));
+      return c.json({ success: false, error: 'BizyAir 上传无 URL 返回' }, 502);
+    }
 
     return c.json({
       success: true,
-      url: `/api/minio-proxy/${objectKey}`,
-      sizeBytes: buf.length,
+      url: data.url,                  // BizyAir 公网 OSS URL（BizyAir image-gen 能直接 fetch）
+      objectKey: data.object_key,
+      sizeBytes: file.size,
       contentType: file.type,
     }, 201);
   } catch (e) {

@@ -261,14 +261,27 @@ async function executeImageJob(payload: any): Promise<string> {
     target: targetMeta,
     llmConfig: llmCfg,
   });
-  console.log(`🎨 orchestrate mode=${orchestrated.mode}, llm=${orchestrated.llmLatencyMs}ms, prompt len=${orchestrated.finalPrompt.length}`);
+  console.log(
+    `🎨 orchestrate mode=${orchestrated.mode}, llm=${orchestrated.llmLatencyMs}ms, ` +
+    `prompt len=${orchestrated.finalPrompt.length}, ` +
+    `bizyairImages=${orchestrated.bizyairImages?.length ?? 0}`,
+  );
 
-  // 6. 调 BizyAir 生成（passing final prompt）
+  // 6. 调 BizyAir 生成（passing final prompt + 可选 images[] 直传走 image-to-image）
+  //    v1.11.0: orchestrator 在有 ref 图时把 BizyAir 公网 URL 数组放在 bizyairImages
+  //    bizyair-client buildPayload 用 ...options 透传，所以这里塞进 modelOptions.images 即可
+  const mergedOptions: Record<string, any> = { ...(payload.modelOptions ?? {}) };
+  if (orchestrated.bizyairImages && orchestrated.bizyairImages.length > 0) {
+    // 用户传的 modelOptions.images 优先；orchestrator 给的作为 default
+    if (!mergedOptions.images) {
+      mergedOptions.images = orchestrated.bizyairImages;
+    }
+  }
   const result = await imageLabelGenerator.generate(
     orchestrated.finalPrompt,
     payload.model,
     target,
-    payload.modelOptions
+    mergedOptions,
   );
 
   // 7. INSERT labels — prompt 字段存原始用户 prompt（让历史 / preset 复用清晰）
