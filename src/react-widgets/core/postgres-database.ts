@@ -145,6 +145,29 @@ export class PostgresDatabase {
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS frame_svg_paths jsonb`,
       // v1.5.1: 装饰函数代码（LLM 写的 JS generator，sandbox 执行产 frameSvgPaths）
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS decorator_code text`,
+      // v1.6.0: label 生成任务表（取代 labels.status='generating' fire-and-forget）
+      `CREATE TABLE IF NOT EXISTS label_jobs (
+        id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        job_type          text NOT NULL CHECK (job_type IN ('widget','image')),
+        payload           jsonb NOT NULL,
+        client_request_id text UNIQUE,
+        state             text NOT NULL DEFAULT 'queued'
+                          CHECK (state IN ('queued','running','succeeded','failed')),
+        lease_owner       text,
+        lease_expires_at  timestamptz,
+        attempts          int NOT NULL DEFAULT 0,
+        max_attempts      int NOT NULL DEFAULT 3,
+        label_id          uuid REFERENCES labels(id) ON DELETE SET NULL,
+        last_error        text,
+        created_at        timestamptz NOT NULL DEFAULT now(),
+        started_at        timestamptz,
+        finished_at       timestamptz
+      )`,
+      `CREATE INDEX IF NOT EXISTS label_jobs_claimable_idx
+        ON label_jobs(state, lease_expires_at)
+        WHERE state IN ('queued','running')`,
+      `CREATE INDEX IF NOT EXISTS label_jobs_created_at_idx
+        ON label_jobs(created_at DESC)`,
     ];
   }
 

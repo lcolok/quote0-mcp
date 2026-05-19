@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -65,6 +65,9 @@ export const labelsApi = {
         `/labels/${id}/regen-decoration`
       )
       .then((r) => r.data),
+
+  getJob: (jobId: string) =>
+    client.get<LabelJob>(`/labels/jobs/${jobId}`).then((r) => r.data),
 
   delete: (id: string) =>
     client.delete<{ success: boolean }>(`/labels/${id}`).then((r) => r.data),

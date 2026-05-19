@@ -9,6 +9,7 @@ import app from './news-api-server.js';
 import { ensureSchedulerStarted } from './scheduler-registry.js';
 import { runStartupAssertions } from './startup-assertions.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
+import { startLabelJobWorker } from './label-jobs-worker.js';
 
 const PORT = parseInt(process.env.PORT || '3001');
 const HOST = process.env.HOST || 'localhost';
@@ -39,4 +40,6 @@ if (import.meta.main) {
   }
   // 启动后自检（失败不阻断服务）
   runStartupAssertions(getPostgresDatabase()).catch(e => console.error('❌ 启动断言异常:', e));
+  // 启动 label job worker（DB lease 模式，取代 setImmediate fire-and-forget）
+  startLabelJobWorker();
 }

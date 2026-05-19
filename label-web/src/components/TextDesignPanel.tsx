@@ -14,7 +14,7 @@ import {
   AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { labelsApi } from '@/api/labels';
-import type { GenerateTextRequest, Label as LabelType, WidgetMeta, FontMeta } from '@/types/label';
+import type { GenerateTextRequest, Label as LabelType, WidgetMeta, FontMeta, LabelJob } from '@/types/label';
 
 const AUTO = '__auto__';
 
@@ -24,7 +24,7 @@ export default function TextDesignPanel() {
   const [widgetChoice, setWidgetChoice] = useState<string>(AUTO);
   const [fontChoice, setFontChoice] = useState<string>(AUTO);
   const [forceDecoration, setForceDecoration] = useState<boolean>(false);
-  const [trackingId, setTrackingId] = useState<string | null>(null);
+  const [trackingJobId, setTrackingJobId] = useState<string | null>(null);
 
   // Catalog
   const { data: widgets = [] } = useQuery<WidgetMeta[]>({
@@ -42,7 +42,7 @@ export default function TextDesignPanel() {
   const generateMutation = useMutation({
     mutationFn: (req: GenerateTextRequest) => labelsApi.generateText(req),
     onSuccess: (data) => {
-      setTrackingId(data.id);
+      setTrackingJobId(data.jobId);
       toast.success('已加入生成队列');
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     },
@@ -52,35 +52,42 @@ export default function TextDesignPanel() {
     },
   });
 
-  // 轮询 tracked label
-  const { data: trackedLabel } = useQuery<LabelType>({
-    queryKey: ['label', trackingId],
-    queryFn: () => labelsApi.get(trackingId!),
-    enabled: !!trackingId,
+  // 轮询 tracked job
+  const { data: trackedJob } = useQuery<LabelJob>({
+    queryKey: ['label-job', trackingJobId],
+    queryFn: () => labelsApi.getJob(trackingJobId!),
+    enabled: !!trackingJobId,
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (!data || data.status !== 'generating') return false;
+      if (!data || (data.state !== 'queued' && data.state !== 'running')) return false;
       return 1500;
     },
   });
 
+  // job 成功后拉取 label 详情
+  const { data: trackedLabel } = useQuery<LabelType>({
+    queryKey: ['label', trackedJob?.labelId],
+    queryFn: () => labelsApi.get(trackedJob!.labelId!),
+    enabled: !!trackedJob?.labelId && trackedJob?.state === 'succeeded',
+  });
+
   // 终态触发 toast + 列表刷新
   useEffect(() => {
-    if (!trackedLabel) return;
-    if (trackedLabel.status === 'draft') {
-      toast.success(`文字标签生成完成 (${trackedLabel.sourceModel ?? 'widget'})`);
+    if (!trackedJob) return;
+    if (trackedJob.state === 'succeeded') {
+      toast.success(`文字标签生成完成 (${trackedLabel?.sourceModel ?? 'widget'})`);
       queryClient.invalidateQueries({ queryKey: ['labels'] });
-    } else if (trackedLabel.status === 'failed') {
-      toast.error(`生成失败：${trackedLabel.lastError ?? '未知错误'}`);
+    } else if (trackedJob.state === 'failed') {
+      toast.error(`生成失败：${trackedJob.lastError ?? '未知错误'}`);
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     }
-  }, [trackedLabel?.status, queryClient]);
+  }, [trackedJob?.state, trackedLabel?.sourceModel, queryClient]);
 
   const printMutation = useMutation({
     mutationFn: (id: string) => labelsApi.print(id),
     onSuccess: () => {
       toast.success('打印任务已发送');
-      queryClient.invalidateQueries({ queryKey: ['label', trackingId] });
+      queryClient.invalidateQueries({ queryKey: ['label', trackedJob?.labelId] });
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     },
     onError: (e: any) => {
@@ -92,7 +99,7 @@ export default function TextDesignPanel() {
     mutationFn: (id: string) => labelsApi.regenerate(id),
     onSuccess: () => {
       toast.success('已重新加入队列');
-      queryClient.invalidateQueries({ queryKey: ['label', trackingId] });
+      queryClient.invalidateQueries({ queryKey: ['label', trackedJob?.labelId] });
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     },
     onError: () => toast.error('重新生成失败'),
@@ -110,9 +117,10 @@ export default function TextDesignPanel() {
     generateMutation.mutate(req);
   };
 
-  const isGenerating = trackedLabel?.status === 'generating' || generateMutation.isPending;
-  const isFailed = trackedLabel?.status === 'failed';
-  const isDraft = trackedLabel?.status === 'draft';
+  const isGenerating =
+    trackedJob?.state === 'queued' || trackedJob?.state === 'running' || generateMutation.isPending;
+  const isFailed = trackedJob?.state === 'failed';
+  const isDraft = trackedJob?.state === 'succeeded';
 
   return (
     <div className="space-y-4">
@@ -215,36 +223,28 @@ export default function TextDesignPanel() {
       </Button>
 
       {/* Generating */}
-      {isGenerating && trackedLabel && (
+      {isGenerating && (
         <Card className="border-primary/30 bg-primary/5 py-8">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="h-10 w-10 animate-spin text-primary" />
-            <p className="text-sm font-medium">LLM 正在为你设计…（约 3-5 秒）</p>
+            <p className="text-sm font-medium">
+              {trackedJob?.state === 'running' ? '生成中…' : '任务已加入队列'}
+            </p>
             <p className="text-xs text-muted-foreground">可以刷新页面，任务在后台继续</p>
           </div>
         </Card>
       )}
 
       {/* Failed */}
-      {isFailed && trackedLabel && (
+      {isFailed && (
         <Card className="border-destructive/40 bg-destructive/5 p-4 space-y-2">
           <div className="flex items-center gap-2 text-destructive font-medium">
             <AlertCircle className="h-5 w-5" />
             生成失败
           </div>
           <p className="text-xs text-destructive/80 break-all">
-            {trackedLabel.lastError ?? '未知错误'}
+            {trackedJob?.lastError ?? '未知错误'}
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => regenMutation.mutate(trackedLabel.id)}
-            disabled={regenMutation.isPending}
-            className="border-destructive/40"
-          >
-            <RefreshCw className="h-3 w-3 mr-1" />
-            重试
-          </Button>
         </Card>
       )}
 

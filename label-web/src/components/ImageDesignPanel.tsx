@@ -24,7 +24,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { labelsApi } from '@/api/labels';
-import type { GenerateImageRequest } from '@/types/label';
+import type { GenerateImageRequest, Label as LabelType, LabelJob } from '@/types/label';
 
 const MODELS: Array<{ value: GenerateImageRequest['model']; label: string; hint: string }> = [
   { value: 'sd5', label: 'SD5 2K', hint: '~21s · 便宜 · 中文友好' },
@@ -38,12 +38,12 @@ export default function ImageDesignPanel() {
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState<GenerateImageRequest['model']>('sd5');
-  const [trackingId, setTrackingId] = useState<string | null>(null);
+  const [trackingJobId, setTrackingJobId] = useState<string | null>(null);
 
   const generateMutation = useMutation({
     mutationFn: (req: GenerateImageRequest) => labelsApi.generateImage(req),
     onSuccess: (data) => {
-      setTrackingId(data.id);
+      setTrackingJobId(data.jobId);
       toast.success('已加入生成队列');
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     },
@@ -53,33 +53,41 @@ export default function ImageDesignPanel() {
     },
   });
 
-  const { data: trackedLabel } = useQuery({
-    queryKey: ['label', trackingId],
-    queryFn: () => labelsApi.get(trackingId!),
-    enabled: !!trackingId,
+  // 轮询 tracked job
+  const { data: trackedJob } = useQuery<LabelJob>({
+    queryKey: ['label-job', trackingJobId],
+    queryFn: () => labelsApi.getJob(trackingJobId!),
+    enabled: !!trackingJobId,
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (!data || data.status !== 'generating') return false;
+      if (!data || (data.state !== 'queued' && data.state !== 'running')) return false;
       return 2000;
     },
   });
 
+  // job 成功后拉取 label 详情
+  const { data: trackedLabel } = useQuery<LabelType>({
+    queryKey: ['label', trackedJob?.labelId],
+    queryFn: () => labelsApi.get(trackedJob!.labelId!),
+    enabled: !!trackedJob?.labelId && trackedJob?.state === 'succeeded',
+  });
+
   useEffect(() => {
-    if (!trackedLabel) return;
-    if (trackedLabel.status === 'draft') {
+    if (!trackedJob) return;
+    if (trackedJob.state === 'succeeded') {
       toast.success('AI 出图完成');
       queryClient.invalidateQueries({ queryKey: ['labels'] });
-    } else if (trackedLabel.status === 'failed') {
-      toast.error(`AI 生成失败：${trackedLabel.lastError ?? '未知错误'}`);
+    } else if (trackedJob.state === 'failed') {
+      toast.error(`AI 生成失败：${trackedJob.lastError ?? '未知错误'}`);
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     }
-  }, [trackedLabel?.status, queryClient]);
+  }, [trackedJob?.state, queryClient]);
 
   const printMutation = useMutation({
     mutationFn: (id: string) => labelsApi.print(id),
     onSuccess: () => {
       toast.success('打印任务已发送');
-      queryClient.invalidateQueries({ queryKey: ['label', trackingId] });
+      queryClient.invalidateQueries({ queryKey: ['label', trackedJob?.labelId] });
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     },
     onError: (e: any) => {
@@ -92,7 +100,7 @@ export default function ImageDesignPanel() {
     mutationFn: (id: string) => labelsApi.redither(id),
     onSuccess: () => {
       toast.success('重新 dither 完成');
-      queryClient.invalidateQueries({ queryKey: ['label', trackingId] });
+      queryClient.invalidateQueries({ queryKey: ['label', trackedJob?.labelId] });
     },
     onError: () => toast.error('重新 dither 失败'),
   });
@@ -101,7 +109,7 @@ export default function ImageDesignPanel() {
     mutationFn: (id: string) => labelsApi.regenerate(id),
     onSuccess: () => {
       toast.success('已重新加入队列');
-      queryClient.invalidateQueries({ queryKey: ['label', trackingId] });
+      queryClient.invalidateQueries({ queryKey: ['label', trackedJob?.labelId] });
       queryClient.invalidateQueries({ queryKey: ['labels'] });
     },
     onError: () => toast.error('重新生成失败'),
@@ -116,9 +124,10 @@ export default function ImageDesignPanel() {
   };
 
   const currentModelInfo = MODELS.find((m) => m.value === model)!;
-  const isGenerating = trackedLabel?.status === 'generating' || generateMutation.isPending;
-  const isFailed = trackedLabel?.status === 'failed';
-  const isDraft = trackedLabel?.status === 'draft';
+  const isGenerating =
+    trackedJob?.state === 'queued' || trackedJob?.state === 'running' || generateMutation.isPending;
+  const isFailed = trackedJob?.state === 'failed';
+  const isDraft = trackedJob?.state === 'succeeded';
 
   return (
     <div className="space-y-4">
@@ -163,11 +172,11 @@ export default function ImageDesignPanel() {
         {generateMutation.isPending ? '提交中…' : '🎨 提交生成任务'}
       </Button>
 
-      {isGenerating && trackedLabel && (
+      {isGenerating && (
         <Card className="flex flex-col items-center justify-center py-12 space-y-3 border-purple-200 bg-purple-50 dark:bg-purple-950/20">
           <Loader2 className="h-10 w-10 animate-spin text-purple-600 dark:text-purple-400" />
           <p className="text-sm text-purple-800 dark:text-purple-300 font-medium">
-            AI 正在创作中… 预计 {currentModelInfo.hint.match(/~(\d+)s/)?.[1] ?? '?'}s
+            {trackedJob?.state === 'running' ? 'AI 正在创作中…' : '任务已加入队列'}
           </p>
           <p className="text-xs text-muted-foreground">
             可以刷新页面，任务在后台继续。完成后会在右侧列表中显示。
@@ -175,22 +184,15 @@ export default function ImageDesignPanel() {
         </Card>
       )}
 
-      {isFailed && trackedLabel && (
+      {isFailed && (
         <Card className="flex flex-col items-start gap-2 p-4 border-destructive/50 bg-destructive/5">
           <div className="flex items-center gap-2 text-destructive font-medium">
             <AlertCircle className="h-5 w-5" />
             生成失败
           </div>
-          <p className="text-xs text-destructive/80 break-all">{trackedLabel.lastError ?? '未知错误'}</p>
-          <Button
-            variant="link"
-            size="sm"
-            onClick={() => regenMutation.mutate(trackedLabel.id)}
-            disabled={regenMutation.isPending}
-            className="mt-1 h-auto p-0 text-destructive hover:text-destructive/80"
-          >
-            <RefreshCw className="h-3 w-3 mr-1" /> 重试
-          </Button>
+          <p className="text-xs text-destructive/80 break-all">
+            {trackedJob?.lastError ?? '未知错误'}
+          </p>
         </Card>
       )}
 

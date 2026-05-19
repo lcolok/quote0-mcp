@@ -147,6 +147,7 @@ labelsApp.post('/generate-image', async (c) => {
       targetId?: string;
       tags?: string[];
       modelOptions?: Record<string, any>;
+      clientRequestId?: string;
     }>();
     if (!body.prompt || body.prompt.trim() === '') {
       return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
@@ -161,72 +162,43 @@ labelsApp.post('/generate-image', async (c) => {
 
     const db = getPostgresDatabase();
 
-    // 1) 立刻 INSERT row 占位（status='generating'）
-    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
-      `INSERT INTO labels (prompt, svg, target_id, llm_model, bin_bytes, tags,
-                            source_type, source_model, status)
-       VALUES ($1, NULL, $2, $3, 0, $4, 'image', $5, 'generating')
-       RETURNING id, created_at`,
-      [body.prompt, target.id, body.model, body.tags ?? [], body.model]
-    );
-    const labelId = insertRes.rows[0].id;
-
-    // 2) 立刻返回 id（前端开始轮询）
-    const response = c.json({
-      success: true,
-      id: labelId,
-      status: 'generating',
-      sourceType: 'image',
-      sourceModel: body.model,
-      prompt: body.prompt,
-      targetId: target.id,
-      createdAt: insertRes.rows[0].created_at,
-    }, 201);
-
-    // 3) 后台 fire-and-forget BizyAir 调用 + dither + 入完整数据
-    //    用 setImmediate 让 HTTP response 先发出（Hono 同步阶段结束）
-    setImmediate(async () => {
-      const t0 = Date.now();
-      try {
-        const result = await imageLabelGenerator.generate(body.prompt, body.model, target, body.modelOptions);
-
-        // 上传 PNG 到 MinIO
-        const pngPath = `labels/${labelId}.png`;
-        await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=86400',
-        });
-
-        // UPDATE row 成 draft
-        await db.getPool().query(
-          `UPDATE labels
-           SET status = 'draft',
-               png_path = $2,
-               source_image_url = $3,
-               llm_latency_ms = $4,
-               bin_bytes = $5,
-               last_error = NULL,
-               updated_at = now()
-           WHERE id = $1`,
-          [labelId, pngPath, result.sourceImageUrl, result.bizyairLatencyMs, result.bitmapBuffer.length]
-        );
-        console.log(`✅ image label ${labelId} 完成 (${Date.now() - t0}ms)`);
-      } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        console.error(`❌ image label ${labelId} 失败:`, errMsg);
-        // UPDATE row 成 failed + 错误信息
-        await db.getPool().query(
-          `UPDATE labels
-           SET status = 'failed',
-               last_error = $2,
-               updated_at = now()
-           WHERE id = $1`,
-          [labelId, errMsg.slice(0, 500)]
-        ).catch((dbErr) => console.error('failed update 也炸了:', dbErr));
+    // idempotency: 如果 clientRequestId 已存在，直接返回已有 job
+    if (body.clientRequestId) {
+      const dup = await db.getPool().query(
+        `SELECT id, state, created_at FROM label_jobs WHERE client_request_id = $1`,
+        [body.clientRequestId]
+      );
+      if (dup.rows.length > 0) {
+        const row = dup.rows[0];
+        return c.json({ success: true, jobId: row.id, state: row.state, createdAt: row.created_at }, 200);
       }
-    });
+    }
 
-    return response;
+    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
+      `INSERT INTO label_jobs (job_type, payload, client_request_id)
+       VALUES ('image', $1::jsonb, $2)
+       RETURNING id, state, created_at`,
+      [
+        JSON.stringify({
+          prompt: body.prompt,
+          model: body.model,
+          modelOptions: body.modelOptions,
+          targetId: body.targetId,
+          tags: body.tags,
+        }),
+        body.clientRequestId ?? null,
+      ]
+    );
+
+    return c.json(
+      {
+        success: true,
+        jobId: insertRes.rows[0].id,
+        state: insertRes.rows[0].state,
+        createdAt: insertRes.rows[0].created_at,
+      },
+      201
+    );
   } catch (error) {
     console.error('❌ POST /api/labels/generate-image 失败:', error);
     return c.json({
@@ -366,7 +338,7 @@ labelsApp.post('/:id/regen-decoration', async (c) => {
   }
 });
 
-// POST /generate-text (widget 模板库 + LLM 智能填充，async fire-and-forget)
+// POST /generate-text (widget 模板库 + LLM 智能填充，async DB job)
 labelsApp.post('/generate-text', async (c) => {
   try {
     const body = await c.req.json<{
@@ -376,6 +348,7 @@ labelsApp.post('/generate-text', async (c) => {
       preferredWidget?: string;
       preferredFont?: string;
       forceDecoration?: boolean;
+      clientRequestId?: string;
     }>();
     if (!body.prompt || body.prompt.trim() === '') {
       return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
@@ -393,86 +366,44 @@ labelsApp.post('/generate-text', async (c) => {
 
     const db = getPostgresDatabase();
 
-    // 1) 立刻 INSERT row 占位
-    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
-      `INSERT INTO labels (prompt, svg, target_id, llm_model, bin_bytes, tags,
-                            source_type, status)
-       VALUES ($1, NULL, $2, $3, 0, $4, 'widget', 'generating')
-       RETURNING id, created_at`,
-      [body.prompt, target.id, 'pending', body.tags ?? []]
-    );
-    const labelId = insertRes.rows[0].id;
-
-    // 2) 立刻返回 id
-    const response = c.json({
-      success: true,
-      id: labelId,
-      status: 'generating',
-      sourceType: 'widget',
-      prompt: body.prompt,
-      targetId: target.id,
-      createdAt: insertRes.rows[0].created_at,
-    }, 201);
-
-    // 3) 后台 fire-and-forget LLM + satori 渲染
-    setImmediate(async () => {
-      const t0 = Date.now();
-      try {
-        const llmCfg = await getActiveLLMConfig(db);
-        const result = await textLabelGenerator.generate(body.prompt, target, llmCfg, {
-          widgetId: body.preferredWidget as any,
-          fontFamily: body.preferredFont as any,
-          forceDecoration: body.forceDecoration,
-        });
-
-        const pngPath = `labels/${labelId}.png`;
-        await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, result.pngBuffer, result.pngBuffer.length, {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=86400',
-        });
-
-        await db.getPool().query(
-          `UPDATE labels
-           SET status = 'draft',
-               png_path = $2,
-               source_model = $3,
-               widget_props = $4::jsonb,
-               font_family = $5,
-               icon_svg = $6,
-               frame_svg_paths = $7::jsonb,
-               decorator_code = $8,
-               llm_model = $9,
-               llm_latency_ms = $10,
-               bin_bytes = $11,
-               last_error = NULL,
-               updated_at = now()
-           WHERE id = $1`,
-          [
-            labelId,
-            pngPath,
-            result.widgetId,
-            JSON.stringify(result.props),
-            result.fontFamily,
-            result.iconSvg,
-            result.frameSvgPaths ? JSON.stringify(result.frameSvgPaths) : null,
-            result.decoratorCode,
-            result.llmModel,
-            result.llmLatencyMs,
-            result.bitmapBuffer.length,
-          ]
-        );
-        console.log(`✅ widget label ${labelId} 完成 (${Date.now() - t0}ms)`);
-      } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        console.error(`❌ widget label ${labelId} 失败:`, errMsg);
-        await db.getPool().query(
-          `UPDATE labels SET status = 'failed', last_error = $2, updated_at = now() WHERE id = $1`,
-          [labelId, errMsg.slice(0, 500)]
-        ).catch((dbErr) => console.error('failed update 也炸了:', dbErr));
+    // idempotency: 如果 clientRequestId 已存在，直接返回已有 job
+    if (body.clientRequestId) {
+      const dup = await db.getPool().query(
+        `SELECT id, state, created_at FROM label_jobs WHERE client_request_id = $1`,
+        [body.clientRequestId]
+      );
+      if (dup.rows.length > 0) {
+        const row = dup.rows[0];
+        return c.json({ success: true, jobId: row.id, state: row.state, createdAt: row.created_at }, 200);
       }
-    });
+    }
 
-    return response;
+    const insertRes = await db.getPool().query<{ id: string; created_at: Date }>(
+      `INSERT INTO label_jobs (job_type, payload, client_request_id)
+       VALUES ('widget', $1::jsonb, $2)
+       RETURNING id, state, created_at`,
+      [
+        JSON.stringify({
+          prompt: body.prompt,
+          preferredWidget: body.preferredWidget,
+          preferredFont: body.preferredFont,
+          forceDecoration: body.forceDecoration,
+          targetId: body.targetId,
+          tags: body.tags,
+        }),
+        body.clientRequestId ?? null,
+      ]
+    );
+
+    return c.json(
+      {
+        success: true,
+        jobId: insertRes.rows[0].id,
+        state: insertRes.rows[0].state,
+        createdAt: insertRes.rows[0].created_at,
+      },
+      201
+    );
   } catch (error) {
     console.error('❌ POST /api/labels/generate-text 失败:', error);
     return c.json({
@@ -480,6 +411,39 @@ labelsApp.post('/generate-text', async (c) => {
       stage: 'unknown',
       error: error instanceof Error ? error.message : '未知错误',
     }, 500);
+  }
+});
+
+// GET /jobs/:id
+labelsApp.get('/jobs/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const r = await getPostgresDatabase().getPool().query(
+      `SELECT id, job_type, state, attempts, max_attempts, last_error, label_id,
+              created_at, started_at, finished_at
+         FROM label_jobs WHERE id=$1`,
+      [id]
+    );
+    if (!r.rows[0]) return c.json({ error: 'job not found' }, 404);
+    const row = r.rows[0];
+    return c.json({
+      id: row.id,
+      jobType: row.job_type,
+      state: row.state,
+      attempts: row.attempts,
+      maxAttempts: row.max_attempts,
+      lastError: row.last_error,
+      labelId: row.label_id,
+      createdAt: row.created_at,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+    });
+  } catch (error) {
+    console.error('❌ GET /api/labels/jobs/:id 失败:', error);
+    return c.json(
+      { error: error instanceof Error ? error.message : '未知错误' },
+      500
+    );
   }
 });
 

@@ -32,12 +32,8 @@ export interface Label {
 
 export interface GenerateImageResponse {
   success: boolean;
-  id: string;
-  status: 'generating';
-  sourceType: 'image';
-  sourceModel: string;
-  prompt: string;
-  targetId: string;
+  jobId: string;
+  state: string;
   createdAt: string;
 }
 
@@ -66,11 +62,8 @@ export interface GenerateTextRequest {
 
 export interface GenerateTextResponse {
   success: boolean;
-  id: string;
-  status: 'generating';
-  sourceType: 'widget';
-  prompt: string;
-  targetId: string;
+  jobId: string;
+  state: string;
   createdAt: string;
 }
 
@@ -108,6 +101,19 @@ export interface LlmModelMeta {
   contextWindow: number;
   maxTokens: number;
   reasoning: boolean;
+}
+
+export interface LabelJob {
+  id: string;
+  jobType: 'widget' | 'image';
+  state: 'queued' | 'running' | 'succeeded' | 'failed';
+  attempts: number;
+  maxAttempts: number;
+  lastError?: string | null;
+  labelId?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 }
 
 export interface ActiveLlmInfo {
