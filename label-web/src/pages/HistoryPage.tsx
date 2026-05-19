@@ -15,8 +15,9 @@ import {
 import { labelsApi } from '@/api/labels';
 import LabelCard from '@/components/LabelCard';
 
+const STATUS_ALL = '__all__';
 const statusOptions = [
-  { value: '', label: '全部' },
+  { value: STATUS_ALL, label: '全部' },
   { value: 'draft', label: '草稿' },
   { value: 'approved', label: '已批准' },
   { value: 'printed', label: '已打印' },
@@ -25,12 +26,16 @@ const statusOptions = [
 
 export default function HistoryPage() {
   const navigate = useNavigate();
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>(STATUS_ALL);
   const [tagFilter, setTagFilter] = useState('');
 
   const { data: labels, isLoading } = useQuery({
     queryKey: ['labels', statusFilter, tagFilter],
-    queryFn: () => labelsApi.list({ status: statusFilter || undefined, tag: tagFilter || undefined }),
+    queryFn: () =>
+      labelsApi.list({
+        status: statusFilter === STATUS_ALL ? undefined : statusFilter,
+        tag: tagFilter || undefined,
+      }),
   });
 
   return (
