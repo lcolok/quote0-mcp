@@ -15,6 +15,7 @@ import { MaximizedWeatherWidget } from '../react-widgets/components/MaximizedWea
 import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
+import { MindResetDeviceClient } from '../image-sender/services/api/device-client.js';
 
 function sanitizeWeatherData(data: any): WeatherData {
   const toStr = (v: any, fallback?: string): string | undefined => {
@@ -259,6 +260,45 @@ export class NewsScheduler {
 
   async reloadJobs(): Promise<void> {
     const jobRecords = await this.postgres.getSchedulerJobs();
+
+    // 幂等注册默认 memo 轮播任务（已存在则保留用户修改，不覆盖）
+    try {
+      await this.postgres.pool.query(`
+        INSERT INTO news_scheduler_jobs (
+          id, name, description, category, data_source, rss_source, processor, renderer,
+          interval_ms, initial_delay_ms, options, index_strategy, enabled
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, $13
+        )
+        ON CONFLICT (id) DO NOTHING
+      `, [
+        'memo-rotation-default',
+        '备忘轮播推送',
+        '轮播 enabled+ready 的 memo 到墨水屏',
+        'memo',
+        'memo',
+        'memo-rss-placeholder',
+        'ax-optimized',
+        'device',
+        30 * 60 * 1000,
+        0,
+        JSON.stringify({ border: '0' }),
+        JSON.stringify({
+          type: 'fair-rotation',
+          poolSize: -1,
+          startIndex: 0,
+          cooldownHours: 0,
+          maxPushCount: 999,
+          rotateAfterEachPush: true,
+          skipEmptySource: false
+        }),
+        false
+      ]);
+    } catch (err) {
+      console.warn('⚠️ 注册默认 memo 任务失败（非阻塞）:', err);
+    }
+
     if (jobRecords.length === 0) {
       console.log('🆕 数据库中没有调度任务，创建默认任务...');
       
@@ -433,6 +473,12 @@ export class NewsScheduler {
     // Weather branch: minimal intrusion, bypass RSS pipeline entirely
     if (job.config.dataSource === 'weather') {
       await this.runWeatherJob(job);
+      return;
+    }
+
+    // Memo branch: fair-rotation push pre-rendered memos to device
+    if (job.config.dataSource === 'memo') {
+      await this.runMemoJob(job);
       return;
     }
 
@@ -956,6 +1002,104 @@ export class NewsScheduler {
             pushReason: message,
             runFinishedAt: new Date(),
             metadata: { error: message }
+          });
+        } catch (historyError) {
+          console.warn('⚠️ 更新运行历史失败:', historyError);
+        }
+      }
+
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.persistSchedulerState(job, nextRunAt);
+    } finally {
+      job.state.running = false;
+    }
+  }
+
+  /**
+   * Memo job: fair-rotation push pre-rendered memos to device
+   */
+  private async runMemoJob(job: SchedulerJobInstance): Promise<void> {
+    const runStartedAt = new Date();
+    let runHistoryId: number | null = null;
+
+    try {
+      runHistoryId = await this.postgres.createSchedulerRunHistory({
+        jobId: job.config.id,
+        runStartedAt,
+        source: 'memo',
+        metadata: { dataSource: 'memo' }
+      });
+
+      const result = await this.postgres.pool.query(`
+        SELECT id, text, png_path, sort_order
+        FROM memos
+        WHERE enabled = true AND status = 'ready'
+        ORDER BY sort_order ASC, created_at ASC
+      `);
+
+      const rows = result.rows;
+      if (rows.length === 0) {
+        console.log(`📝 Memo任务 ${job.config.id}: 没有 enabled+ready 的备忘`);
+        job.state.consecutiveFailures = 0;
+        const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+        await this.persistSchedulerState(job, nextRunAt);
+        if (runHistoryId) {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'skipped',
+            pushReason: 'no_ready_memos',
+            runFinishedAt: new Date()
+          });
+        }
+        return;
+      }
+
+      job.state.dynamicPoolSize = rows.length;
+      const idx = this.getNextCandidateIndex(job);
+      const memo = rows[idx];
+
+      console.log(`📝 Memo任务 ${job.config.id} 选中: memo.id=${memo.id}, idx=${idx}, total=${rows.length}`);
+
+      // 从 MinIO 读取预渲染 PNG
+      const pngBuffer = await this.readMinIOObject(memo.png_path);
+      const base64 = pngBuffer.toString('base64');
+
+      // 推送到设备
+      const client = MindResetDeviceClient.fromEnvironment();
+      const border = (job.config.options as any)?.border ?? '0';
+      const r = await client.sendImage(base64, { border });
+
+      if (!r.success) {
+        throw new Error(`设备推送失败: ${r.error}`);
+      }
+
+      console.log(`✅ Memo任务 ${job.config.id} 推送成功: memo.id=${memo.id}`);
+
+      job.state.consecutiveFailures = 0;
+      const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+      await this.persistSchedulerState(job, nextRunAt);
+
+      if (runHistoryId) {
+        await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+          pushStatus: 'success',
+          pushReason: 'memo_pushed',
+          candidateFingerprint: String(memo.id),
+          runFinishedAt: new Date(),
+          metadata: { memoId: memo.id, index: idx, total: rows.length }
+        });
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`❌ Memo任务 ${job.config.id} 执行失败: ${message}`, error);
+      job.state.consecutiveFailures += 1;
+
+      if (runHistoryId) {
+        try {
+          await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'failed',
+            pushReason: message,
+            runFinishedAt: new Date(),
+            metadata: { error: message, consecutiveFailures: job.state.consecutiveFailures }
           });
         } catch (historyError) {
           console.warn('⚠️ 更新运行历史失败:', historyError);
@@ -1871,6 +2015,21 @@ export class NewsScheduler {
         // ignore
       }
     }
+  }
+
+  /**
+   * Read an object from MinIO into a Buffer (clean async helper, no Promise executor anti-pattern)
+   */
+  private async readMinIOObject(objectKey: string): Promise<Buffer> {
+    const { getImageStorage } = await import('../react-widgets/core/image-storage.js');
+    const imageStorage = getImageStorage();
+    const bucket = process.env.MINIO_BUCKET || 'quote0-images';
+    const stream = await imageStorage.getClient().getObject(bucket, objectKey);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks);
   }
 
   /**
