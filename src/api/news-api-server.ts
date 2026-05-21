@@ -19,6 +19,7 @@ import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
 import inventoryApp from './inventory-api.js';
 import labelsApp from './labels-api.js';
+import memosApp from './memos-api.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { labelPrintOrchestrator } from '../react-widgets/core/label-print-orchestrator.js';
 import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
@@ -214,6 +215,7 @@ app.route('/', llmProvidersApp);
 // Inventory API
 app.route('/', inventoryApp);
 app.route('/api/labels', labelsApp);
+app.route('/api/memos', memosApp);
 
 // RSS源数据配置
 const RSS_SOURCES: Record<string, RSSSourceInfo> = {

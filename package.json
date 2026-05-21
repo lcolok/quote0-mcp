@@ -41,6 +41,7 @@
     "icons:test": "tsx scripts/test-icons.ts",
     "setup": "bunx tsx scripts/setup-services.ts",
     "check": "bunx tsx scripts/check-services.ts",
+    "seed:memo": "bunx tsx scripts/seed-memo.ts",
     "status": "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}' --filter name=quote0"
   },
   "keywords": [
