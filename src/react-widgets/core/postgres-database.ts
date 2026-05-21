@@ -220,6 +220,15 @@ export class PostgresDatabase {
       )`,
       `CREATE INDEX IF NOT EXISTS memos_sort_order_idx ON memos(sort_order, created_at)`,
       `CREATE INDEX IF NOT EXISTS memos_status_idx ON memos(status)`,
+      // Phase 2.5: per-memo target_renderer (device | local-eink | both)
+      `ALTER TABLE memos ADD COLUMN IF NOT EXISTS target_renderer TEXT NOT NULL DEFAULT 'both'`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memos_target_renderer_check') THEN
+          ALTER TABLE memos ADD CONSTRAINT memos_target_renderer_check
+            CHECK (target_renderer IN ('device','local-eink','both'));
+        END IF;
+      END $$`,
       // v1.9.0 内置 "🌡️ 热敏默认" 系统 preset（is_system=true, static_suffix 模式）
       // static_suffix_text 是 v1.8.0 thermal-prompt-injector 的核心约束（英文，~580 字）
       `INSERT INTO image_presets (id, name, prompt, is_system, style_mode, static_suffix_text, display_order)

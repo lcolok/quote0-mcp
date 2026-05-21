@@ -7,6 +7,13 @@ const memosApp = new Hono();
 const imageStorage = getImageStorage();
 const MINIO_BUCKET = process.env.MINIO_BUCKET || 'quote0-images';
 
+const VALID_TARGET_RENDERERS = new Set(['device', 'local-eink', 'both']);
+
+function normalizeTargetRenderer(v: unknown): string {
+  if (typeof v === 'string' && VALID_TARGET_RENDERERS.has(v)) return v;
+  return 'both';
+}
+
 function rowToMemo(row: any): any {
   return {
     id: row.id,
@@ -21,6 +28,7 @@ function rowToMemo(row: any): any {
     status: row.status,
     lastError: row.last_error ?? null,
     renderLatencyMs: row.render_latency_ms,
+    targetRenderer: row.target_renderer ?? 'both',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -69,7 +77,7 @@ memosApp.get('/', async (c) => {
     const db = getPostgresDatabase();
     const result = await db.getPool().query(
       `SELECT id, text, enabled, sort_order, png_path, target_id, widget_id, font_family,
-              status, last_error, render_latency_ms, created_at, updated_at
+              status, last_error, render_latency_ms, target_renderer, created_at, updated_at
        FROM memos
        ORDER BY sort_order ASC, created_at ASC`
     );
@@ -90,7 +98,7 @@ memosApp.get('/:id', async (c) => {
     const db = getPostgresDatabase();
     const result = await db.getPool().query(
       `SELECT id, text, enabled, sort_order, png_path, target_id, widget_id, font_family,
-              status, last_error, render_latency_ms, created_at, updated_at
+              status, last_error, render_latency_ms, target_renderer, created_at, updated_at
        FROM memos WHERE id = $1 LIMIT 1`,
       [id]
     );
@@ -116,6 +124,7 @@ memosApp.post('/', async (c) => {
       sortOrder?: number;
       widgetId?: string;
       fontFamily?: string;
+      targetRenderer?: string;
     }>();
 
     if (!body.text || body.text.trim() === '') {
@@ -125,9 +134,11 @@ memosApp.post('/', async (c) => {
     const memoId = crypto.randomUUID();
     const db = getPostgresDatabase();
 
+    const targetRenderer = normalizeTargetRenderer(body.targetRenderer);
+
     await db.getPool().query(
-      `INSERT INTO memos (id, text, enabled, sort_order, widget_id, font_family, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'draft')`,
+      `INSERT INTO memos (id, text, enabled, sort_order, widget_id, font_family, target_renderer, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')`,
       [
         memoId,
         body.text.trim(),
@@ -135,6 +146,7 @@ memosApp.post('/', async (c) => {
         typeof body.sortOrder === 'number' ? body.sortOrder : 0,
         body.widgetId ?? null,
         body.fontFamily ?? null,
+        targetRenderer,
       ]
     );
 
@@ -145,7 +157,7 @@ memosApp.post('/', async (c) => {
 
     const refreshed = await db.getPool().query(
       `SELECT id, text, enabled, sort_order, png_path, target_id, widget_id, font_family,
-              status, last_error, render_latency_ms, created_at, updated_at
+              status, last_error, render_latency_ms, target_renderer, created_at, updated_at
        FROM memos WHERE id = $1 LIMIT 1`,
       [memoId]
     );
@@ -176,6 +188,7 @@ memosApp.patch('/:id', async (c) => {
       text?: string;
       enabled?: boolean;
       sortOrder?: number;
+      targetRenderer?: string;
     }>();
 
     const db = getPostgresDatabase();
@@ -209,6 +222,10 @@ memosApp.patch('/:id', async (c) => {
       sets.push(`sort_order = $${idx++}`);
       vals.push(body.sortOrder);
     }
+    if (body.targetRenderer !== undefined) {
+      sets.push(`target_renderer = $${idx++}`);
+      vals.push(normalizeTargetRenderer(body.targetRenderer));
+    }
 
     if (sets.length === 0) {
       return c.json({ success: false, error: '无可更新字段' }, 400);
@@ -232,7 +249,7 @@ memosApp.patch('/:id', async (c) => {
 
     const refreshed = await db.getPool().query(
       `SELECT id, text, enabled, sort_order, png_path, target_id, widget_id, font_family,
-              status, last_error, render_latency_ms, created_at, updated_at
+              status, last_error, render_latency_ms, target_renderer, created_at, updated_at
        FROM memos WHERE id = $1 LIMIT 1`,
       [id]
     );
@@ -308,7 +325,7 @@ memosApp.post('/:id/render', async (c) => {
 
     const refreshed = await db.getPool().query(
       `SELECT id, text, enabled, sort_order, png_path, target_id, widget_id, font_family,
-              status, last_error, render_latency_ms, created_at, updated_at
+              status, last_error, render_latency_ms, target_renderer, created_at, updated_at
        FROM memos WHERE id = $1 LIMIT 1`,
       [id]
     );

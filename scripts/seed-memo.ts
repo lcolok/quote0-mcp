@@ -5,8 +5,8 @@ async function main() {
   await db.initialize();
 
   const result = await db.getPool().query(
-    `INSERT INTO memos (id, text, enabled, sort_order, status)
-     VALUES ('memo-001', '带Win11重装U盘回公司', true, 0, 'draft')
+    `INSERT INTO memos (id, text, enabled, sort_order, target_renderer, status)
+     VALUES ('memo-001', '带Win11重装U盘回公司', true, 0, 'both', 'draft')
      ON CONFLICT (id) DO NOTHING
      RETURNING id`
   );

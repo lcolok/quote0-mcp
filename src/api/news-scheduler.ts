@@ -1031,7 +1031,7 @@ export class NewsScheduler {
       });
 
       const result = await this.postgres.pool.query(`
-        SELECT id, text, png_path, sort_order
+        SELECT id, text, png_path, sort_order, target_renderer
         FROM memos
         WHERE enabled = true AND status = 'ready'
         ORDER BY sort_order ASC, created_at ASC
@@ -1056,23 +1056,66 @@ export class NewsScheduler {
       job.state.dynamicPoolSize = rows.length;
       const idx = this.getNextCandidateIndex(job);
       const memo = rows[idx];
+      const targetRenderer = memo.target_renderer ?? 'both';
 
-      console.log(`📝 Memo任务 ${job.config.id} 选中: memo.id=${memo.id}, idx=${idx}, total=${rows.length}`);
+      console.log(`📝 Memo任务 ${job.config.id} 选中: memo.id=${memo.id}, idx=${idx}, total=${rows.length}, target=${targetRenderer}`);
 
-      // 从 MinIO 读取预渲染 PNG
+      // 从 MinIO 读取预渲染 PNG（device 和 local-eink 共用）
       const pngBuffer = await this.readMinIOObject(memo.png_path);
       const base64 = pngBuffer.toString('base64');
 
-      // 推送到设备
-      const client = MindResetDeviceClient.fromEnvironment();
-      const border = (job.config.options as any)?.border ?? '0';
-      const r = await client.sendImage(base64, { border });
+      let deviceOk = false;
+      const pushDetails: Record<string, any> = {};
 
-      if (!r.success) {
-        throw new Error(`设备推送失败: ${r.error}`);
+      // device / both：推 MindReset 云端
+      if (targetRenderer === 'device' || targetRenderer === 'both') {
+        const client = MindResetDeviceClient.fromEnvironment();
+        const border = (job.config.options as any)?.border ?? '0';
+        const r = await client.sendImage(base64, { border });
+        deviceOk = r.success;
+        pushDetails.device = { success: r.success, error: r.error ?? undefined };
+        if (r.success) {
+          console.log(`✅ Memo任务 ${job.config.id} MindReset 推送成功: memo.id=${memo.id}`);
+        } else {
+          console.error(`❌ Memo任务 ${job.config.id} MindReset 推送失败: ${r.error}`);
+        }
       }
 
-      console.log(`✅ Memo任务 ${job.config.id} 推送成功: memo.id=${memo.id}`);
+      // local-eink / both：推局域网 ESP32（容错：空设备/失败不阻断 job）
+      if (targetRenderer === 'local-eink' || targetRenderer === 'both') {
+        try {
+          const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
+          const bitmap = await pngTo1BitBitmap(pngBuffer);
+          const devices = await getEinkDevices();
+          if (devices.length === 0) {
+            console.log('⚠️ 无 local-eink 设备，跳过');
+            pushDetails.localEink = { skipped: true, reason: 'no_devices' };
+          } else {
+            const localResults: Array<{ device: string; ok: boolean; error?: string }> = [];
+            for (const d of devices) {
+              const r = await pushToEinkDevice(d, bitmap);
+              localResults.push({ device: d.id, ok: r.ok, error: r.error ?? undefined });
+            }
+            pushDetails.localEink = { devices: localResults };
+            const okCount = localResults.filter(r => r.ok).length;
+            console.log(`✅ Memo任务 ${job.config.id} local-eink 推送: ${okCount}/${localResults.length} 成功`);
+          }
+        } catch (einkError) {
+          const msg = einkError instanceof Error ? einkError.message : String(einkError);
+          console.error(`❌ Memo任务 ${job.config.id} local-eink 推送异常: ${msg}`);
+          pushDetails.localEink = { error: msg };
+        }
+      }
+
+      // 成败判定
+      if (targetRenderer === 'device' && !deviceOk) {
+        throw new Error(`MindReset 推送失败: ${pushDetails.device?.error || 'unknown'}`);
+      }
+      if (targetRenderer === 'both' && !deviceOk) {
+        throw new Error(`both 模式 MindReset 推送失败: ${pushDetails.device?.error || 'unknown'}`);
+      }
+
+      console.log(`✅ Memo任务 ${job.config.id} 推送完成: memo.id=${memo.id}, target=${targetRenderer}`);
 
       job.state.consecutiveFailures = 0;
       const nextRunAt = new Date(Date.now() + job.config.intervalMs);
@@ -1084,7 +1127,7 @@ export class NewsScheduler {
           pushReason: 'memo_pushed',
           candidateFingerprint: String(memo.id),
           runFinishedAt: new Date(),
-          metadata: { memoId: memo.id, index: idx, total: rows.length }
+          metadata: { memoId: memo.id, index: idx, total: rows.length, targetRenderer, pushDetails }
         });
       }
 
