@@ -200,6 +200,8 @@ export class PostgresDatabase {
       `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS source_image_url text`,
       `ALTER TABLE image_presets ADD COLUMN IF NOT EXISTS display_order int NOT NULL DEFAULT 0`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS applied_preset_id uuid REFERENCES image_presets(id) ON DELETE SET NULL`,
+      // v1.12.0: 打印前 dither 算法选择
+      `ALTER TABLE labels ADD COLUMN IF NOT EXISTS dither_algorithm text NOT NULL DEFAULT 'threshold'`,
       // v1.9.0 内置 "🌡️ 热敏默认" 系统 preset（is_system=true, static_suffix 模式）
       // static_suffix_text 是 v1.8.0 thermal-prompt-injector 的核心约束（英文，~580 字）
       `INSERT INTO image_presets (id, name, prompt, is_system, style_mode, static_suffix_text, display_order)

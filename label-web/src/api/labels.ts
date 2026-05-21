@@ -52,10 +52,11 @@ export const labelsApi = {
       .post<{ success: boolean; svg: string; pngUrl: string }>(`/labels/${id}/regenerate`)
       .then((r) => r.data),
 
-  redither: (id: string) =>
+  redither: (id: string, algorithm?: string) =>
     client
-      .post<{ success: boolean; id: string; pngPath: string; pngUrl: string }>(
-        `/labels/${id}/redither`
+      .post<{ success: boolean; id: string; pngPath: string; pngUrl: string; ditherAlgorithm: string }>(
+        `/labels/${id}/redither`,
+        algorithm ? { algorithm } : {}
       )
       .then((r) => r.data),
 
@@ -119,6 +120,9 @@ export const labelsApi = {
 
   recordUsePreset: (id: string) =>
     client.post<{ success: boolean }>(`/labels/presets/${id}/use`, {}).then((r) => r.data),
+
+  duplicatePreset: (id: string) =>
+    client.post<{ success: boolean; id: string; createdAt: string }>(`/labels/presets/${id}/duplicate`, {}).then((r) => r.data),
 
   getCurrentTarget: () =>
     client

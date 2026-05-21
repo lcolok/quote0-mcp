@@ -7,6 +7,7 @@ import { imageLabelGenerator } from '../react-widgets/services/image-label-gener
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
 import { listWidgets, SUPPORTED_FONTS, getWidget } from '../react-widgets/core/label-widget-registry.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
+import { isDitherAlgorithm, DEFAULT_DITHER, type DitherAlgorithm } from '../react-widgets/core/dither-algorithms.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
@@ -56,6 +57,7 @@ function rowToLabel(row: any): any {
     frameSvgPaths: row.frame_svg_paths ?? null,
     decoratorCode: row.decorator_code ?? null,
     parentRevisionId: row.parent_revision_id ?? null,
+    ditherAlgorithm: row.dither_algorithm ?? 'threshold',
   };
 }
 
@@ -214,6 +216,11 @@ labelsApp.post('/generate-image', async (c) => {
 labelsApp.post('/:id/redither', async (c) => {
   try {
     const id = c.req.param('id');
+    const body = (await c.req.json().catch(() => ({}))) as { algorithm?: string };
+    const algorithm: DitherAlgorithm = isDitherAlgorithm(body.algorithm)
+      ? body.algorithm
+      : DEFAULT_DITHER;
+
     const db = getPostgresDatabase();
     const labelRes = await db.getPool().query(
       `SELECT target_id, source_type, source_image_url FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
@@ -231,7 +238,11 @@ labelsApp.post('/:id/redither', async (c) => {
     }
 
     const target = BUILTIN_TARGETS.find((t) => t.id === row.target_id) ?? LABEL_T40X20_TARGET;
-    const { pngBuffer, bitmapBuffer } = await imageLabelGenerator.redither(row.source_image_url, target);
+    const { pngBuffer, bitmapBuffer } = await imageLabelGenerator.redither(
+      row.source_image_url,
+      target,
+      algorithm
+    );
 
     const pngPath = `labels/${id}.png`;
     await imageStorage.getClient().putObject(MINIO_BUCKET, pngPath, pngBuffer, pngBuffer.length, {
@@ -239,8 +250,8 @@ labelsApp.post('/:id/redither', async (c) => {
       'Cache-Control': 'public, max-age=86400',
     });
     await db.getPool().query(
-      `UPDATE labels SET png_path = $1, bin_bytes = $2, updated_at = now() WHERE id = $3`,
-      [pngPath, bitmapBuffer.length, id]
+      `UPDATE labels SET png_path = $1, bin_bytes = $2, dither_algorithm = $3, updated_at = now() WHERE id = $4`,
+      [pngPath, bitmapBuffer.length, algorithm, id]
     );
 
     return c.json({
@@ -248,6 +259,7 @@ labelsApp.post('/:id/redither', async (c) => {
       id,
       pngPath,
       pngUrl: `/api/minio-proxy/${pngPath}`,
+      ditherAlgorithm: algorithm,
     });
   } catch (error) {
     console.error('❌ POST /api/labels/:id/redither 失败:', error);
@@ -670,6 +682,10 @@ labelsApp.patch('/presets/:id', async (c) => {
       sets.push(`model = $${idx++}`);
       vals.push(body.model);
     }
+    if (body.staticSuffixText !== undefined) {  // 允许传 null 清空
+      sets.push(`static_suffix_text = $${idx++}`);
+      vals.push(body.staticSuffixText === null ? null : String(body.staticSuffixText).slice(0, 4000));
+    }
     if (sets.length === 0) {
       return c.json({ success: false, error: '无可更新字段' }, 400);
     }
@@ -703,6 +719,30 @@ labelsApp.delete('/presets/:id', async (c) => {
     if (r.rowCount === 0) return c.json({ success: false, error: 'preset 不存在' }, 404);
     return c.json({ success: true });
   } catch (e) {
+    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+// POST /api/labels/presets/:id/duplicate — 复制为副本（保留 prompt/model/参考图/风格模式，置为可编辑的用户预设）
+labelsApp.post('/presets/:id/duplicate', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const db = getPostgresDatabase();
+    const r = await db.getPool().query(
+      `INSERT INTO image_presets
+         (name, prompt, model, model_options, thumbnail_path, source_label_id,
+          source_image_url, style_mode, static_suffix_text, is_system, display_order)
+       SELECT
+          left(name || ' 副本', 100), prompt, model, model_options, thumbnail_path, source_label_id,
+          source_image_url, style_mode, static_suffix_text, false, display_order
+       FROM image_presets WHERE id = $1
+       RETURNING id, created_at`,
+      [id]
+    );
+    if (r.rowCount === 0) return c.json({ success: false, error: 'preset 不存在' }, 404);
+    return c.json({ success: true, id: r.rows[0].id, createdAt: r.rows[0].created_at }, 201);
+  } catch (e) {
+    console.error('POST /presets/:id/duplicate 失败:', e);
     return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });

@@ -1,3 +1,18 @@
+export type DitherAlgorithm =
+  | 'threshold'
+  | 'floyd-steinberg'
+  | 'atkinson'
+  | 'jarvis'
+  | 'stucki'
+  | 'burkes'
+  | 'sierra'
+  | 'sierra-2'
+  | 'sierra-lite'
+  | 'bayer-4x4'
+  | 'bayer-8x8'
+  | 'bayer-16x16'
+  | 'blue-noise';
+
 export interface Label {
   id: string;
   prompt: string;
@@ -28,6 +43,7 @@ export interface Label {
   frameSvgPaths?: string[] | null;
   decoratorCode?: string | null;
   parentRevisionId?: string | null;
+  ditherAlgorithm?: DitherAlgorithm;
 }
 
 export interface GenerateImageResponse {
@@ -158,6 +174,7 @@ export interface UpdatePresetRequest {
   name?: string;
   prompt?: string;
   model?: string | null;
+  staticSuffixText?: string | null;
 }
 
 export interface RefImageUploadResponse {

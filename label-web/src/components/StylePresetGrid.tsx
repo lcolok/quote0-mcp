@@ -1,9 +1,9 @@
-// useState not needed in this component
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import { Ban, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Ban, Info } from 'lucide-react';
 import { labelsApi } from '@/api/labels';
-// ImagePreset type not directly referenced — used via inference from API
+import PresetDetailDialog from './PresetDetailDialog';
+import type { ImagePreset } from '@/types/label';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -18,21 +18,13 @@ interface Props {
 export const NONE_PRESET_ID = 'none' as const;
 
 export default function StylePresetGrid({ selectedPresetId, onSelect, disabled, className }: Props) {
-  const queryClient = useQueryClient();
   const { data: presets = [], isLoading } = useQuery({
     queryKey: ['image-presets'],
     queryFn: () => labelsApi.listPresets(),
     staleTime: 30_000,
   });
 
-  const deleteMut = useMutation({
-    mutationFn: (id: string) => labelsApi.deletePreset(id),
-    onSuccess: () => {
-      toast.success('已删除预设');
-      queryClient.invalidateQueries({ queryKey: ['image-presets'] });
-    },
-    onError: (e: any) => toast.error(`删除失败：${e?.response?.data?.error ?? e?.message ?? '未知'}`),
-  });
+  const [detailPreset, setDetailPreset] = useState<ImagePreset | null>(null);
 
   const effectiveSelected = selectedPresetId ?? NONE_PRESET_ID;
 
@@ -69,19 +61,17 @@ export default function StylePresetGrid({ selectedPresetId, onSelect, disabled, 
             isSystem={p.isSystem}
             isSelected={effectiveSelected === p.id}
             onClick={() => !disabled && onSelect(p.id)}
-            onDelete={
-              p.isSystem
-                ? undefined
-                : () => {
-                    if (confirm(`确认删除预设「${p.name}」？`)) {
-                      deleteMut.mutate(p.id);
-                    }
-                  }
-            }
+            onInfo={() => setDetailPreset(p)}
             disabled={disabled}
           />
         ))}
       </div>
+
+      <PresetDetailDialog
+        preset={detailPreset}
+        open={!!detailPreset}
+        onOpenChange={(o) => { if (!o) setDetailPreset(null); }}
+      />
     </div>
   );
 }
@@ -93,7 +83,7 @@ interface CardProps {
   isSystem?: boolean;
   isSelected: boolean;
   onClick: () => void;
-  onDelete?: () => void;
+  onInfo?: () => void;
   disabled?: boolean;
 }
 
@@ -104,7 +94,7 @@ function PresetCard({
   isSystem,
   isSelected,
   onClick,
-  onDelete,
+  onInfo,
   disabled,
 }: CardProps) {
   return (
@@ -160,18 +150,15 @@ function PresetCard({
         </span>
       )}
 
-      {/* 删除按钮（仅 user preset，hover 显示） */}
-      {onDelete && !isSelected && (
+      {/* 详情/管理按钮（hover 显示，所有真实预设都有） */}
+      {onInfo && (
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="absolute top-1 right-1 p-1 rounded bg-background/80 opacity-0 group-hover:opacity-100 hover:bg-destructive hover:text-destructive-foreground transition"
-          title="删除预设"
+          onClick={(e) => { e.stopPropagation(); onInfo(); }}
+          className="absolute top-1 right-1 p-1 rounded bg-background/80 opacity-0 group-hover:opacity-100 hover:bg-primary hover:text-primary-foreground transition"
+          title="查看 / 管理预设"
         >
-          <Trash2 className="h-3 w-3" />
+          <Info className="h-3 w-3" />
         </button>
       )}
     </div>

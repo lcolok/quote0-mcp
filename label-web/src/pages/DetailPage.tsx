@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, Printer, RefreshCw, Archive, ImageIcon } from 'lucide-react';
 import SavePresetDialog from '@/components/SavePresetDialog';
+import DitherSelectorGrid from '@/components/DitherSelectorGrid';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -155,9 +156,9 @@ export default function DetailPage() {
         </div>
 
         <div className="flex flex-col md:flex-row gap-6">
-          <div className="shrink-0 space-y-3">
+          <div className="w-full md:w-[480px] shrink-0 space-y-3">
             <img
-              src={label.pngUrl}
+              src={`${label.pngUrl}?v=${encodeURIComponent(label.updatedAt)}`}
               alt={label.prompt}
               className="w-full max-w-[480px] aspect-[2/1] rounded-lg border border-border object-contain bg-background"
             />
@@ -170,6 +171,13 @@ export default function DetailPage() {
                   className="w-full max-w-[480px] rounded-lg border border-border object-contain bg-muted"
                 />
               </div>
+            )}
+            {label.sourceType === 'image' && label.sourceImageUrl && (
+              <DitherSelectorGrid
+                labelId={label.id}
+                currentAlgorithm={label.ditherAlgorithm}
+                onApplied={() => refetch()}
+              />
             )}
             {label.sourceType === 'widget' && (
               <div className="space-y-2">
@@ -246,7 +254,7 @@ export default function DetailPage() {
               </div>
             )}
           </div>
-          <div className="space-y-2 text-sm">
+          <div className="space-y-2 text-sm md:flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">targetId:</span>
               <span className="font-mono text-foreground">{label.targetId}</span>
