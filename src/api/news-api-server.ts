@@ -238,12 +238,13 @@ const RSS_SOURCES: Record<string, RSSSourceInfo> = {
     description: '中文业界资讯站',
     category: 'technology'
   },
-  pingwest: {
-    id: 'pingwest',
-    name: 'PingWest',
-    description: '科技媒体平台',
-    category: 'technology'
-  },
+  // pingwest 源已失效（返回 404），暂时注释以避免调度器空跑
+  // pingwest: {
+  //   id: 'pingwest',
+  //   name: 'PingWest',
+  //   description: '科技媒体平台',
+  //   category: 'technology'
+  // },
   techcrunch: {
     id: 'techcrunch',
     name: 'TechCrunch',

@@ -44,12 +44,13 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
       category: 'technology', 
       description: '中文业界资讯站'
     },
-    'pingwest': {
-      name: 'PingWest',
-      url: 'https://www.pingwest.com/feed',
-      category: 'technology',
-      description: '科技媒体平台'
-    },
+    // pingwest 源已失效（返回 404），暂时注释以避免调度器空跑
+    // 'pingwest': {
+    //   name: 'PingWest',
+    //   url: 'https://www.pingwest.com/feed',
+    //   category: 'technology',
+    //   description: '科技媒体平台'
+    // },
     'techcrunch': {
       name: 'TechCrunch',
       url: 'https://feeds.feedburner.com/TechCrunch',
@@ -216,7 +217,7 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
     // 清理HTML标签和多余空白
     return content
       .replace(/<[^>]*>/g, '')
-      .replace(/\\s+/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
   }
   

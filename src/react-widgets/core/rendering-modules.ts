@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { EINK_TARGET } from './render-targets.js';
+import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from './device-constants.js';
 import { 
   RenderingModule, 
   ProcessedDataItem, 
@@ -338,7 +339,7 @@ export class JSONRenderingModule extends BaseRenderingModule<object> {
 /**
  * 设备推送渲染模块
  */
-export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: string; deviceResult: string }> {
+export class DevicePushRenderingModule extends BaseRenderingModule<any> {
   name = '设备推送渲染器';
   version = '1.0.0';
   description = '将新闻组件渲染为图片并推送到MindReset设备';
@@ -380,24 +381,18 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
     };
   }
   
-  async render(data: RenderableDataItem, config: RenderingConfig): Promise<{ imageUrl: string; deviceResult: string }> {
-    console.log(`📱 渲染并推送到设备: ${data.title}`);
-    
-    // 声明渲染器变量，以便在错误处理中使用
+  async render(data: RenderableDataItem, config: RenderingConfig): Promise<any> {
+    console.log(`📱 渲染设备图片: ${data.title}`);
+
     let satoriRenderer: any = null;
-    
+
     try {
-      // 直接使用传入的数据进行渲染，而不是调用CLI工具
       const { SatoriNewsWidget } = await import('../components/SatoriNewsWidget.js');
       const { satoriRenderer: renderer } = await import('./satori-renderer.js');
       satoriRenderer = renderer;
       const { getImageStorage } = await import('./image-storage.js');
       const React = await import('react');
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
       const fs = await import('fs/promises');
-      
-      const execAsync = promisify(exec);
       
       // 初始化渲染器
       await satoriRenderer.initialize();
@@ -468,149 +463,11 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
       console.log(`✅ 新闻组件已保存到MinIO: ${imageUrl}`);
       console.log(`📦 MinIO对象键: ${objectKey}`);
 
-      // 推送到设备
-      console.log('📤 推送到MindReset设备...');
-
-      // 设备健康检查API已移除，直接进行推送
-      console.log('📤 准备推送到MindReset设备...');
-
-      const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${localImagePath}" "0" "${data.link || ''}" "ORDERED"`;
-
-      // 实现自动重试机制处理429错误
-      let retryCount = 0;
-      const maxRetries = 2;
-      const baseDelay = 30000; // 30秒基础延迟
-
-      while (retryCount <= maxRetries) {
-        try {
-          const { stdout, stderr } = await execAsync(deviceCommand, {
-            cwd: process.cwd(),
-            env: process.env
-          });
-
-          if (stdout) {
-            console.log(stdout);
-          }
-          if (stderr) {
-            console.error(stderr);
-          }
-
-          return {
-            imageUrl,
-            localImagePath: `/${objectKey}`, // 使用MinIO objectKey作为数据库路径
-            deviceResult: '推送成功',
-            // 添加文本数据，确保与图片内容一致
-            title: data.title,
-            message: data.message,
-            summary: data.message, // 使用 message 作为 summary
-            source: data.source,
-            signature: data.signature,
-            link: data.link
-          };
-        } catch (deviceError: any) {
-          // 检查是否是429错误且还有重试次数
-          if (deviceError.message.includes('429 Too Many Requests') && retryCount < maxRetries) {
-            const delay = baseDelay * (retryCount + 1); // 递增延迟
-            console.warn(`⏱️ 遇到API频率限制，${delay/1000}秒后进行第${retryCount + 1}次重试...`);
-            
-            // 等待指定时间
-            await new Promise(resolve => setTimeout(resolve, delay));
-            retryCount++;
-            continue;
-          }
-          
-          // 如果不是429错误或重试次数已用完，处理错误
-          console.error('❌ 设备推送失败:', deviceError.message);
-          
-          // 增强的错误信息和用户提醒
-          let enhancedErrorMessage = `推送失败: ${deviceError.message}`;
-          let troubleshootingTips = '';
-          
-          // 检查是否是429错误（请求频率过高）
-          if (deviceError.message.includes('429 Too Many Requests')) {
-            if (retryCount >= maxRetries) {
-              troubleshootingTips = `
-⏱️ API请求频率过高 - 已重试${maxRetries}次仍未成功
-🔍 建议解决方案：
-1. 手动等待更长时间（建议2-5分钟）后再次尝试
-2. 检查是否有其他程序同时在使用设备API
-3. 暂时降低发送频率，避免频繁操作
-4. 如果问题持续，可能需要联系技术支持
-
-💡 提示：系统已自动重试但仍受限，建议稍后手动重试`;
-            } else {
-              troubleshootingTips = `
-⏱️ API请求频率过高 - 系统保护机制触发
-🔍 解决方案：
-1. 等待 30-60 秒后再次尝试发送
-2. 避免在短时间内连续发送多个图片
-3. 如有自动化脚本，请在发送间隔中添加延迟（建议10秒以上）
-4. 检查是否有其他程序同时在使用设备API
-
-💡 提示：这是正常的API保护机制，稍等片刻即可恢复正常`;
-            }
-            
-            console.warn('⏱️ API频率限制触发');
-            console.log(troubleshootingTips);
-            enhancedErrorMessage += troubleshootingTips;
-          
-        } else if (deviceError.message.includes('500 Internal Server Error')) {
-          troubleshootingTips = `
-🔍 故障排查建议：
-1. 检查MindReset设备是否正常连接电源和USB线
-2. 尝试拔插USB数据线重新连接设备
-3. 确认设备屏幕是否有显示（设备可能处于休眠状态）
-4. 检查设备是否在dot.mindreset.tech管理界面中显示为在线状态
-5. 如果问题持续，可能是服务器临时故障，请稍后重试`;
-          
-          console.warn('🚨 设备连接问题检测');
-          console.log(troubleshootingTips);
-          enhancedErrorMessage += troubleshootingTips;
-          
-        } else if (deviceError.message.includes('ECONNREFUSED') || deviceError.message.includes('timeout')) {
-          troubleshootingTips = `
-🔍 网络连接问题：
-1. 检查网络连接是否正常
-2. 确认dot.mindreset.tech服务是否可访问
-3. 检查防火墙设置是否阻止了连接`;
-          
-          console.warn('🌐 网络连接问题检测');
-          console.log(troubleshootingTips);
-          enhancedErrorMessage += troubleshootingTips;
-          
-        } else if (deviceError.message.includes('Command failed')) {
-          troubleshootingTips = `
-🔍 命令执行问题：
-1. 检查image-sender模块是否正确构建 (npm run build)
-2. 确认所有依赖包已正确安装
-3. 检查设备ID和密钥配置是否正确`;
-          
-          console.warn('⚙️ 命令执行问题检测');
-          console.log(troubleshootingTips);
-          enhancedErrorMessage += troubleshootingTips;
-        }
-        
-          return {
-            imageUrl,
-            localImagePath: `/${objectKey}`, // 添加localImagePath，即使推送失败也要保存图片路径
-            deviceResult: enhancedErrorMessage,
-            // 即使推送失败，也返回文本数据
-            title: data.title,
-            message: data.message,
-            summary: data.message,
-            source: data.source,
-            signature: data.signature,
-            link: data.link
-          };
-        }
-      }
-      
-      // 如果到达这里，说明所有重试都失败了
+      // Renderer 职责：只渲染和上传，不推送。
+      // 推送由调用方（processNews / DevicePusher）统一负责。
       return {
         imageUrl,
-        localImagePath: `/${objectKey}`, // 添加localImagePath，即使推送失败也要保存图片路径
-        deviceResult: '推送失败: 超过最大重试次数',
-        // 即使推送失败，也返回文本数据
+        localImagePath, // 返回真正的本地路径，供 Pusher 使用
         title: data.title,
         message: data.message,
         summary: data.message,
@@ -618,19 +475,12 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
         signature: data.signature,
         link: data.link
       };
-      
+
     } catch (error) {
-      console.error('设备推送渲染失败:', error);
-      throw new Error(`设备推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      console.error('设备渲染失败:', error);
+      throw new Error(`设备渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
-      // 确保渲染器资源被清理
-      if (satoriRenderer) {
-        try {
-          await satoriRenderer.close();
-        } catch (cleanupError) {
-          console.warn('⚠️ 渲染器清理失败:', cleanupError);
-        }
-      }
+      // 单例 Satori 渲染器常驻常热，不在每次渲染后 close()
     }
   }
   
@@ -643,49 +493,20 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
         defaultValue: 'auto',
         description: '签名样式：auto, simple, detailed',
         choices: ['auto', 'simple', 'detailed']
-      },
-      {
-        name: 'devicePush',
-        type: 'boolean',
-        required: false,
-        defaultValue: true,
-        description: '是否推送到设备'
       }
     ];
   }
   
   async getHealthStatus(): Promise<RenderingHealthStatus> {
-    try {
-      // 检查bun命令是否可用
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
-      
-      await execAsync('which bun', { timeout: 1000 });
-      
-      return {
-        healthy: true,
-        message: '设备推送渲染器正常',
-        lastChecked: new Date().toISOString(),
-        responseTime: 100,
-        renderingCapacity: 5, // 设备推送相对慢一些
-        fontStatus: 'loaded',
-        additionalInfo: {
-          bunAvailable: true,
-          integratedPipeline: true
-        }
-      };
-      
-    } catch (error) {
-      return {
-        healthy: false,
-        message: `设备推送渲染器异常: ${error instanceof Error ? error.message : '未知错误'}`,
-        lastChecked: new Date().toISOString(),
-        responseTime: 1000,
-        renderingCapacity: 0,
-        fontStatus: 'error'
-      };
-    }
+    return {
+      healthy: true,
+      message: '设备渲染器正常',
+      lastChecked: new Date().toISOString(),
+      responseTime: 100,
+      renderingCapacity: 10,
+      fontStatus: 'loaded',
+      additionalInfo: { integratedPipeline: true }
+    };
   }
 }
 
@@ -693,10 +514,10 @@ export class DevicePushRenderingModule extends BaseRenderingModule<{ imageUrl: s
  * 本地 E-Ink 推送渲染模块
  * 渲染 PNG → 转换 1-bit bitmap → POST 到局域网 e-ink 设备
  */
-export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: string; pushResults: Array<{ device: string; ok: boolean; error?: string }> }> {
-  name = '本地E-Ink推送渲染器';
+export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
+  name = '本地E-Ink渲染器';
   version = '1.0.0';
-  description = '将新闻渲染为图片并推送到局域网 e-ink 设备（bitmap 直推）';
+  description = '将新闻渲染为图片并上传至 MinIO（推送由 DevicePusher 统一负责）';
 
   transformToRenderable(processedData: ProcessedDataItem, params: RenderingParams): RenderableDataItem {
     const sourceMapping: Record<string, string> = {
@@ -733,8 +554,8 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
     };
   }
 
-  async render(data: RenderableDataItem, config: RenderingConfig): Promise<{ imageUrl: string; pushResults: Array<{ device: string; ok: boolean; error?: string }> }> {
-    console.log(`🖥️ 渲染并推送到本地 e-ink 设备: ${data.title}`);
+  async render(data: RenderableDataItem, config: RenderingConfig): Promise<any> {
+    console.log(`🖥️ 渲染本地 e-ink 图片: ${data.title}`);
 
     let satoriRenderer: any = null;
 
@@ -791,44 +612,24 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
       const imageUrl = uploadResult.url;
       console.log(`✅ PNG 已上传 MinIO: ${imageUrl}`);
 
-      // 3. PNG → 1-bit bitmap
-      const { pngTo1BitBitmap } = await import('../../api/eink-converter.js');
-      const bitmap = await pngTo1BitBitmap(imageBuffer);
-      console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
-
-      // 4. 读取设备清单并逐个推送
-      const { getEinkDevices, pushToEinkDevice } = await import('../../api/eink-converter.js');
-
-      const devices = await getEinkDevices();
-      if (devices.length === 0) {
-        console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
-        return { imageUrl, pushResults: [] };
-      }
-
-      const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
-
-      for (const device of devices) {
-        const result = await pushToEinkDevice(device, bitmap);
-        pushResults.push({
-          device: device.id,
-          ok: result.ok,
-          error: result.error
-        });
-      }
-
-      return { imageUrl, pushResults };
+      // Renderer 职责：只渲染和上传，不推送。
+      // 推送由调用方（processNews / DevicePusher）统一负责。
+      return {
+        imageUrl,
+        localImagePath,
+        title: data.title,
+        message: data.message,
+        summary: data.message,
+        source: data.source,
+        signature: data.signature,
+        link: data.link
+      };
 
     } catch (error) {
-      console.error('本地 E-Ink 推送渲染失败:', error);
-      throw new Error(`本地 E-Ink 推送渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      console.error('本地 E-Ink 渲染失败:', error);
+      throw new Error(`本地 E-Ink 渲染失败: ${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
-      if (satoriRenderer) {
-        try {
-          await satoriRenderer.close();
-        } catch (cleanupError) {
-          console.warn('⚠️ 渲染器清理失败:', cleanupError);
-        }
-      }
+      // 单例 Satori 渲染器常驻常热，不在每次渲染后 close()
     }
   }
 
@@ -846,35 +647,18 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<{ imageUrl: st
   }
 
   async getHealthStatus(): Promise<RenderingHealthStatus> {
-    try {
-      // 检查设备配置是否可用
-      const { getEinkDevices } = await import('../../api/eink-converter.js');
-      const devices = await getEinkDevices();
-
-      return {
-        healthy: true,
-        message: `本地 E-Ink 推送渲染器正常，已配置 ${devices.length} 个设备`,
-        lastChecked: new Date().toISOString(),
-        responseTime: 100,
-        renderingCapacity: devices.length > 0 ? 10 : 0,
-        fontStatus: 'loaded',
-        additionalInfo: {
-          targetResolution: `${EINK_TARGET.widthPx}x${EINK_TARGET.heightPx}`,
-          bitmapFormat: '1-bit MSB-first',
-          deviceCount: devices.length,
-          devices: devices.map(d => ({ id: d.id, name: d.name }))
-        }
-      };
-    } catch (error) {
-      return {
-        healthy: false,
-        message: `本地 E-Ink 推送渲染器异常: ${error instanceof Error ? error.message : '未知错误'}`,
-        lastChecked: new Date().toISOString(),
-        responseTime: 1000,
-        renderingCapacity: 0,
-        fontStatus: 'error'
-      };
-    }
+    return {
+      healthy: true,
+      message: '本地 E-Ink 渲染器正常',
+      lastChecked: new Date().toISOString(),
+      responseTime: 100,
+      renderingCapacity: 10,
+      fontStatus: 'loaded',
+      additionalInfo: {
+        targetResolution: `${EINK_TARGET.widthPx}x${EINK_TARGET.heightPx}`,
+        bitmapFormat: '1-bit MSB-first'
+      }
+    };
   }
 }
 

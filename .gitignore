@@ -141,3 +141,4 @@ tools/quality-evaluation/reports/*.md
 lazycat/*.lpk
 # Kimi CLI working directory (not committed)
 .kimi/
+lazycat/.lzc-cli-build*

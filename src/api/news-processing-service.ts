@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
 import { stagedCacheManager } from '../react-widgets/core/staged-cache-manager.js';
+import { devicePusher } from './device-pusher.js';
 import type { NewsData } from '../react-widgets/components/NewsWidget.js';
 import type {
   FullNewsProcessingResult,
@@ -121,7 +122,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         let newsFingerprint: string;
         let cachedTextData: any = null;
-        let deviceResultData: Record<string, any> | null = null;
+        let renderResult: Record<string, any> | null = null;
 
         let usedContextForFingerprint = false;
 
@@ -174,9 +175,8 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         console.log(`🔑 生成缓存键（含fingerprint）: ${cacheKeyString}`);
 
         let imageUrl = '';
-        let localImagePath: string | undefined = undefined;
+        let dbImagePath: string | undefined = undefined;
         let localCacheHit = false;
-        let devicePushResult = '推送成功';
 
         if (!params.force) {
           try {
@@ -184,9 +184,6 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
             const { getImageStorage } = await import('../react-widgets/core/image-storage.js');
             const imageStorage = getImageStorage();
-
-            const searchPattern = `modular_${params.rssSource}_${params.index}_`;
-            console.log(`🔍 搜索模式: ${searchPattern}`);
 
             let existsResult: { url: string; objectKey?: string } | null = null;
 
@@ -197,13 +194,11 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                 if (cachedImageInfo) {
                   existsResult = await imageStorage.imageExistsByObjectKey(cachedImageInfo.objectKey);
                   if (existsResult) {
-                    // 保存localImagePath用于数据库记录
-                    localImagePath = `/${cachedImageInfo.objectKey}`;
+                    dbImagePath = `/${cachedImageInfo.objectKey}`;
                     // 提取缓存的文本数据
                     if (cachedImageInfo.renderConfig && (cachedImageInfo.renderConfig as any).textData) {
                       cachedTextData = (cachedImageInfo.renderConfig as any).textData;
                       console.log('✅ 从缓存中恢复文本数据');
-                      // 使用缓存文本反填上下文，避免后续流程缺失元数据
                       if (cachedTextData) {
                         context.title = context.title || cachedTextData.title;
                         context.link = context.link || cachedTextData.link;
@@ -224,141 +219,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
               imageUrl = existsResult.url;
               localCacheHit = true;
               console.log(`✅ MinIO缓存命中: ${imageUrl}`);
-
-              if (params.renderer === 'local-eink') {
-                // local-eink: 即使缓存命中也要推送到 ESP32
-                console.log('📤 使用缓存图片推送到 ESP32...');
-                try {
-                  const fs = await import('fs/promises');
-                  const path = await import('path');
-                  const { tmpdir } = await import('os');
-                  const https = await import('https');
-                  const http = await import('http');
-                  const fsModule = await import('fs');
-
-                  const tempFileName = `cached_eink_${Date.now()}.png`;
-                  const tempFilePath = path.join(tmpdir(), tempFileName);
-
-                  const { createWriteStream } = await import('fs');
-                  await new Promise<void>((resolve, reject) => {
-                    const client = imageUrl.startsWith('https:') ? https : http;
-                    const file = createWriteStream(tempFilePath);
-
-                    client.get(imageUrl, (response) => {
-                      response.pipe(file);
-                      file.on('finish', () => {
-                        file.close(() => {
-                          console.log(`✅ 文件下载完成: ${tempFilePath}`);
-                          resolve();
-                        });
-                      });
-                      file.on('error', (err) => {
-                        file.close();
-                        reject(err);
-                      });
-                    }).on('error', (err) => {
-                      file.close();
-                      reject(err);
-                    });
-                  });
-
-                  const pngBuffer = await fsModule.promises.readFile(tempFilePath);
-                  const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
-                  const bitmap = await pngTo1BitBitmap(pngBuffer);
-                  console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
-
-                  const devices = await getEinkDevices();
-                  if (devices.length === 0) {
-                    console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
-                  } else {
-                    for (const device of devices) {
-                      const result = await pushToEinkDevice(device, bitmap);
-                      if (result.ok) {
-                        console.log(`✅ ${device.name} 推送成功`);
-                      } else {
-                        console.error(`❌ ${device.name} 推送失败: ${result.error}`);
-                      }
-                    }
-                  }
-
-                  devicePushResult = '缓存图片 e-ink 推送完成';
-
-                  try {
-                    await fsModule.promises.unlink(tempFilePath);
-                  } catch (cleanupError) {
-                    console.warn('⚠️ 清理临时文件失败:', cleanupError);
-                  }
-                } catch (pushError: any) {
-                  console.error('❌ 缓存图片 e-ink 推送失败:', pushError);
-                  devicePushResult = `缓存图片 e-ink 推送失败: ${pushError.message}`;
-                }
-              } else {
-                console.log('📤 使用缓存图片执行设备推送...');
-
-                try {
-                  const fs = await import('fs/promises');
-                  const path = await import('path');
-                  const { tmpdir } = await import('os');
-                  const https = await import('https');
-                  const http = await import('http');
-
-                  const tempFileName = `cached_${Date.now()}.png`;
-                  const tempFilePath = path.join(tmpdir(), tempFileName);
-
-                  const { createWriteStream } = await import('fs');
-                  await new Promise<void>((resolve, reject) => {
-                    const client = imageUrl.startsWith('https:') ? https : http;
-                    const file = createWriteStream(tempFilePath);
-
-                    client.get(imageUrl, (response) => {
-                      response.pipe(file);
-                      file.on('finish', () => {
-                        file.close(() => {
-                          console.log(`✅ 文件下载并关闭完成: ${tempFilePath}`);
-                          resolve();
-                        });
-                      });
-                      file.on('error', (err) => {
-                        file.close();
-                        reject(err);
-                      });
-                    }).on('error', (err) => {
-                      file.close();
-                      reject(err);
-                    });
-                  });
-
-                  const fsModule = await import('fs');
-                  const fileStats = await fsModule.promises.stat(tempFilePath);
-                  console.log(`📊 临时文件信息: 大小=${fileStats.size} bytes, 路径=${tempFilePath}`);
-
-                  // device: 使用 MindReset CLI 推送
-                  const { exec } = await import('child_process');
-                  const { promisify } = await import('util');
-                  const execAsync = promisify(exec);
-
-                  const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${tempFilePath}" "0" "" "ORDERED"`;
-                  console.log(`🔧 执行设备推送命令: ${deviceCommand}`);
-
-                  const { stdout, stderr } = await execAsync(deviceCommand, {
-                    cwd: process.cwd(),
-                    env: process.env
-                  });
-
-                  if (stdout) console.log(stdout);
-                  if (stderr) console.error(stderr);
-                  devicePushResult = '缓存图片推送成功';
-
-                  try {
-                    await fsModule.promises.unlink(tempFilePath);
-                  } catch (cleanupError) {
-                    console.warn('⚠️ 清理临时文件失败:', cleanupError);
-                  }
-                } catch (pushError: any) {
-                  console.error('❌ 缓存图片推送失败:', pushError);
-                  devicePushResult = `缓存图片推送失败: ${pushError.message}`;
-                }
-              }
+              // Cache 职责：只恢复数据，不触发推送
             }
           } catch (cacheCheckError) {
             console.warn('⚠️ MinIO缓存检查失败:', cacheCheckError);
@@ -367,30 +228,26 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         if (!localCacheHit || params.force) {
           if (params.force) {
-            console.log('🔄 强制刷新，执行完整设备推送...');
+            console.log('🔄 强制刷新，执行完整渲染...');
           } else {
-            console.log('📱 缓存未命中，执行完整设备推送...');
+            console.log('📱 缓存未命中，执行完整渲染...');
           }
 
-          const deviceResult = (await modularNewsPlugin.getData(params)) as Record<string, any> | null;
+          renderResult = (await modularNewsPlugin.getData(params)) as Record<string, any> | null;
 
-          if (deviceResult && typeof deviceResult === 'object' && deviceResult.imageUrl) {
-            deviceResultData = deviceResult;
-            imageUrl = deviceResult.imageUrl;
-            localImagePath = deviceResult.localImagePath;  // 保存localImagePath
-            // local-eink 返回 pushResults 数组，device 返回 deviceResult 字符串
-            if (params.renderer === 'local-eink' && Array.isArray(deviceResult.pushResults)) {
-              const ok = deviceResult.pushResults.filter((r: any) => r.ok).length;
-              const total = deviceResult.pushResults.length;
-              devicePushResult = `e-ink 推送完成: ${ok}/${total} 成功`;
-            } else {
-              devicePushResult = deviceResult.deviceResult || '推送完成';
+          if (renderResult && typeof renderResult === 'object' && renderResult.imageUrl) {
+            imageUrl = renderResult.imageUrl;
+            // 解析 objectKey 用于数据库记录
+            if (imageUrl.includes('/quote0-images/')) {
+              const urlParts = new URL(imageUrl);
+              const objectKey = urlParts.pathname.substring('/quote0-images/'.length);
+              dbImagePath = '/' + objectKey;
             }
 
             try {
               console.log('💾 保存渲染结果到MinIO缓存...');
 
-              const imageUrlValue = deviceResult.imageUrl;
+              const imageUrlValue = renderResult.imageUrl;
               if (imageUrlValue && imageUrlValue.includes('/quote0-images/')) {
                 const urlParts = new URL(imageUrlValue);
                 const objectKey = urlParts.pathname.substring('/quote0-images/'.length);
@@ -410,13 +267,13 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                       ...config,
                       // 保存文本数据，确保缓存命中时的一致性
                       textData: {
-                        title: (deviceResult as any).title,
-                        message: (deviceResult as any).message,
-                        summary: (deviceResult as any).summary || (deviceResult as any).message,
-                        source: (deviceResult as any).source,
-                        signature: (deviceResult as any).signature,
-                        link: (deviceResult as any).link,
-                        publishTime: context.publishTime || (deviceResult as any).publishTime || null,
+                        title: renderResult.title,
+                        message: renderResult.message,
+                        summary: renderResult.summary || renderResult.message,
+                        source: renderResult.source,
+                        signature: renderResult.signature,
+                        link: renderResult.link,
+                        publishTime: context.publishTime || renderResult.publishTime || null,
                         fingerprint: newsFingerprint
                       }
                     } as Record<string, unknown>,
@@ -430,7 +287,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
               }
 
               // 更新 news_cache 表的 image_path 字段
-              if (deviceResult.localImagePath) {
+              if (dbImagePath) {
                 try {
                   const { getPostgresDatabase } = await import('../react-widgets/core/postgres-database.js');
                   const postgres = getPostgresDatabase();
@@ -443,7 +300,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                        WHERE source = $2 AND category_name = $3 AND index_num = $4
                        RETURNING id`,
                       [
-                        deviceResult.localImagePath,
+                        dbImagePath,
                         `${params.dataSource}_${params.rssSource}`,
                         params.category,
                         params.index
@@ -451,9 +308,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
                     );
 
                     if (updateResult.rowCount && updateResult.rowCount > 0) {
-                      console.log(`💾 已更新 news_cache.image_path: ${deviceResult.localImagePath} (影响${updateResult.rowCount}行)`);
-                    } else {
-                      console.warn(`⚠️ 未找到匹配的 news_cache 记录 (source: ${params.dataSource}_${params.rssSource}, category: ${params.category}, index: ${params.index})`);
+                      console.log(`💾 已更新 news_cache.image_path: ${dbImagePath} (影响${updateResult.rowCount}行)`);
                     }
                   } finally {
                     client.release();
@@ -466,28 +321,37 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
               console.warn('⚠️ 保存缓存失败:', cacheError);
             }
           } else {
-            throw new Error('设备推送未返回有效结果');
+            throw new Error('渲染未返回有效结果');
           }
         }
 
+        // 统一推送：无论 cache hit 还是 cache miss，推送只在这里发生一次
+        let pushResult: { ok: boolean; deviceResult?: string; pushResults?: any[] } | null = null;
+        if (imageUrl) {
+          const pusherInput = localCacheHit ? imageUrl : (renderResult?.localImagePath || imageUrl);
+          console.log(`📤 统一推送到设备 (${params.renderer})...`);
+          pushResult = await devicePusher.push(pusherInput, params.renderer);
+        }
+
         const mergedTextData = {
-          title: cachedTextData?.title ?? deviceResultData?.title ?? context.title,
-          message: cachedTextData?.message ?? deviceResultData?.message ?? context.description,
+          title: cachedTextData?.title ?? renderResult?.title ?? context.title,
+          message: cachedTextData?.message ?? renderResult?.message ?? context.description,
           summary:
             cachedTextData?.summary ??
-            deviceResultData?.summary ??
-            deviceResultData?.message ??
+            renderResult?.summary ??
+            renderResult?.message ??
             cachedTextData?.message ??
             context.description,
-          source: cachedTextData?.source ?? deviceResultData?.source ?? context.source,
-          signature: cachedTextData?.signature ?? deviceResultData?.signature,
-          link: cachedTextData?.link ?? deviceResultData?.link ?? context.link
+          source: cachedTextData?.source ?? renderResult?.source ?? context.source,
+          signature: cachedTextData?.signature ?? renderResult?.signature,
+          link: cachedTextData?.link ?? renderResult?.link ?? context.link
         };
 
         result = {
           imageUrl,
-          localImagePath,  // 添加localImagePath字段
-          deviceResult: devicePushResult,
+          localImagePath: dbImagePath,
+          deviceResult: pushResult?.deviceResult || pushResult?.error || '未推送',
+          pushResults: pushResult?.pushResults,
           title: mergedTextData.title,
           message: mergedTextData.message,
           summary: mergedTextData.summary,
@@ -527,21 +391,38 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     cacheHit = false;
     cacheSource = params.force ? 'forced' : 'no_cache';
 
-    // 对于设备推送，更新 news_cache 表的 image_path 字段
-    if (params.renderer === 'device' && typeof result === 'object' && result?.localImagePath) {
+    // 对于 device / local-eink，即使 skip cache 也要执行统一推送
+    if ((params.renderer === 'device' || params.renderer === 'local-eink') && result && typeof result === 'object' && result.imageUrl) {
+      const pusherInput = result.localImagePath || result.imageUrl;
+      const pushResult = await devicePusher.push(pusherInput, params.renderer);
+      result = {
+        ...result,
+        deviceResult: pushResult.deviceResult || pushResult.error,
+        pushResults: pushResult.pushResults
+      };
+    }
+
+    // 更新 news_cache 表的 image_path 字段
+    if ((params.renderer === 'device' || params.renderer === 'local-eink') && typeof result === 'object' && result?.imageUrl) {
       try {
         const { getPostgresDatabase } = await import('../react-widgets/core/postgres-database.js');
         const postgres = getPostgresDatabase();
         const client = await postgres.getClient();
 
-        try {
+        let dbPath: string | undefined;
+        if (result.imageUrl.includes('/quote0-images/')) {
+          const urlParts = new URL(result.imageUrl);
+          dbPath = '/' + urlParts.pathname.substring('/quote0-images/'.length);
+        }
+
+        if (dbPath) {
           const updateResult = await client.query(
             `UPDATE news_cache
              SET image_path = $1
              WHERE source = $2 AND category_name = $3 AND index_num = $4
              RETURNING id`,
             [
-              result.localImagePath,
+              dbPath,
               `${params.dataSource}_${params.rssSource}`,
               params.category,
               params.index
@@ -549,12 +430,8 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           );
 
           if (updateResult.rowCount && updateResult.rowCount > 0) {
-            console.log(`💾 已更新 news_cache.image_path: ${result.localImagePath} (影响${updateResult.rowCount}行)`);
-          } else {
-            console.warn(`⚠️ 未找到匹配的 news_cache 记录 (source: ${params.dataSource}_${params.rssSource}, category: ${params.category}, index: ${params.index})`);
+            console.log(`💾 已更新 news_cache.image_path: ${dbPath} (影响${updateResult.rowCount}行)`);
           }
-        } finally {
-          client.release();
         }
       } catch (updateError) {
         console.error('❌ 更新 news_cache.image_path 失败:', updateError);
@@ -592,7 +469,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
   };
 }
 
-function enrichContextFromResult(context: NewsPushContext, result: any): void {
+export function enrichContextFromResult(context: NewsPushContext, result: any): void {
   if (!result || typeof result !== 'object') {
     return;
   }

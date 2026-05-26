@@ -92,6 +92,9 @@ export class SatoriRenderer {
     if (this.initialized) return;
 
     console.log('🎨 初始化 Satori 渲染器...');
+    // 防御：避免任何重复 initialize 导致字体数组/缓存累积
+    this.fonts = [];
+    this.fontBuffers.clear();
     
     const fontsPath = join(process.cwd(), 'assets/fonts');
     const fontFiles = {
@@ -212,7 +215,7 @@ export class SatoriRenderer {
    */
   async close(): Promise<void> {
     this.fontBuffers.clear();
-    this.defaultFontBuffer = null;
+    this.fonts = []; // 修复 OOM：this.fonts 只增不减，close 时必须清空
     this.initialized = false;
   }
 }
