@@ -11,6 +11,7 @@ import { validator } from 'hono/validator';
 import type { NewsProcessRequest, NewsProcessResponse } from './news-types.js';
 import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
 import { processNews } from './news-processing-service.js';
+import { devicePusher } from './device-pusher.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { ensureSchedulerStarted, getSchedulerInstance } from './scheduler-registry.js';
 import type { NewsSchedulerJobConfig } from './news-types.js';
@@ -1055,16 +1056,10 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
         console.log(`🔄 重新推送 #${id} → ${rendererName}: "${renderableData.title}"`);
         const renderResult = await rendererModule.render(renderableData as any, renderConfig);
 
-        if (rendererName === 'device') {
-          const deviceRes = renderResult as { imageUrl: string; deviceResult: string };
-          results.push({ renderer: rendererName, success: !deviceRes.deviceResult?.includes?.('失败') });
-        } else if (rendererName === 'local-eink') {
-          const einkRes = renderResult as { imageUrl: string; pushResults: Array<{ device: string; ok: boolean; error?: string }> };
-          const allOk = einkRes.pushResults.length === 0 || einkRes.pushResults.every(r => r.ok);
-          results.push({ renderer: rendererName, success: allOk });
-        } else {
-          results.push({ renderer: rendererName, success: true });
-        }
+        // 渲染器只生成图片，推送由 DevicePusher 统一处理
+        const pusherInput = renderResult.localImagePath || renderResult.imageUrl;
+        const pushResult = await devicePusher.push(pusherInput, rendererName as 'device' | 'local-eink');
+        results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error });
       } catch (err) {
         results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
       }
