@@ -993,6 +993,7 @@ export class NewsScheduler {
   private async runMemoJob(job: SchedulerJobInstance): Promise<void> {
     const runStartedAt = new Date();
     let runHistoryId: number | null = null;
+    const fs = await import('fs/promises');
 
     try {
       runHistoryId = await this.postgres.createSchedulerRunHistory({
@@ -2121,7 +2122,7 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
   };
 }
 
-function normalizeIndexStrategy(strategy: RequiredSchedulerIndexStrategy): RequiredSchedulerIndexStrategy {
+function normalizeIndexStrategy(strategy: Partial<RequiredSchedulerIndexStrategy> & { type?: 'fair-rotation' | 'shuffle' }): RequiredSchedulerIndexStrategy {
   // 支持poolSize=-1表示动态获取RSS源实际条目数 | Support poolSize=-1 for dynamic RSS feed item count
   const poolSize = strategy?.poolSize === -1
     ? -1
