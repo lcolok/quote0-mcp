@@ -54,6 +54,7 @@ export interface RenderableDataItem {
   link?: string;
   highlights?: string[];
   metadata?: Record<string, any>;
+  index?: number;
 }
 
 /**

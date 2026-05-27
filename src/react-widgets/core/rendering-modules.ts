@@ -14,6 +14,18 @@ import {
   RenderingConfig,
   RenderingHealthStatus 
 } from './modular-architecture.js';
+import { HighlightedWord } from '../services/llm-workflow-engine.js';
+
+function toHighlightedWords(highlights?: string[]): HighlightedWord[] | undefined {
+  if (!highlights) return undefined;
+  return highlights.map((word) => ({
+    word,
+    startIndex: 0,
+    endIndex: word.length,
+    importance: 'medium' as const,
+    category: 'keyword' as const
+  }));
+}
 
 /**
  * 组件渲染模块抽象基类
@@ -158,7 +170,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: data.highlights
+        highlights: toHighlightedWords(data.highlights)
       };
       
       // 渲染组件为图片
@@ -166,8 +178,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriNewsWidget, { 
-          data: newsData,
-          border: borderColor 
+          data: newsData 
         }),
         {
           width: config.width || EINK_TARGET.widthPx,
@@ -287,7 +298,7 @@ export class JSONRenderingModule extends BaseRenderingModule<object> {
   async render(data: RenderableDataItem, config: RenderingConfig): Promise<object> {
     console.log(`📄 JSON渲染: ${data.title}`);
     
-    const result = {
+    const result: Record<string, any> = {
       id: data.id,
       title: data.title,
       message: data.message,
@@ -305,7 +316,7 @@ export class JSONRenderingModule extends BaseRenderingModule<object> {
     };
     
     if (config.includeMetadata) {
-      result['metadata'] = data.metadata;
+      result.metadata = data.metadata;
     }
     
     console.log(`✅ JSON渲染完成`);
@@ -406,7 +417,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: data.highlights?.map(word => ({ word, color: '#ff0000' })) // 转换为HighlightedWord格式
+        highlights: toHighlightedWords(data.highlights) // 转换为HighlightedWord格式
       };
       
       console.log(`🎨 渲染新闻数据:`, {
@@ -421,8 +432,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
       
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriNewsWidget, { 
-          data: newsData,
-          border: borderColor 
+          data: newsData 
         }),
         {
           format: 'png',
@@ -578,14 +588,13 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: data.highlights?.map(word => ({ word, color: '#ff0000' }))
+        highlights: toHighlightedWords(data.highlights)
       };
 
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriNewsWidget, {
-          data: newsData,
-          border: borderColor
+          data: newsData
         }),
         {
           format: 'png',
