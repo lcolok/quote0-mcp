@@ -494,6 +494,7 @@ export class NewsScheduler {
     let runHistoryId: number | null = null;
 
     try {
+      const fs = await import('fs/promises');
       runHistoryId = await this.postgres.createSchedulerRunHistory({
         jobId: job.config.id,
         runStartedAt,
@@ -1052,29 +1053,23 @@ export class NewsScheduler {
         }
       }
 
-      // local-eink / both：推局域网 ESP32（容错：空设备/失败不阻断 job）
+      // local-eink / both：推局域网 ESP32（统一使用 DevicePusher）
       if (targetRenderer === 'local-eink' || targetRenderer === 'both') {
+        const tmpFile = `/tmp/memo_${memo.id}_${Date.now()}.png`;
         try {
-          const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
-          const bitmap = await pngTo1BitBitmap(pngBuffer);
-          const devices = await getEinkDevices();
-          if (devices.length === 0) {
-            console.log('⚠️ 无 local-eink 设备，跳过');
-            pushDetails.localEink = { skipped: true, reason: 'no_devices' };
-          } else {
-            const localResults: Array<{ device: string; ok: boolean; error?: string }> = [];
-            for (const d of devices) {
-              const r = await pushToEinkDevice(d, bitmap);
-              localResults.push({ device: d.id, ok: r.ok, error: r.error ?? undefined });
-            }
-            pushDetails.localEink = { devices: localResults };
-            const okCount = localResults.filter(r => r.ok).length;
-            console.log(`✅ Memo任务 ${job.config.id} local-eink 推送: ${okCount}/${localResults.length} 成功`);
+          await fs.writeFile(tmpFile, pngBuffer);
+          const pushResult = await devicePusher.push(tmpFile, 'local-eink');
+          if (pushResult.pushResults && pushResult.pushResults.length > 0) {
+            pushDetails.localEink = { devices: pushResult.pushResults };
+          } else if (!pushResult.ok) {
+            pushDetails.localEink = { skipped: true, reason: pushResult.error || 'push_failed' };
           }
         } catch (einkError) {
           const msg = einkError instanceof Error ? einkError.message : String(einkError);
           console.error(`❌ Memo任务 ${job.config.id} local-eink 推送异常: ${msg}`);
           pushDetails.localEink = { error: msg };
+        } finally {
+          try { await fs.unlink(tmpFile); } catch {}
         }
       }
 
