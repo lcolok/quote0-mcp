@@ -67,6 +67,11 @@ export interface ImageCacheEntry {
 
 export class PostgresDatabase {
   private pool: Pool;
+
+  /** Public passthrough to pool.query for external modules that need raw SQL */
+  async query(text: string, params?: any[]): Promise<any> {
+    return this.pool.query(text, params);
+  }
   private defaultTTL: number = 30 * 60 * 1000; // 30分钟
 
   constructor(options: {

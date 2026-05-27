@@ -1263,7 +1263,7 @@ app.post('/api/scheduler/jobs/:jobId/update-sources', async (c) => {
     }
 
     // 更新数据库
-    await postgres.pool.query(
+    await postgres.query(
       'UPDATE news_scheduler_jobs SET rss_sources = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [JSON.stringify(rssSources), jobId]
     );
@@ -1296,7 +1296,7 @@ app.post('/api/scheduler/jobs/:jobId/toggle-source', async (c) => {
     }
 
     // 获取当前禁用列表
-    const result = await postgres.pool.query(
+    const result = await postgres.query(
       'SELECT disabled_sources FROM news_scheduler_jobs WHERE id = $1',
       [jobId]
     );
@@ -1321,7 +1321,7 @@ app.post('/api/scheduler/jobs/:jobId/toggle-source', async (c) => {
     }
 
     // 更新数据库
-    await postgres.pool.query(
+    await postgres.query(
       'UPDATE news_scheduler_jobs SET disabled_sources = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [JSON.stringify(disabledSources), jobId]
     );
@@ -1421,7 +1421,7 @@ app.post('/api/labels/print', async (c) => {
 // 获取所有RSS源的元数据
 app.get('/api/rss-sources/metadata', async (c) => {
   try {
-    const result = await postgres.pool.query(
+    const result = await postgres.query(
       'SELECT source_id, display_name, description FROM rss_source_metadata ORDER BY source_id'
     );
 
@@ -1461,7 +1461,7 @@ app.post('/api/rss-sources/:sourceId/metadata', async (c) => {
     }
 
     // 使用 UPSERT
-    await postgres.pool.query(
+    await postgres.query(
       `INSERT INTO rss_source_metadata (source_id, display_name, description)
        VALUES ($1, $2, $3)
        ON CONFLICT (source_id)

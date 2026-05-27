@@ -263,7 +263,7 @@ export class NewsScheduler {
 
     // 幂等注册默认 memo 轮播任务（已存在则保留用户修改，不覆盖）
     try {
-      await this.postgres.pool.query(`
+      await this.postgres.query(`
         INSERT INTO news_scheduler_jobs (
           id, name, description, category, data_source, rss_source, processor, renderer,
           interval_ms, initial_delay_ms, options, index_strategy, enabled
@@ -691,7 +691,7 @@ export class NewsScheduler {
         if (imagePath) {
           try {
             await this.enforceInventoryCap();
-            await this.postgres.pool.query(`
+            await this.postgres.query(`
               INSERT INTO content_inventory (
                 producer_job_id, content_type, source, category, fingerprint,
                 title, link, raw_content, processed_content, image_path, state, max_replays
@@ -1002,7 +1002,7 @@ export class NewsScheduler {
         metadata: { dataSource: 'memo' }
       });
 
-      const result = await this.postgres.pool.query(`
+      const result = await this.postgres.query(`
         SELECT id, text, png_path, sort_order, target_renderer
         FROM memos
         WHERE enabled = true AND status = 'ready'
@@ -1834,7 +1834,7 @@ export class NewsScheduler {
       });
 
       // 1. Prefer ready items (FIFO)
-      let item = await this.postgres.pool.query(`
+      let item = await this.postgres.query(`
         SELECT * FROM content_inventory
         WHERE state='ready'
         ORDER BY created_at ASC
@@ -1843,7 +1843,7 @@ export class NewsScheduler {
 
       // 2. Fallback to pushed items with replay budget (LRU)
       if (item.rows.length === 0) {
-        item = await this.postgres.pool.query(`
+        item = await this.postgres.query(`
           SELECT * FROM content_inventory
           WHERE state='pushed' AND replay_count < max_replays
             AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
@@ -1876,7 +1876,7 @@ export class NewsScheduler {
 
       // 5. Update inventory state
       const updatedReplayCount = (inventoryItem.replay_count || 0) + 1;
-      await this.postgres.pool.query(`
+      await this.postgres.query(`
         UPDATE content_inventory
         SET state='pushed', replay_count=replay_count+1, last_pushed_at=CURRENT_TIMESTAMP
         WHERE id=$1
@@ -2021,7 +2021,7 @@ export class NewsScheduler {
    */
   private async enforceInventoryCap(): Promise<void> {
     try {
-      const result = await this.postgres.pool.query(`
+      const result = await this.postgres.query(`
         UPDATE content_inventory SET state='expired'
         WHERE id IN (
           SELECT id FROM content_inventory

@@ -32,13 +32,13 @@ app.get('/api/inventory', async (c) => {
       where += ` AND source=$${params.length}`;
     }
 
-    const countResult = await postgres.pool.query(
+    const countResult = await postgres.query(
       `SELECT COUNT(*) FROM content_inventory ${where}`,
       params
     );
     const total = parseInt(countResult.rows[0].count);
 
-    const dataResult = await postgres.pool.query(
+    const dataResult = await postgres.query(
       `SELECT * FROM content_inventory ${where} ORDER BY ${orderBy} DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, limit, offset]
     );
@@ -57,10 +57,10 @@ app.get('/api/inventory', async (c) => {
 // GET /api/inventory/stats - 统计
 app.get('/api/inventory/stats', async (c) => {
   try {
-    const stateResult = await postgres.pool.query(`
+    const stateResult = await postgres.query(`
       SELECT state, COUNT(*) as count FROM content_inventory GROUP BY state ORDER BY state
     `);
-    const sourceResult = await postgres.pool.query(`
+    const sourceResult = await postgres.query(`
       SELECT source, COUNT(*) as count FROM content_inventory WHERE source IS NOT NULL GROUP BY source ORDER BY count DESC
     `);
     return c.json({
@@ -83,7 +83,7 @@ app.get('/api/inventory/:id', async (c) => {
     if (Number.isNaN(id)) {
       return c.json({ success: false, error: '无效ID' }, 400);
     }
-    const result = await postgres.pool.query('SELECT * FROM content_inventory WHERE id=$1', [id]);
+    const result = await postgres.query('SELECT * FROM content_inventory WHERE id=$1', [id]);
     if (result.rows.length === 0) {
       return c.json({ success: false, error: '素材不存在' }, 404);
     }
@@ -101,7 +101,7 @@ app.delete('/api/inventory/:id', async (c) => {
     if (Number.isNaN(id)) {
       return c.json({ success: false, error: '无效ID' }, 400);
     }
-    await postgres.pool.query('DELETE FROM content_inventory WHERE id=$1', [id]);
+    await postgres.query('DELETE FROM content_inventory WHERE id=$1', [id]);
     return c.json({ success: true });
   } catch (error) {
     console.error('删除素材失败:', error);
@@ -120,7 +120,7 @@ app.patch('/api/inventory/:id/state', async (c) => {
     if (!body.state || !['ready', 'pushed', 'expired'].includes(body.state)) {
       return c.json({ success: false, error: 'state 必须是 ready/pushed/expired 之一' }, 400);
     }
-    await postgres.pool.query('UPDATE content_inventory SET state=$1 WHERE id=$2', [body.state, id]);
+    await postgres.query('UPDATE content_inventory SET state=$1 WHERE id=$2', [body.state, id]);
     return c.json({ success: true });
   } catch (error) {
     console.error('更新素材状态失败:', error);
@@ -135,7 +135,7 @@ app.patch('/api/inventory/:id/expire', async (c) => {
     if (Number.isNaN(id)) {
       return c.json({ success: false, error: '无效ID' }, 400);
     }
-    await postgres.pool.query("UPDATE content_inventory SET state='expired' WHERE id=$1", [id]);
+    await postgres.query("UPDATE content_inventory SET state='expired' WHERE id=$1", [id]);
     return c.json({ success: true });
   } catch (error) {
     console.error('标记素材过期失败:', error);
@@ -146,7 +146,7 @@ app.patch('/api/inventory/:id/expire', async (c) => {
 // POST /api/inventory/cleanup-expired - 手动清理 expired
 app.post('/api/inventory/cleanup-expired', async (c) => {
   try {
-    const result = await postgres.pool.query("DELETE FROM content_inventory WHERE state='expired'");
+    const result = await postgres.query("DELETE FROM content_inventory WHERE state='expired'");
     return c.json({ success: true, deleted: result.rowCount || 0 });
   } catch (error) {
     console.error('清理过期素材失败:', error);
