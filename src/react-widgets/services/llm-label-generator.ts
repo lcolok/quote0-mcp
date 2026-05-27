@@ -49,7 +49,7 @@ export class LLMLabelGenerator {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${llmConfig.apiKey}`,
+        ...(llmConfig.apiKey && llmConfig.apiKey !== 'dummy' ? { Authorization: `Bearer ${llmConfig.apiKey}` } : {}),
       },
       body: JSON.stringify({
         model: llmConfig.model,

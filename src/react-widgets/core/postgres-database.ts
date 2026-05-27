@@ -657,7 +657,7 @@ export class PostgresDatabase {
         slug VARCHAR(64) UNIQUE NOT NULL,
         display_name VARCHAR(128) NOT NULL,
         base_url TEXT NOT NULL,
-        api_key TEXT NOT NULL,
+        api_key TEXT,
         api_type VARCHAR(32) NOT NULL DEFAULT 'openai-completions',
         enabled BOOLEAN NOT NULL DEFAULT true,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -784,7 +784,7 @@ export class PostgresDatabase {
         SELECT 'siliconflow', 'SiliconFlow (via copilot)', 'https://copilot.logic.heiyu.space/providers/siliconflow/v1', 'dummy', 'openai-completions'
         WHERE NOT EXISTS (SELECT 1 FROM llm_providers)` },
       { name: 'kimi-for-coding provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-        SELECT 'kimi-for-coding', 'Kimi For Coding (via copilot)', 'https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1', 'sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP', 'openai-completions'
+        SELECT 'kimi-for-coding', 'Kimi For Coding (via copilot)', 'https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1', 'dummy', 'openai-completions'
         WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='kimi-for-coding')` },
       { name: 'DeepSeek-V4-Flash model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
         SELECT p.id, 'deepseek-ai/DeepSeek-V4-Flash', 'DeepSeek V4-Flash', 64000, 8192, true

@@ -22,7 +22,7 @@ export async function runStartupAssertions(postgres: PostgresDatabase): Promise<
     const pingResponse = await fetch(pingUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${llmCfg.apiKey}`,
+        ...(llmCfg.apiKey && llmCfg.apiKey !== 'dummy' ? { 'Authorization': `Bearer ${llmCfg.apiKey}` } : {}),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ model: llmCfg.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),

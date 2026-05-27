@@ -62,7 +62,7 @@ export class MultimodalLLMClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
+        ...(cfg.apiKey && cfg.apiKey !== 'dummy' ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(MULTIMODAL_TIMEOUT_MS),

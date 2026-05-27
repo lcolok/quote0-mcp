@@ -49,7 +49,7 @@ async function checkLLMEndpointReachability(baseURL: string, apiKey: string, tim
 
   try {
     const headers: Record<string, string> = {};
-    if (apiKey) {
+    if (apiKey && apiKey !== 'dummy') {
       headers.Authorization = `Bearer ${apiKey}`;
     }
 

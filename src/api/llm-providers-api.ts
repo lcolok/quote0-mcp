@@ -26,7 +26,7 @@ async function isModelActive(modelId: number): Promise<boolean> {
 app.get('/api/llm/providers', async (c) => {
   try {
     const providersResult = await postgres.getPool().query(
-      'SELECT * FROM llm_providers ORDER BY created_at DESC'
+      'SELECT id, slug, display_name, base_url, api_type, enabled, created_at, updated_at FROM llm_providers ORDER BY created_at DESC'
     );
     const modelsResult = await postgres.getPool().query(
       'SELECT * FROM llm_models ORDER BY created_at DESC'
@@ -45,8 +45,8 @@ app.get('/api/llm/providers', async (c) => {
 app.post('/api/llm/providers', async (c) => {
   try {
     const body = await c.req.json();
-    const { slug, display_name, base_url, api_key, api_type = 'openai-completions', enabled = true } = body;
-    if (!slug || !display_name || !base_url || !api_key) {
+    const { slug, display_name, base_url, api_key = 'dummy', api_type = 'openai-completions', enabled = true } = body;
+    if (!slug || !display_name || !base_url) {
       return c.json({ success: false, error: '缺少必填字段' }, 400);
     }
     const result = await postgres.getPool().query(
@@ -237,7 +237,7 @@ app.post('/api/llm/test', async (c) => {
     const model = modelResult.rows[0];
 
     const { OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey: provider.api_key, baseURL: provider.base_url });
+    const client = new OpenAI({ apiKey: provider.api_key || 'dummy', baseURL: provider.base_url });
 
     const start = Date.now();
     let responseText = '';
