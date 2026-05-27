@@ -195,14 +195,14 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             try {
               const postgres = cacheInternals.postgres;
               if (postgres?.getCachedImage) {
-                const cachedImageInfo = await postgres.getCachedImage(cacheKeyString);
+                const cachedImageInfo: any = await postgres.getCachedImage(cacheKeyString);
                 if (cachedImageInfo) {
                   existsResult = await imageStorage.imageExistsByObjectKey(cachedImageInfo.objectKey);
                   if (existsResult) {
                     dbImagePath = `/${cachedImageInfo.objectKey}`;
                     // 提取缓存的文本数据
-                    if (cachedImageInfo.renderConfig && (cachedImageInfo.renderConfig as any).textData) {
-                      cachedTextData = (cachedImageInfo.renderConfig as any).textData;
+                    if (cachedImageInfo.renderConfig && cachedImageInfo.renderConfig.textData) {
+                      cachedTextData = cachedImageInfo.renderConfig.textData;
                       console.log('✅ 从缓存中恢复文本数据');
                       if (cachedTextData) {
                         context.title = context.title || cachedTextData.title;
@@ -238,7 +238,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             debugLog('📱 缓存未命中，执行完整渲染...');
           }
 
-          renderResult = (await modularNewsPlugin.getData(params)) as Record<string, any> | null;
+          renderResult = (await modularNewsPlugin.getData(params)) as unknown as Record<string, any> | null;
 
           if (renderResult && typeof renderResult === 'object' && renderResult.imageUrl) {
             imageUrl = renderResult.imageUrl;
@@ -331,7 +331,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         }
 
         // 统一推送：无论 cache hit 还是 cache miss，推送只在这里发生一次
-        let pushResult: { ok: boolean; deviceResult?: string; pushResults?: any[] } | null = null;
+        let pushResult: { ok: boolean; deviceResult?: string; pushResults?: any[]; error?: string } | null = null;
         if (imageUrl) {
           const pusherInput = localCacheHit ? imageUrl : (renderResult?.localImagePath || imageUrl);
           console.log(`📤 统一推送到设备 (${params.renderer})...`);
