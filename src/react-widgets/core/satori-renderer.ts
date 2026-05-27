@@ -38,7 +38,7 @@ interface FontMapping {
 
 export class SatoriRenderer {
   private fontBuffers: Map<number, ArrayBuffer> = new Map();
-  private fonts: Array<{ name: string; data: ArrayBuffer; weight: number; style: string }> = [];
+  private fonts: Array<{ name: string; data: ArrayBuffer; weight: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900; style: 'normal' | 'italic' }> = [];
   private initialized = false;
 
   /**
@@ -108,7 +108,7 @@ export class SatoriRenderer {
       try {
         const fontPath = join(fontsPath, fileName);
         const buffer = await readFile(fontPath);
-        this.fontBuffers.set(parseInt(size), buffer.buffer);
+        this.fontBuffers.set(parseInt(size), buffer.buffer as ArrayBuffer);
         console.log(`✅ 加载字体: ${fileName} (${size}px)`);
       } catch (error) {
         console.warn(`⚠️ 加载字体失败 ${fileName}:`, error);

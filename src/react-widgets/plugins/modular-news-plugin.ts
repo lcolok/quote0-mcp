@@ -8,7 +8,7 @@ import {
   CliOption, 
   WidgetConfig, 
   WidgetDataParams 
-} from './widget-plugin.js';
+} from '../core/widget-plugin.js';
 
 import { workflowEngine } from '../core/workflow-engine.js';
 import { dataSourceRegistry } from '../core/data-source-modules.js';
@@ -52,6 +52,16 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
     author: 'MindReset Team',
     homepage: 'https://github.com/anthropics/claude-code'
   };
+
+  // Stub implementations to satisfy WidgetPlugin interface
+  dataProvider = {
+    getSources: () => ['mock', 'rss'],
+    getDefaultSource: () => 'mock',
+    getData: async () => '',
+    validateParams: () => true,
+    getSourceDescription: () => '模块化新闻数据源'
+  };
+  component = (() => null) as any;
 
   constructor() {
     // 确保环境变量已加载

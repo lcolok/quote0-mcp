@@ -88,9 +88,10 @@ async function main(): Promise<void> {
     
     // 验证数据源和城市支持
     if (dataSource === 'real') {
-        if (!weatherService.isCitySupported(city)) {
+        const supported = await weatherService.isCitySupported(city);
+        if (!supported) {
             console.error(`❌ 真实数据不支持的城市: ${city}`);
-            console.error('真实数据支持的城市:', weatherService.getSupportedCities().join(', '));
+            console.error('真实数据支持的城市:', weatherService.getSupportedCitiesInfo());
             process.exit(1);
         }
     } else if (dataSource === 'smart') {
@@ -172,7 +173,7 @@ async function main(): Promise<void> {
                 humidity: amapData.humidity,
                 windDirection: amapData.windDirection,
                 windPower: amapData.windPower,
-                windSpeed: amapData.windPower,
+                windSpeed: 0,
                 pressure: 0,
                 visibility: 0,
                 updateTime: amapData.reportTime,

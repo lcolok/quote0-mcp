@@ -3,7 +3,7 @@
  * 基于DynamicCityService的零维护城市映射
  */
 
-import { WeatherData } from '../types/weather-types.js';
+import { WeatherData } from '../types.js';
 import { DynamicCityService } from './dynamic-city-service.js';
 
 export interface CMAWeatherResponse {

@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { WeatherData } from '../types/weather-types';
+import { WeatherData } from '../types.js';
 import { generateSmartFontCSS, generateOptimizationReport } from '../smart-font-css';
 
 // 矢量图标 - 使用实心版本

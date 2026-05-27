@@ -3,9 +3,9 @@ import path from 'path';
 
 export interface SatoriFontEntry {
   name: string;
-  data: ArrayBuffer;
-  weight: number;
-  style: string;
+  data: Buffer | ArrayBuffer;
+  weight: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+  style: 'normal' | 'italic';
 }
 
 class FontRegistry {
@@ -42,11 +42,10 @@ class FontRegistry {
     const fonts: SatoriFontEntry[] = [];
     for (const file of fontFiles) {
       const filePath = path.join(familyDir, file);
-      const buffer = await fs.promises.readFile(filePath);
-      const data = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+      const data = await fs.promises.readFile(filePath);
 
       const lower = file.toLowerCase();
-      const style = lower.includes('oblique') || lower.includes('italic') ? 'oblique' : 'normal';
+      const style: 'normal' | 'italic' = lower.includes('oblique') || lower.includes('italic') ? 'italic' : 'normal';
 
       // Infer weight from filename; default to 400
       let weight = 400;
@@ -62,7 +61,7 @@ class FontRegistry {
         else if (w && /^\d+$/.test(w)) weight = parseInt(w, 10);
       }
 
-      fonts.push({ name: family, data, weight, style });
+      fonts.push({ name: family, data, weight: weight as 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900, style });
     }
 
     return fonts;

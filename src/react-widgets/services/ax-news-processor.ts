@@ -38,20 +38,20 @@ export class AxNewsProcessor {
       this.strongLLM = ai({ 
         name: 'openai',
         apiKey: options.apiKey,
-        apiURL: options.baseURL, // 使用apiURL而不是baseURL
+        apiURL: options.baseURL,
         config: {
           model: options.strongModel
         }
-      });
+      } as any);
       
       this.fastLLM = ai({
         name: 'openai', 
         apiKey: options.apiKey,
-        apiURL: options.baseURL, // 使用apiURL而不是baseURL
+        apiURL: options.baseURL,
         config: {
           model: options.fastModel
         }
-      });
+      } as any);
     } catch (error) {
       console.log('⚠️ AX配置方式1失败，尝试备用方案:', error);
       
@@ -59,12 +59,12 @@ export class AxNewsProcessor {
       this.strongLLM = ai({ 
         name: 'openai',
         apiKey: options.apiKey
-      });
+      } as any);
       
       this.fastLLM = ai({
         name: 'openai', 
         apiKey: options.apiKey
-      });
+      } as any);
     }
   }
 

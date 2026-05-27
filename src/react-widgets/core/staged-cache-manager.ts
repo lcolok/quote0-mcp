@@ -29,6 +29,7 @@ export interface CacheResult<T> {
     hitTime: number;
     processingTime?: number;
     stage: 'data' | 'image' | 'complete';
+    [key: string]: any;
   };
 }
 
@@ -181,19 +182,16 @@ export class StagedCacheManager {
           if (imageResult) {
             console.log(`🖼️ 图片完全缓存命中: ${imageCacheKey} → ${imageResult.url}`);
             // 提取localImagePath用于数据库记录
-            const localImagePath = imageResult.objectKey ? `/${imageResult.objectKey}` : null;
+            const localImagePath = cachedImageInfo.objectKey ? `/${cachedImageInfo.objectKey}` : null;
 
             return {
-              data: {
-                imageUrl: imageResult.url,
-                localImagePath,  // 添加localImagePath字段
-                deviceResult: '缓存图片推送成功'
-              },
+              data: imageResult.url,
               source: 'storage',
               cacheKey: imageCacheKey,
               metadata: {
                 hitTime: Date.now() - startTime,
-                stage: 'complete'
+                stage: 'complete',
+                localImagePath
               }
             };
           } else {

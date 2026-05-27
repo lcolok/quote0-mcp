@@ -30,7 +30,7 @@ export class AxOptimizedNewsProcessor {
   private createTitleProgram() {
     return ax('newsContent:string -> optimizedTitle:string', {
       instruction: '将新闻内容优化为简洁的标题，控制在20字符以内，突出核心信息'
-    });
+    } as any);
   }
 
   /**
@@ -39,7 +39,7 @@ export class AxOptimizedNewsProcessor {
   private createSummaryProgram() {
     return ax('newsContent:string -> summary:string', {
       instruction: '将新闻内容提炼为200字符以内的精炼摘要，适合水墨屏显示'
-    });
+    } as any);
   }
 
   /**
@@ -82,35 +82,37 @@ export class AxOptimizedNewsProcessor {
 
     // 4. 创建优化器（这里使用BootstrapFewShot自动发现最佳示例）
     const titleOptimizer = new AxBootstrapFewShot({
+      studentAI: this.llm,
       options: {
         rounds: 3,
         examples: 8
-      }
-    });
+      } as any
+    } as any);
 
     const summaryOptimizer = new AxBootstrapFewShot({
+      studentAI: this.llm,
       options: {
         rounds: 3,
         examples: 8
-      }
-    });
+      } as any
+    } as any);
 
     try {
       // 5. 运行自动优化（这里会生成大量中间产物！）
       console.log('📚 优化标题生成程序...');
-      const optimizedTitleProgram = await titleOptimizer.compile(
+      const optimizedTitleProgram = await (titleOptimizer as any).compile(
         this.llm,
-        titleProgram,
-        titleExamples,
-        titleMetric
+        titleProgram as any,
+        titleExamples as any,
+        titleMetric as any
       );
 
       console.log('📚 优化摘要生成程序...');
-      const optimizedSummaryProgram = await summaryOptimizer.compile(
+      const optimizedSummaryProgram = await (summaryOptimizer as any).compile(
         this.llm,
-        summaryProgram,
-        summaryExamples,
-        summaryMetric
+        summaryProgram as any,
+        summaryExamples as any,
+        summaryMetric as any
       );
 
       // 6. 保存优化结果（中间产物）

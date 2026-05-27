@@ -69,7 +69,7 @@ export class AxOptimizedNewsProcessorSimplified {
       const artifacts: OptimizationArtifacts = JSON.parse(data);
 
       this.optimizedProgram = artifacts.programs;
-      this.currentVersion = artifacts.metadata?.version || 'unknown';
+      this.currentVersion = artifacts.version || 'unknown';
 
       console.log(`✅ 已加载优化产物: ${filename}`);
       console.log(`📦 版本: ${this.currentVersion}`);
@@ -87,7 +87,7 @@ export class AxOptimizedNewsProcessorSimplified {
   loadFromModelData(artifacts: OptimizationArtifacts): boolean {
     try {
       this.optimizedProgram = artifacts.programs;
-      this.currentVersion = artifacts.metadata?.version || 'unknown';
+      this.currentVersion = artifacts.version || 'unknown';
 
       console.log(`🔥 热重载成功: 版本 ${this.currentVersion}`);
       console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);

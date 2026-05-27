@@ -4,7 +4,7 @@
  * 不再需要硬编码城市列表
  */
 
-import { WeatherData } from '../types/weather-types.js';
+import { WeatherData } from '../types.js';
 
 export interface WeatherStation {
   code: string;
@@ -74,7 +74,7 @@ export class SmartWeatherService {
           'User-Agent': this.userAgent,
           'Accept': 'application/json',
         },
-        timeout: 8000,
+        signal: AbortSignal.timeout(8000),
       });
 
       if (response.ok) {
@@ -320,7 +320,7 @@ export class SmartWeatherService {
           'User-Agent': this.userAgent,
           'Accept': 'application/json',
         },
-        timeout: 10000,
+        signal: AbortSignal.timeout(10000),
       });
 
       if (!response.ok) {

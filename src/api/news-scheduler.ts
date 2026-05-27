@@ -2122,7 +2122,7 @@ function normalizeRecord(record: any): NormalizedSchedulerJob {
   };
 }
 
-function normalizeIndexStrategy(strategy: Partial<RequiredSchedulerIndexStrategy> & { type?: 'fair-rotation' | 'shuffle' }): RequiredSchedulerIndexStrategy {
+function normalizeIndexStrategy(strategy: { type?: 'fair-rotation' | 'shuffle'; poolSize?: number; startIndex?: number; cooldownHours?: number; maxPushCount?: number; rotateAfterEachPush?: boolean; skipEmptySource?: boolean }): RequiredSchedulerIndexStrategy {
   // 支持poolSize=-1表示动态获取RSS源实际条目数 | Support poolSize=-1 for dynamic RSS feed item count
   const poolSize = strategy?.poolSize === -1
     ? -1

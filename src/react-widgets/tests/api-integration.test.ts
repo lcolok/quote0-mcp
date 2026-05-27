@@ -53,7 +53,7 @@ function testWeatherCityIdAPI() {
     // 方式2: 查看是否有其他结构
     console.log('\n2. 查看所有顶级键:');
     Object.keys(weatherCityId).forEach(key => {
-      console.log(`   ${key}:`, typeof weatherCityId[key]);
+      console.log(`   ${key}:`, typeof (weatherCityId as any)[key]);
     });
     
     // 方式3: 查看是否是数组或其他格式

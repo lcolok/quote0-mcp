@@ -6,7 +6,7 @@
 import { EfficientWeatherService } from './efficient-weather-service.js';
 import { AmapWeatherService, type AmapWeatherData } from './amap-weather-service.js';
 import { DynamicCityService } from './dynamic-city-service.js';
-import type { WeatherData } from '../types/weather-types.js';
+import type { WeatherData } from '../types.js';
 
 export class MultiSourceWeatherService {
   private cmaService: EfficientWeatherService;
@@ -94,7 +94,7 @@ export class MultiSourceWeatherService {
       humidity: amapData.humidity > 0 ? amapData.humidity : 0,
       windDirection: amapData.windDirection || '',
       windPower: amapData.windPower || '',
-      windSpeed: amapData.windPower || '',
+      windSpeed: 0,
       pressure: 0,
       visibility: 0,
       updateTime: cmaData.updateTime,
@@ -114,7 +114,7 @@ export class MultiSourceWeatherService {
       humidity: amapData.humidity,
       windDirection: amapData.windDirection,
       windPower: amapData.windPower,
-      windSpeed: amapData.windPower,
+      windSpeed: 0,
       pressure: 0,
       visibility: 0,
       updateTime: amapData.reportTime,

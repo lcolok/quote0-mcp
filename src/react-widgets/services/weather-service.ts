@@ -3,7 +3,7 @@
  * 基于中国气象局API + DynamicCityService零维护城市映射
  */
 
-import { WeatherData } from '../types/weather-types.js';
+import { WeatherData } from '../types.js';
 import { DynamicCityService } from './dynamic-city-service.js';
 
 export interface CMAWeatherResponse {
@@ -86,7 +86,7 @@ export class CMAWeatherService {
           'Accept': 'application/json',
           'Accept-Language': 'zh-CN,zh;q=0.9',
         },
-        timeout: 10000, // 10秒超时
+        signal: AbortSignal.timeout(10000),
       });
 
       if (!response.ok) {

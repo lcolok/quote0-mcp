@@ -141,7 +141,7 @@ app.get('/images/:filename', async (c) => {
     const fileBuffer = await fs.readFile(imagePath);
 
     // 设置正确的Content-Type
-    return new Response(fileBuffer, {
+    return new Response(new Uint8Array(fileBuffer), {
       headers: {
         'Content-Type': 'image/png',
         'Cache-Control': 'public, max-age=31536000'
@@ -1430,7 +1430,7 @@ app.get('/api/rss-sources/metadata', async (c) => {
     );
 
     const metadata: Record<string, { displayName: string; description: string }> = {};
-    result.rows.forEach(row => {
+    result.rows.forEach((row: { source_id: string; display_name: string | null; description: string | null }) => {
       metadata[row.source_id] = {
         displayName: row.display_name || row.source_id,
         description: row.description || ''

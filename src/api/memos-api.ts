@@ -38,7 +38,7 @@ function rowToMemo(row: any): any {
 async function renderAndUpdateMemo(
   memoId: string,
   text: string,
-  override?: { widgetId?: string; fontFamily?: string }
+  override?: { widgetId?: string; fontFamily?: string } | any
 ): Promise<{ success: boolean; error?: string }> {
   const db = getPostgresDatabase();
   try {

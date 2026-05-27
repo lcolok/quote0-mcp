@@ -5,7 +5,7 @@
  * 连续测试API响应时间和成功率
  */
 
-import { getWeatherForCityRobust } from '../src/react-widgets/services/robust-weather-service.js';
+import { getWeatherForCityRobust } from '../services/robust-weather-service.js';
 
 interface ApiTest {
   timestamp: Date;

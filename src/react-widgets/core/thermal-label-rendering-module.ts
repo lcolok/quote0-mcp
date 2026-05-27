@@ -35,7 +35,7 @@ class ThermalLabelRenderingModule {
 
     // 1. Satori → SVG
     const svg = await satori(
-      LabelWidget({ data, target }),
+      await LabelWidget({ data, target }),
       {
         width: target.widthPx,
         height: target.heightPx,

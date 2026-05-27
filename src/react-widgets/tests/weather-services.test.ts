@@ -5,7 +5,7 @@
  * 整合所有天气相关的测试功能
  */
 
-import { weatherService } from '../services/weather-service.js';
+import { weatherService, getWeatherForCity } from '../services/weather-service.js';
 import { getWeatherForCityEfficient } from '../services/efficient-weather-service.js';
 import { RobustWeatherService } from '../services/robust-weather-service.js';
 
@@ -24,7 +24,7 @@ async function testAllWeatherServices() {
     try {
       console.log(`🔍 测试城市: ${city}`);
       const startTime = Date.now();
-      const result = await weatherService.getWeatherForCity(city as any);
+      const result = await getWeatherForCity(city as any);
       const duration = Date.now() - startTime;
       console.log(`  ✅ 结果: ${result.city} ${result.temperature}°C ${result.weather} (耗时: ${duration}ms)`);
     } catch (error) {

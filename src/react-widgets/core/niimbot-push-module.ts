@@ -37,7 +37,7 @@ class NiimbotPushModule {
         const res = await fetch(endpoint, {
           method: 'POST',
           headers,
-          body: bitmap,
+          body: new Uint8Array(bitmap),
           signal: controller.signal,
         });
         return res;

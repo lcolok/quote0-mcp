@@ -3,7 +3,7 @@
  * 包含重试机制、错误处理和备用方案
  */
 
-import { WeatherData } from '../types/weather-types.js';
+import { WeatherData } from '../types.js';
 import { DynamicCityService } from './dynamic-city-service.js';
 
 export interface CMAWeatherResponse {

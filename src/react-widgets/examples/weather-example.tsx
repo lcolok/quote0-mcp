@@ -26,11 +26,7 @@ export async function generateWeatherWidgets(): Promise<void> {
     // 2. 北京天气 - 测试不同数据
     console.log('📍 生成北京天气组件...');
     const beijingWidget = React.createElement(WeatherWidget, {
-      data: weatherMockData.beijing,
-      config: {
-        theme: 'eink',
-        fontSize: 'medium'
-      }
+      data: weatherMockData.beijing
     });
 
     await widgetRenderer.renderToFile(
@@ -41,11 +37,7 @@ export async function generateWeatherWidgets(): Promise<void> {
     // 3. 深圳天气 - 小字体版本
     console.log('📍 生成深圳天气组件...');
     const shenzhenWidget = React.createElement(WeatherWidget, {
-      data: weatherMockData.shenzhen,
-      config: {
-        theme: 'eink',
-        fontSize: 'small'
-      }
+      data: weatherMockData.shenzhen
     });
 
     await widgetRenderer.renderToFile(

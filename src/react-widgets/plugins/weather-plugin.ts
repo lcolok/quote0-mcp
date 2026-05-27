@@ -220,7 +220,7 @@ export class WeatherPlugin implements WidgetPlugin<WeatherData, WeatherConfig> {
 
     // 验证数据源和城市支持
     if (dataSource === 'real' && !weatherService.isCitySupported(city)) {
-      throw new Error(`真实数据不支持的城市: ${city}。支持的城市: ${weatherService.getSupportedCities().join(', ')}`);
+      throw new Error(`真实数据不支持的城市: ${city}。支持范围: ${weatherService.getSupportedCitiesInfo()}`);
     }
 
     if (dataSource === 'mock' && !weatherMockData[city as keyof typeof weatherMockData]) {

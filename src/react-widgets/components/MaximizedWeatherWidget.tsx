@@ -16,7 +16,7 @@ import {
 } from 'react-icons/md';
 import { BsDropletFill } from 'react-icons/bs';
 
-interface MaximizedWeatherWidgetProps {
+export interface MaximizedWeatherWidgetProps {
   data: WeatherData;
   invertedBanner?: boolean; // 可选参数：是否反色显示底部banner
 }

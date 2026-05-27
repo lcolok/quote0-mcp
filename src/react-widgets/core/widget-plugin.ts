@@ -123,6 +123,12 @@ export interface WidgetPluginRegistry {
   
   /** 获取插件列表 */
   getTypes(): string[];
+  
+  /** 生成总体帮助信息 */
+  generateHelp(): string;
+  
+  /** 生成特定插件的帮助信息 */
+  generatePluginHelp(type: string): string;
 }
 
 /**
@@ -134,6 +140,7 @@ export interface WidgetExecutionContext {
   outputDir: string;
   timestamp: number;
   force?: boolean; // 强制刷新，跳过缓存
+  index?: number;  // 内容索引（用于多内容轮播）
 }
 
 /**
@@ -142,6 +149,7 @@ export interface WidgetExecutionContext {
 export interface WidgetExecutionResult {
   success: boolean;
   outputPath?: string;
+  cacheUrl?: string; // 缓存URL（如果图片已缓存在MinIO）
   error?: string;
   data?: any;
   metadata?: {
