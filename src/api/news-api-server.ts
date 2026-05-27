@@ -519,7 +519,7 @@ app.post('/api/news/scheduler/jobs/:id/trigger', async (c) => {
           overrideIndex = body.index;
         }
       } catch (jsonError) {
-        // 忽略JSON解析错误，使用默认索引
+        console.warn('⚠️ JSON解析错误，使用默认索引:', jsonError instanceof Error ? jsonError.message : String(jsonError));
       }
     }
 

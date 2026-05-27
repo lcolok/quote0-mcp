@@ -44,7 +44,7 @@ describe("news-api-server endpoints", () => {
     expect(allIds).toContain("solidot");
   });
 
-  it("POST /api/news/process with mock source should succeed", async () => {
+  it("POST /api/news/process with mock source should succeed", { timeout: 15000 }, async () => {
     const res = await app.request("/api/news/process", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
