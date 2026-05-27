@@ -23,6 +23,12 @@ export interface PushResult {
 }
 
 export class DevicePusher {
+  private retryDelayMs: number;
+
+  constructor(options?: { retryDelayMs?: number }) {
+    this.retryDelayMs = options?.retryDelayMs ?? 30000;
+  }
+
   /**
    * 统一推送入口
    * @param imageInput 本地文件路径或 MinIO URL
@@ -101,7 +107,7 @@ export class DevicePusher {
         return { ok: true, deviceResult: '推送成功' };
       } catch (deviceError: any) {
         if (deviceError.message.includes('429 Too Many Requests') && retryCount < maxRetries) {
-          const delay = baseDelay * (retryCount + 1);
+          const delay = this.retryDelayMs * (retryCount + 1);
           console.warn(`⏱️ 遇到API频率限制，${delay / 1000}秒后进行第${retryCount + 1}次重试...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
           retryCount++;
