@@ -161,7 +161,9 @@ app.get('/api/minio-proxy/*', async (c) => {
 
   // 构建MinIO URL
   const minioUrl = `http://minio:9000/quote0-images/${path}`;
-  console.log(`🔄 MinIO代理请求: ${minioUrl}`);
+  if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV !== 'production') {
+    console.log(`🔄 MinIO代理请求: ${minioUrl}`);
+  }
 
   const maxAttempts = 3;
   let lastError: unknown = null;
@@ -363,7 +365,9 @@ app.post('/api/news/process',
     try {
       const body = await c.req.json() as NewsProcessRequest;
       
-      console.log('🚀 API请求处理开始:', body);
+      if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV !== 'production') {
+        console.log('🚀 API请求处理开始:', body);
+      }
 
       const processingResult = await processNews(body);
 
