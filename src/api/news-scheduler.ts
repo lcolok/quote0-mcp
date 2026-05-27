@@ -1,4 +1,5 @@
 import { processNews, computeNewsFingerprint } from './news-processing-service.js';
+import { devicePusher } from './device-pusher.js';
 import type {
   FullNewsProcessingResult,
   NewsProcessRequest,
@@ -878,48 +879,19 @@ export class NewsScheduler {
       const objectKey = uploadResult.objectKey;
       console.log(`✅ 天气图片已上传 MinIO: ${imageUrl}`);
 
-      // 5. 推送到设备
+      // 5. 推送到设备（统一使用 DevicePusher，与新闻处理路径保持一致）
       let deviceResult = '未推送';
-      const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
+      let pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
 
-      if (job.config.renderer === 'local-eink') {
-        const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
-        const bitmap = await pngTo1BitBitmap(imageBuffer);
-        console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
-
-        const devices = await getEinkDevices();
-        if (devices.length === 0) {
-          console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
-          deviceResult = '无 E-Ink 设备配置';
-        } else {
-          for (const device of devices) {
-            const result = await pushToEinkDevice(device, bitmap);
-            pushResults.push({
-              device: device.id,
-              ok: result.ok,
-              error: result.error
-            });
-          }
-          const okCount = pushResults.filter(r => r.ok).length;
-          deviceResult = `e-ink 推送完成: ${okCount}/${pushResults.length} 成功`;
-          console.log(`✅ ${deviceResult}`);
+      if (job.config.renderer === 'local-eink' || job.config.renderer === 'device') {
+        const pushResult = await devicePusher.push(
+          localImagePath,
+          job.config.renderer as 'device' | 'local-eink'
+        );
+        deviceResult = pushResult.deviceResult || pushResult.error || '未推送';
+        if (pushResult.pushResults) {
+          pushResults = pushResult.pushResults;
         }
-      } else if (job.config.renderer === 'device') {
-        const { exec } = await import('child_process');
-        const { promisify } = await import('util');
-        const execAsync = promisify(exec);
-
-        const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${localImagePath}" "0" "" "ORDERED"`;
-        console.log(`📤 执行 MindReset 推送: ${deviceCommand}`);
-
-        const { stdout, stderr } = await execAsync(deviceCommand, {
-          cwd: process.cwd(),
-          env: process.env
-        });
-
-        if (stdout) console.log(stdout);
-        if (stderr) console.error(stderr);
-        deviceResult = 'MindReset 推送成功';
       }
 
       // 6. 记录推送结果

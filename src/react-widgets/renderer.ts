@@ -156,7 +156,7 @@ export class WidgetRenderer {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content={`width=${EINK_DEVICE_WIDTH}, height=${EINK_DEVICE_HEIGHT}`}>
+    <meta name="viewport" content={"width=" + EINK_DEVICE_WIDTH + ", height=" + EINK_DEVICE_HEIGHT}>
     <title>Widget Render</title>
     <style>
         * {
