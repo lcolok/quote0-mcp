@@ -10,7 +10,7 @@ import type {
 
 // 在生产环境（Docker）中使用相对路径，nginx会代理到news-api
 // 在开发环境中使用localhost
-const BASE_URL = (import.meta as any).env?.VITE_API_URL || (
+export const BASE_URL = (import.meta as any).env?.VITE_API_URL || (
   (import.meta as any).env?.MODE === 'production' ? '' : 'http://localhost:3001'
 );
 

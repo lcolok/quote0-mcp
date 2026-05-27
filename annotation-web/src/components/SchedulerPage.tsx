@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from '../api/client';
+import { apiClient, BASE_URL } from '../api/client';
 import {
   Search,
   Send,
@@ -164,7 +164,7 @@ function SchedulerPage() {
                       <div className="flex-shrink-0 w-16 h-16 bg-gray-100 rounded overflow-hidden">
                         {record.imagePath ? (
                           <img
-                            src={`http://localhost:3001${record.imagePath}`}
+                            src={`${BASE_URL}${record.imagePath}`}
                             alt=""
                             className="w-full h-full object-cover"
                             onError={(e) => {
@@ -268,7 +268,7 @@ function SchedulerPage() {
               {selectedRecord.imagePath && (
                 <div className="bg-gray-50 rounded-lg overflow-hidden">
                   <img
-                    src={`http://localhost:3001${selectedRecord.imagePath}`}
+                    src={`${BASE_URL}${selectedRecord.imagePath}`}
                     alt={selectedRecord.title}
                     className="w-full h-auto"
                     onError={(e) => {

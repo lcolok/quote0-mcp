@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { BASE_URL } from '../api/client';
 import {
   Check,
   GitBranch,
@@ -110,7 +111,7 @@ function TrainingPage() {
   const { data: versionsData, isLoading: versionsLoading } = useQuery({
     queryKey: ['ax-versions'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:3001/api/ax-training/versions');
+      const response = await fetch(BASE_URL + '/api/ax-training/versions');
       if (!response.ok) throw new Error('获取版本列表失败');
       const result = await response.json();
       return result.data;
@@ -123,7 +124,7 @@ function TrainingPage() {
     queryKey: ['ax-version-details', selectedVersion],
     queryFn: async () => {
       if (!selectedVersion) return null;
-      const response = await fetch(`http://localhost:3001/api/ax-training/versions/${selectedVersion}`);
+      const response = await fetch(`${BASE_URL}/api/ax-training/versions/${selectedVersion}`);
       if (!response.ok) throw new Error('获取版本详情失败');
       const result = await response.json();
       return result.data as VersionDetails;
@@ -135,7 +136,7 @@ function TrainingPage() {
   const { data: statistics } = useQuery({
     queryKey: ['ax-statistics'],
     queryFn: async () => {
-      const response = await fetch('http://localhost:3001/api/ax-training/statistics');
+      const response = await fetch(BASE_URL + '/api/ax-training/statistics');
       if (!response.ok) throw new Error('获取统计信息失败');
       const result = await response.json();
       return result.data;
@@ -162,7 +163,7 @@ function TrainingPage() {
       const promises = allRssSources.map(async (source) => {
         try {
           const response = await fetch(
-            `http://localhost:3001/api/rss/list?category=${source.category}&rssSource=${source.id}&count=20&startIndex=0`
+            `${BASE_URL}/api/rss/list?category=${source.category}&rssSource=${source.id}&count=20&startIndex=0`
           );
 
           if (!response.ok) {
@@ -222,7 +223,7 @@ function TrainingPage() {
   // 创建版本
   const createVersionMutation = useMutation({
     mutationFn: async (data: typeof createForm) => {
-      const response = await fetch('http://localhost:3001/api/ax-training/versions/create', {
+      const response = await fetch(BASE_URL + '/api/ax-training/versions/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -251,7 +252,7 @@ function TrainingPage() {
   // 激活版本
   const activateVersionMutation = useMutation({
     mutationFn: async (version: string) => {
-      const response = await fetch(`http://localhost:3001/api/ax-training/versions/${version}/activate`, {
+      const response = await fetch(`${BASE_URL}/api/ax-training/versions/${version}/activate`, {
         method: 'POST'
       });
       if (!response.ok) throw new Error('激活失败');
@@ -272,7 +273,7 @@ function TrainingPage() {
   // 训练模型
   const trainModelMutation = useMutation({
     mutationFn: async ({ version, deploy }: { version: string; deploy: boolean }) => {
-      const response = await fetch(`http://localhost:3001/api/ax-training/versions/${version}/train`, {
+      const response = await fetch(`${BASE_URL}/api/ax-training/versions/${version}/train`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deploy })
@@ -301,7 +302,7 @@ function TrainingPage() {
 
     try {
       // 发送重启命令
-      const response = await fetch('http://localhost:3001/api/ax-training/restart', {
+      const response = await fetch(BASE_URL + '/api/ax-training/restart', {
         method: 'POST'
       });
 
@@ -320,7 +321,7 @@ function TrainingPage() {
 
       const checkStatus = async (): Promise<boolean> => {
         try {
-          const statusResponse = await fetch('http://localhost:3001/api/ax-training/status');
+          const statusResponse = await fetch(BASE_URL + '/api/ax-training/status');
           return statusResponse.ok;
         } catch {
           return false;
@@ -363,7 +364,7 @@ function TrainingPage() {
     setTestResult(null);
 
     try {
-      const response = await fetch('http://localhost:3001/api/news/process', {
+      const response = await fetch(BASE_URL + '/api/news/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
