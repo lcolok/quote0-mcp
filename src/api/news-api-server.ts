@@ -125,6 +125,22 @@ app.use('*', cors({
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
 }));
 
+// 全局认证中间件：写操作需要 Bearer Token（向后兼容：未配置则跳过）
+app.use('*', async (c, next) => {
+  const authToken = process.env.API_AUTH_TOKEN;
+  if (!authToken) return await next();
+
+  const method = c.req.method;
+  if (method === 'GET' || method === 'OPTIONS') return await next();
+
+  const header = c.req.header('Authorization');
+  if (!header || !header.startsWith('Bearer ') || header.slice(7) !== authToken) {
+    return c.json({ success: false, error: 'Unauthorized' }, 401);
+  }
+
+  await next();
+});
+
 app.use('*', logger());
 app.use('*', prettyJSON());
 
