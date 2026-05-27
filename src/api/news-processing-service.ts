@@ -12,10 +12,15 @@ import type {
   NewsPushContext
 } from './news-types.js';
 
+const DEBUG = process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV !== 'production';
+function debugLog(...args: any[]) {
+  if (DEBUG) console.log(...args);
+}
+
 export async function processNews(body: NewsProcessRequest): Promise<FullNewsProcessingResult> {
   const startTime = Date.now();
 
-  console.log('🚀 新闻处理任务开始:', body);
+  debugLog('🚀 新闻处理任务开始:', body);
 
   const params: NewsProcessingParams = {
     category: body.category || 'technology',
@@ -39,8 +44,8 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     (global as any).__PLAYGROUND_MOCK_DATA__ = body.mockData;
   }
 
-  console.log('📋 处理参数:', params);
-  console.log('⚙️ 配置:', config);
+  debugLog('📋 处理参数:', params);
+  debugLog('⚙️ 配置:', config);
 
   if (!modularNewsPlugin.validateParams(params)) {
     throw new Error('参数验证失败');
@@ -61,7 +66,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     }
   };
 
-  console.log('🔍 检查缓存，缓存键:', cacheKey);
+  debugLog('🔍 检查缓存，缓存键:', cacheKey);
 
   const context: NewsPushContext = {
     category: params.category,
@@ -103,12 +108,12 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
   if (!params.force && (params.renderer === 'json' || params.renderer === 'device' || params.renderer === 'local-eink')) {
     try {
       if (params.renderer === 'json') {
-        console.log('🔍 JSON渲染器 - 检查数据缓存...');
+        debugLog('🔍 JSON渲染器 - 检查数据缓存...');
 
         const newsResult = await stagedCacheManager.getOrCacheNewsData(
           cacheKey,
           async () => {
-            console.log('🔄 缓存未命中，执行完整的JSON处理流程...');
+            debugLog('🔄 缓存未命中，执行完整的JSON处理流程...');
             return (await modularNewsPlugin.getData(params)) as unknown as NewsData;
           },
           params.force
@@ -118,7 +123,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         cacheHit = newsResult.source !== 'original';
         cacheSource = newsResult.source;
       } else if (params.renderer === 'device' || params.renderer === 'local-eink') {
-        console.log(`📱 设备推送渲染器 (${params.renderer}) - 启用MinIO直接缓存...`);
+        debugLog(`📱 设备推送渲染器 (${params.renderer}) - 启用MinIO直接缓存...`);
 
         let newsFingerprint: string;
         let cachedTextData: any = null;
@@ -128,7 +133,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         if (context.title || context.link || context.publishTime || context.fingerprint) {
           // 调度器会传入完整上下文，优先利用现有数据避免再次执行JSON流程
-          console.log('🧾 使用传入上下文计算fingerprint，跳过额外的JSON流程');
+          debugLog('🧾 使用传入上下文计算fingerprint，跳过额外的JSON流程');
           newsFingerprint = context.fingerprint ?? computeNewsFingerprint({
             title: context.title,
             link: context.link,
@@ -140,7 +145,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           usedContextForFingerprint = true;
         } else {
           // 若无上下文可用（例如手动API调用），回退到一次性JSON流程
-          console.log('📝 未提供上下文，执行一次JSON流程用于fingerprint计算...');
+          debugLog('📝 未提供上下文，执行一次JSON流程用于fingerprint计算...');
           const jsonParams = { ...params, processor: 'passthrough' as const, renderer: 'json' as const };
           const jsonResult = await modularNewsPlugin.getData(jsonParams);
           const jsonData = jsonResult as any;
@@ -172,7 +177,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         }
 
         const cacheKeyString = `${params.dataSource}_${params.rssSource}_${params.processor}_${params.category}_${newsFingerprint}`;
-        console.log(`🔑 生成缓存键（含fingerprint）: ${cacheKeyString}`);
+        debugLog(`🔑 生成缓存键（含fingerprint）: ${cacheKeyString}`);
 
         let imageUrl = '';
         let dbImagePath: string | undefined = undefined;
@@ -180,7 +185,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         if (!params.force) {
           try {
-            console.log('🔍 检查MinIO中的缓存图片...');
+            debugLog('🔍 检查MinIO中的缓存图片...');
 
             const { getImageStorage } = await import('../react-widgets/core/image-storage.js');
             const imageStorage = getImageStorage();
@@ -228,9 +233,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
 
         if (!localCacheHit || params.force) {
           if (params.force) {
-            console.log('🔄 强制刷新，执行完整渲染...');
+            debugLog('🔄 强制刷新，执行完整渲染...');
           } else {
-            console.log('📱 缓存未命中，执行完整渲染...');
+            debugLog('📱 缓存未命中，执行完整渲染...');
           }
 
           renderResult = (await modularNewsPlugin.getData(params)) as Record<string, any> | null;
@@ -245,7 +250,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             }
 
             try {
-              console.log('💾 保存渲染结果到MinIO缓存...');
+              debugLog('💾 保存渲染结果到MinIO缓存...');
 
               const imageUrlValue = renderResult.imageUrl;
               if (imageUrlValue && imageUrlValue.includes('/quote0-images/')) {
