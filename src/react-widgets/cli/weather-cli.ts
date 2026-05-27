@@ -16,12 +16,12 @@ import { MultiSourceWeatherService } from '../services/multi-source-weather-serv
 import { WeatherData } from '../types.js';
 import { widgetRenderer } from '../renderer.js';
 import { EnvLoader } from '../../image-sender/index.js';
-import { exec } from 'child_process';
+import * as cp from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(cp.execFile);
 
 function showUsage(): void {
     console.log('🎨 智能天气组件生成器 - 集成最新研究成果');
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
         
         // 确保输出目录存在
         const outputDir = './processed-images/widgets';
-        await execAsync(`mkdir -p "${outputDir}"`);
+        await import('fs').then(fs => fs.mkdirSync(outputDir, { recursive: true }));
         
         // 获取城市天气数据
         let weatherData: WeatherData;
@@ -225,8 +225,7 @@ async function main(): Promise<void> {
         EnvLoader.ensureEnvVars();
         
         // 发送到设备
-        const sendCmd = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${outputPath}" "${border}" "" "ORDERED"`;
-        await execAsync(sendCmd);
+        await execFileAsync('node', ['dist/image-sender/interfaces/cli/cli-main.js', 'send-server-dither', outputPath, border, '', 'ORDERED']);
         
         console.log('');
         console.log('🎉 天气组件发送完成！');

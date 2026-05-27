@@ -8,11 +8,12 @@ import { WidgetPluginRegistry, WidgetExecutionContext, WidgetExecutionResult, Wi
 import { satoriRenderer } from './satori-renderer.js';
 import { stagedCacheManager } from './staged-cache-manager.js';
 import { EnvLoader } from '../../image-sender/index.js';
-import { exec } from 'child_process';
+import * as cp from 'child_process';
 import { promisify } from 'util';
+import { mkdirSync } from 'fs';
 import { existsSync } from 'fs';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(cp.execFile);
 
 export class WidgetCLIEngine {
   constructor(private registry: WidgetPluginRegistry) {}
@@ -67,7 +68,7 @@ export class WidgetCLIEngine {
 
       // 创建组件专用输出目录
       const componentOutputDir = `${context.outputDir}/${plugin.meta.type}`;
-      await execAsync(`mkdir -p "${componentOutputDir}"`);
+      mkdirSync(componentOutputDir, { recursive: true });
 
       // 初始化分阶段缓存系统
       await stagedCacheManager.initialize();
@@ -133,8 +134,10 @@ export class WidgetCLIEngine {
         console.log(`🖼️ 图片已缓存在MinIO: ${outputPath}`);
         localImagePath = `${componentOutputDir}/${this.generateFileName(params)}_${context.timestamp}_cached.png`;
         // 下载图片到本地用于设备发送
-        const downloadCmd = `curl -s -o "${localImagePath}" "${outputPath}"`;
-        await execAsync(downloadCmd);
+        const downloadRes = await fetch(outputPath);
+        if (!downloadRes.ok) throw new Error(`下载缓存图片失败: ${downloadRes.status}`);
+        const fs = await import('fs/promises');
+        await fs.writeFile(localImagePath, Buffer.from(await downloadRes.arrayBuffer()));
         console.log(`📥 已下载缓存图片到本地: ${localImagePath}`);
       }
 
@@ -240,9 +243,7 @@ export class WidgetCLIEngine {
         console.log(`📝 无链接参数传递`);
       }
       
-      const sendCmd = `node dist/image-sender/interfaces/cli/cli-main.js send-server-dither "${outputPath}" "${border}" "${link}" "ORDERED"`;
-      
-      await execAsync(sendCmd);
+      await execFileAsync('node', ['dist/image-sender/interfaces/cli/cli-main.js', 'send-server-dither', outputPath, border, link, 'ORDERED']);
       
       console.log('✅ 设备发送完成');
       return true;

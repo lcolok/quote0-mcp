@@ -10,9 +10,9 @@ const TEMP_PNG = "/tmp/device-pusher-test.png";
 let lastExecCommand = "";
 
 mock.module("child_process", () => ({
-  exec: (...args: any[]) => {
-    lastExecCommand = args[0];
-    const cb = args.find((a: any) => typeof a === "function");
+  execFile: (cmd: string, args: string[], optionsOrCb: any, maybeCb?: any) => {
+    lastExecCommand = [cmd, ...args].join(' ');
+    const cb = typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb;
     if (cb) cb(null, "stdout", "");
   },
 }));

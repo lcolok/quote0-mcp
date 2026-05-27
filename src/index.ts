@@ -89,7 +89,6 @@ class MindResetMcpServer {
       "Content-Type": "application/json",
       "User-Agent": "mindreset-mcp-server/1.0.0",
       "X-Device-ID": deviceId,
-      "X-Device-Secret": deviceSecret,
     };
   }
 

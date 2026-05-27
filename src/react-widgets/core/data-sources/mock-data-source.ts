@@ -88,13 +88,10 @@ export class MockDataSourceModule extends BaseDataSourceModule {
   };
   
   async fetchRawData(params: DataSourceParams): Promise<RawDataItem[]> {
-    // 检查是否有Playground注入的mock数据
-    const playgroundData = (global as any).__PLAYGROUND_MOCK_DATA__;
+    // 检查是否有请求级别的mock数据（避免全局状态污染）
+    const playgroundData = params.mockData;
     if (playgroundData) {
       console.log('🎮 使用 Playground 注入的测试数据');
-
-      // 清除注入的数据，避免影响后续请求
-      delete (global as any).__PLAYGROUND_MOCK_DATA__;
 
       return [{
         id: `playground_${Date.now()}`,

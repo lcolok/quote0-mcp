@@ -57,8 +57,8 @@ const postgres = getPostgresDatabase();
 app.get('/api/annotation/news', async (c) => {
   try {
     const status = c.req.query('status') || 'pending';
-    const limit = parseInt(c.req.query('limit') || '50', 10);
-    const offset = parseInt(c.req.query('offset') || '0', 10);
+    const limit = Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10);
+    const offset = Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10);
     const category = c.req.query('category');
 
     const client = await postgres.getClient();
@@ -560,9 +560,9 @@ app.delete('/api/annotation/annotations/:id', async (c) => {
  */
 app.get('/api/annotation/samples/export', async (c) => {
   try {
-    const minScore = parseInt(c.req.query('minScore') || '0', 10);
-    const maxScore = parseInt(c.req.query('maxScore') || '100', 10);
-    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : null;
+    const minScore = Number.isNaN(parseInt(c.req.query('minScore') || '0', 10)) ? 0 : parseInt(c.req.query('minScore') || '0', 10);
+    const maxScore = Number.isNaN(parseInt(c.req.query('maxScore') || '100', 10)) ? 100 : parseInt(c.req.query('maxScore') || '100', 10);
+    const limit = c.req.query('limit') ? (Number.isNaN(parseInt(c.req.query('limit')!, 10)) ? null : parseInt(c.req.query('limit')!, 10)) : null;
 
     const client = await postgres.getClient();
     try {
@@ -712,8 +712,8 @@ app.get('/api/annotation/statistics', async (c) => {
 app.get('/api/annotation/history', async (c) => {
   try {
     const newsId = c.req.query('newsId');
-    const limit = parseInt(c.req.query('limit') || '50', 10);
-    const offset = parseInt(c.req.query('offset') || '0', 10);
+    const limit = Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10);
+    const offset = Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10);
 
     let query = `
       SELECT

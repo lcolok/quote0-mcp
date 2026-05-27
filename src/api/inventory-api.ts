@@ -14,8 +14,8 @@ app.get('/api/inventory', async (c) => {
     const state = c.req.query('state');
     const source = c.req.query('source');
     const sortBy = c.req.query('sort_by') || 'created_at';
-    const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '50', 10), 500));
-    const offset = Math.max(0, parseInt(c.req.query('offset') || '0', 10));
+    const limit = Math.max(1, Math.min(Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10), 500));
+    const offset = Math.max(0, Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10));
 
     const allowedSort = ['created_at', 'last_pushed_at', 'replay_count'];
     const orderBy = allowedSort.includes(sortBy) ? sortBy : 'created_at';

@@ -1963,7 +1963,8 @@ export class NewsScheduler {
     const http = await import('http');
     const { createWriteStream } = await import('fs');
 
-    const tempFileName = `inventory_${Date.now()}.png`;
+    const { randomUUID } = await import('crypto');
+    const tempFileName = `inventory_${randomUUID()}.png`;
     const tempFilePath = path.join(tmpdir(), tempFileName);
 
     await new Promise<void>((resolve, reject) => {

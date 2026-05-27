@@ -29,7 +29,8 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     renderer: body.renderer || 'news',
     index: body.index ?? 0,
     rssSource: body.rssSource || 'solidot',
-    force: body.options?.force ?? false
+    force: body.options?.force ?? false,
+    mockData: body.mockData
   };
 
   const config: NewsProcessingConfig = {
@@ -38,11 +39,6 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     width: body.options?.width || EINK_DEVICE_WIDTH,
     height: body.options?.height || EINK_DEVICE_HEIGHT
   };
-
-  // 如果提供了mockData，注入到环境中
-  if (body.mockData) {
-    (global as any).__PLAYGROUND_MOCK_DATA__ = body.mockData;
-  }
 
   debugLog('📋 处理参数:', params);
   debugLog('⚙️ 配置:', config);

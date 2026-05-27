@@ -5,9 +5,9 @@ const TEMP_PNG = "/tmp/retry-test.png";
 let callCount = 0;
 
 mock.module("child_process", () => ({
-  exec: (...args: any[]) => {
+  execFile: (cmd: string, args: string[], optionsOrCb: any, maybeCb?: any) => {
     callCount++;
-    const cb = args.find((a: any) => typeof a === "function");
+    const cb = typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb;
     if (callCount < 3) {
       if (cb) cb(new Error("429 Too Many Requests"), "", "");
     } else {

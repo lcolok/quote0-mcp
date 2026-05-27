@@ -213,8 +213,27 @@ app.post('/api/llm/active', async (c) => {
 });
 
 // POST /api/llm/test
+// 简单的内存限流器：防止 LLM test 端点被滥用
+const llmTestRateLimit = new Map<string, number>();
+const LLM_TEST_WINDOW_MS = 60_000;
+const LLM_TEST_MAX_REQUESTS = 10;
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const last = llmTestRateLimit.get(ip) || 0;
+  if (now - last < LLM_TEST_WINDOW_MS) {
+    return true;
+  }
+  llmTestRateLimit.set(ip, now);
+  return false;
+}
+
 app.post('/api/llm/test', async (c) => {
   try {
+    const clientIp = c.req.header('x-forwarded-for') || 'unknown';
+    if (isRateLimited(clientIp)) {
+      return c.json({ success: false, error: '请求过于频繁，请稍后再试' }, 429);
+    }
     const body = await c.req.json();
     const { provider_id, model_id } = body;
     if (!provider_id || !model_id) {

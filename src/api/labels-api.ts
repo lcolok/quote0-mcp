@@ -769,7 +769,7 @@ labelsApp.get('/', async (c) => {
   try {
     const status = c.req.query('status');
     const tag = c.req.query('tag');
-    const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') ?? '50', 10), 500));
+    const limit = Math.max(1, Math.min(Number.isNaN(parseInt(c.req.query('limit') ?? '50', 10)) ? 50 : parseInt(c.req.query('limit') ?? '50', 10), 500));
 
     const db = getPostgresDatabase();
     let sql = `SELECT id, prompt, png_path, target_id, status, print_count, tags, source_type, source_model, source_image_url, last_error,

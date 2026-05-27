@@ -112,8 +112,15 @@ const postgres = getPostgresDatabase();
 const schedulerEnabledByConfig = (process.env.NEWS_SCHEDULER_ENABLED || 'true').toLowerCase() !== 'false';
 
 // 中间件配置
+const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:3000', 'http://localhost:5173'];
+
 app.use('*', cors({
-  origin: '*',
+  origin: (origin) => {
+    if (!origin) return '*';
+    return ALLOWED_ORIGINS.includes(origin) ? origin : null;
+  },
   allowHeaders: ['Content-Type', 'Authorization'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
 }));
@@ -128,7 +135,12 @@ app.get('/images/:filename', async (c) => {
     const fs = await import('fs/promises');
     const path = await import('path');
 
-    const imagePath = path.join('./processed-images/widgets/news', filename);
+    // 防止路径遍历：规范化路径并限制在目标目录内
+    const baseDir = path.resolve('./processed-images/widgets/news');
+    const imagePath = path.resolve(baseDir, filename);
+    if (!imagePath.startsWith(baseDir)) {
+      return c.text('Forbidden', 403);
+    }
 
     // 检查文件是否存在
     try {
@@ -157,10 +169,15 @@ app.get('/images/:filename', async (c) => {
 app.get('/api/minio-proxy/*', async (c) => {
   // 从请求路径中提取MinIO对象路径
   const fullPath = c.req.path;
-  const path = fullPath.replace('/api/minio-proxy/', '');
+  const requestPath = fullPath.replace('/api/minio-proxy/', '');
+
+  // 防止路径遍历：拒绝包含 .. 的路径，只允许 widgets/ 和 labels/ 前缀
+  if (requestPath.includes('..') || (!requestPath.startsWith('widgets/') && !requestPath.startsWith('labels/'))) {
+    return c.text('Invalid path', 400);
+  }
 
   // 构建MinIO URL
-  const minioUrl = `http://minio:9000/quote0-images/${path}`;
+  const minioUrl = `http://minio:9000/quote0-images/${requestPath}`;
   if (process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV !== 'production') {
     console.log(`🔄 MinIO代理请求: ${minioUrl}`);
   }
@@ -170,7 +187,7 @@ app.get('/api/minio-proxy/*', async (c) => {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await fetch(minioUrl);
+      const response = await fetch(minioUrl, { signal: AbortSignal.timeout(10000) });
       console.log(`📡 MinIO响应状态: ${response.status} (尝试 ${attempt}/${maxAttempts})`);
 
       if (response.status === 404) {
@@ -349,7 +366,7 @@ app.post('/api/news/process',
   validator('json', (value, c) => {
     const body = value as NewsProcessRequest;
     
-    // 基本参数验证
+    // 基本参数验证（不记录完整 body，避免日志泄露敏感信息）
     if (body.dataSource === 'rss' && body.rssSource && !RSS_SOURCES[body.rssSource]) {
       return c.json({ 
         success: false, 
@@ -559,8 +576,8 @@ app.get('/api/news/scheduler/history', async (c) => {
   // 从环境变量读取最大限制，默认5000
   const MAX_HISTORY_LIMIT = parseInt(process.env.MAX_HISTORY_LIMIT || '5000', 10);
 
-  const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || '50', 10), MAX_HISTORY_LIMIT));
-  const offset = Math.max(0, parseInt(c.req.query('offset') || '0', 10));
+  const limit = Math.max(1, Math.min(Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10), MAX_HISTORY_LIMIT));
+  const offset = Math.max(0, Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10));
   const includeContent = c.req.query('includeContent') === 'true';
   const deduplicate = c.req.query('deduplicate') === 'true'; // 是否去重
   const logs = await postgres.getRecentPushLogs(limit, includeContent, offset, deduplicate);
@@ -797,8 +814,8 @@ app.get('/api/rss/list', async (c) => {
   try {
     const category = c.req.query('category') || 'technology';
     const rssSource = c.req.query('rssSource') || 'solidot';
-    const count = parseInt(c.req.query('count') || '10', 10);
-    const startIndex = parseInt(c.req.query('startIndex') || '0', 10);
+    const count = Number.isNaN(parseInt(c.req.query('count') || '10', 10)) ? 10 : parseInt(c.req.query('count') || '10', 10);
+    const startIndex = Number.isNaN(parseInt(c.req.query('startIndex') || '0', 10)) ? 0 : parseInt(c.req.query('startIndex') || '0', 10);
 
     // 动态导入RSS数据源
     const { RSSDataSourceModule } = await import('../react-widgets/core/data-sources/rss-data-source.js');
@@ -847,8 +864,8 @@ app.get('/api/scheduler/push-history', async (c) => {
     await postgres.initialize();
     const client = await postgres.getClient();
 
-    const limit = parseInt(c.req.query('limit') || '50');
-    const offset = parseInt(c.req.query('offset') || '0');
+    const limit = Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10);
+    const offset = Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10);
     const search = c.req.query('search') || '';
 
     let query = `
@@ -1495,8 +1512,7 @@ app.onError((error, c) => {
 
   return c.json({
     success: false,
-    error: '内部服务器错误',
-    message: error.message
+    error: '内部服务器错误'
   }, 500);
 });
 

@@ -4,7 +4,7 @@
  * 只有 Pusher 有权触碰物理设备。统一推送入口，彻底消除重复推送。
  */
 
-import { exec } from 'child_process';
+import * as cp from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
@@ -13,7 +13,7 @@ import https from 'https';
 import http from 'http';
 import { createWriteStream } from 'fs';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(cp.execFile);
 
 export interface PushResult {
   ok: boolean;
@@ -62,14 +62,25 @@ export class DevicePusher {
   }
 
   private async downloadToTemp(url: string): Promise<string> {
-    const tempFileName = `pusher_${Date.now()}.png`;
+    // SSRF 防护：只允许 http/https 协议，拒绝内网地址
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('仅支持 http/https 协议');
+    }
+    const hostname = parsed.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.') || hostname.startsWith('169.254.')) {
+      throw new Error('禁止访问内网地址');
+    }
+
+    const { randomUUID } = await import('crypto');
+    const tempFileName = `pusher_${randomUUID()}.png`;
     const tempFilePath = path.join(tmpdir(), tempFileName);
 
     await new Promise<void>((resolve, reject) => {
       const client = url.startsWith('https:') ? https : http;
       const file = createWriteStream(tempFilePath);
 
-      client.get(url, (response) => {
+      const request = client.get(url, (response) => {
         response.pipe(file);
         file.on('finish', () => {
           file.close(() => resolve());
@@ -81,6 +92,10 @@ export class DevicePusher {
       }).on('error', (err) => {
         file.close();
         reject(err);
+      });
+      request.setTimeout(30000, () => {
+        request.destroy();
+        reject(new Error('下载超时'));
       });
     });
 
@@ -96,7 +111,7 @@ export class DevicePusher {
 
     while (retryCount <= maxRetries) {
       try {
-        const { stdout, stderr } = await execAsync(deviceCommand, {
+        const { stdout, stderr } = await execFileAsync('bunx', ['tsx', 'src/image-sender/interfaces/cli/cli-main.ts', 'send-server-dither', localFilePath, '0', '', 'ORDERED'], {
           cwd: process.cwd(),
           env: process.env,
         });

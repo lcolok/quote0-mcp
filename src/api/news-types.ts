@@ -45,6 +45,7 @@ export interface NewsProcessingParams {
   index: number;
   rssSource: string;
   force: boolean;
+  mockData?: NewsProcessRequest['mockData'];
 }
 
 export interface NewsProcessingConfig {

@@ -273,6 +273,10 @@ app.post('/versions/:version/train', async (c) => {
     const snapshotsDir = path.join(baseDir, 'models', 'snapshots');
     await fs.mkdir(snapshotsDir, { recursive: true });
 
+    // 防止路径遍历：version 只能包含字母、数字、连字符、下划线和点
+    if (!/^[a-zA-Z0-9._-]+$/.test(version)) {
+      return c.json({ success: false, error: '版本号格式无效' }, 400);
+    }
     const modelPath = path.join(snapshotsDir, `${version}.json`);
     await fs.writeFile(modelPath, JSON.stringify(optimizedModel, null, 2));
 
