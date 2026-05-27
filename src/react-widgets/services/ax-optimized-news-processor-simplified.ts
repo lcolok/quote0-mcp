@@ -139,7 +139,7 @@ export class AxOptimizedNewsProcessorSimplified {
       console.log('🔗 连接LLM服务...');
       console.log(`📡 端点: ${this.options.baseURL}`);
       console.log(`🤖 模型: ${this.options.model}`);
-      console.log(`🔑 API密钥: ${this.options.apiKey ? `${this.options.apiKey.substring(0, 8)}...` : '未配置'}`);
+      console.log(`🔑 API密钥状态: ${this.options.apiKey ? '已配置' : '未配置'}`);
       
       const client = new OpenAI({
         apiKey: this.options.apiKey,

@@ -132,19 +132,13 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     container_name: quote0-app
+    env_file:
+      - .env
     environment:
       NODE_ENV: development
-      # 数据库配置
-      DATABASE_URL: postgresql://quote0_user:quote0_password@postgres:5432/quote0_cache
-      # MinIO配置
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: quote0_minio
-      MINIO_SECRET_KEY: quote0_minio_password
-      MINIO_BUCKET: quote0-images
-      # Redis配置
-      REDIS_URL: redis://redis:6379
+      # 其余配置从 .env 文件读取，避免硬编码覆盖
     ports:
-      - "3000:3000"
+      - "3001:3001"
     depends_on:
       postgres:
         condition: service_healthy

@@ -95,8 +95,8 @@ export class DevicePusher {
           env: process.env,
         });
 
-        if (stdout) console.log(stdout);
-        if (stderr) console.error(stderr);
+        // stdout/stderr from CLI may contain sensitive data; only log on failure
+        if (stderr) console.error('MindReset CLI stderr:', stderr);
 
         return { ok: true, deviceResult: '推送成功' };
       } catch (deviceError: any) {

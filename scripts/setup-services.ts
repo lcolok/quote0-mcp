@@ -135,7 +135,7 @@ MINDRESET_DEVICE_SECRET=dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgn
 
 # 应用配置
 NODE_ENV=development
-PORT=3000
+PORT=3001
 
 # 日志配置
 LOG_LEVEL=info

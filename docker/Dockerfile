@@ -15,7 +15,7 @@ RUN bun install --frozen-lockfile
 # 开发阶段
 FROM base AS development
 COPY . .
-EXPOSE 3000
+EXPOSE 3001
 CMD ["bun", "dev"]
 
 # 构建阶段
@@ -33,5 +33,5 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 
-EXPOSE 3000
+EXPOSE 3001
 CMD ["bun", "start"]

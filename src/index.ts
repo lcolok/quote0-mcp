@@ -47,7 +47,7 @@ const ImageSchema = z.object({
 
 class MindResetMcpServer {
   private server: Server;
-  private baseUrl: string = "https://dot.mindreset.tech/api";
+  private baseUrl: string = process.env.MINDRESET_BASE_URL || "https://dot.mindreset.tech/api";
 
   constructor() {
     this.server = new Server(

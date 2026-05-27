@@ -12,7 +12,6 @@ import { dataSourceRegistry } from '../react-widgets/core/data-source-modules.js
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RawDataItem } from '../react-widgets/core/modular-architecture.js';
 import React from 'react';
-import { MaximizedWeatherWidget } from '../react-widgets/components/MaximizedWeatherWidget.js';
 import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
@@ -1990,36 +1989,11 @@ export class NewsScheduler {
     });
 
     try {
-      if (renderer === 'local-eink') {
-        const fsModule = await import('fs');
-        const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
-        const pngBuffer = await fsModule.promises.readFile(tempFilePath);
-        const bitmap = await pngTo1BitBitmap(pngBuffer);
-        const devices = await getEinkDevices();
-        if (devices.length === 0) {
-          console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
-        } else {
-          for (const device of devices) {
-            const result = await pushToEinkDevice(device, bitmap);
-            if (result.ok) {
-              console.log(`✅ ${device.name} 推送成功`);
-            } else {
-              console.error(`❌ ${device.name} 推送失败: ${result.error}`);
-            }
-          }
+      if (renderer === 'local-eink' || renderer === 'device') {
+        const pushResult = await devicePusher.push(tempFilePath, renderer);
+        if (!pushResult.ok && pushResult.error) {
+          console.warn(`⚠️ consumer 推送失败: ${pushResult.error}`);
         }
-      } else if (renderer === 'device') {
-        const { exec } = await import('child_process');
-        const { promisify } = await import('util');
-        const execAsync = promisify(exec);
-        const deviceCommand = `bunx tsx src/image-sender/interfaces/cli/cli-main.ts send-server-dither "${tempFilePath}" "0" "" "ORDERED"`;
-        console.log(`📤 执行 MindReset 推送: ${deviceCommand}`);
-        const { stdout, stderr } = await execAsync(deviceCommand, {
-          cwd: process.cwd(),
-          env: process.env
-        });
-        if (stdout) console.log(stdout);
-        if (stderr) console.error(stderr);
       } else {
         console.warn(`⚠️ 不支持的 consumer renderer: ${renderer}，跳过设备推送`);
       }
@@ -2205,15 +2179,6 @@ function normalizeInputConfig(config: NewsSchedulerJobConfig): NewsSchedulerJobR
     indexStrategy,
     enabled
   };
-}
-
-function createShuffledIndices(poolSize: number): number[] {
-  const indices = Array.from({ length: poolSize }, (_, i) => i);
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
-  }
-  return indices;
 }
 
 function arraysEqual<T>(a: T[] | undefined, b: T[]): boolean {
