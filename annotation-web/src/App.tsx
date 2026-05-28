@@ -8,6 +8,7 @@ import TrainingPage from './components/TrainingPage';
 import SchedulerPage from './components/SchedulerPage';
 import SourcesPage from './components/SourcesPage';
 import LLMProvidersPage from './components/LLMProvidersPage';
+import DeviceManagementPage from './components/DeviceManagementPage';
 import InventoryPage from './components/InventoryPage';
 import JobsManagementPage from './components/JobsManagementPage';
 
@@ -25,6 +26,7 @@ function App() {
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="sources" element={<SourcesPage />} />
           <Route path="llm-providers" element={<LLMProvidersPage />} />
+          <Route path="devices" element={<DeviceManagementPage />} />
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="jobs" element={<JobsManagementPage />} />
         </Route>

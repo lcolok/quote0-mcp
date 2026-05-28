@@ -12,6 +12,7 @@ import {
   Brain,
   Package,
   Settings2,
+  MonitorSmartphone,
 } from 'lucide-react';
 
 function Layout() {
@@ -35,6 +36,7 @@ function Layout() {
     { to: '/jobs', icon: Settings2, label: '任务管理' },
     { to: '/sources', icon: Settings, label: 'RSS源管理' },
     { to: '/llm-providers', icon: Brain, label: 'LLM 切换' },
+    { to: '/devices', icon: MonitorSmartphone, label: '设备管理' },
     { to: '/inventory', icon: Package, label: '素材库' },
   ];
 
