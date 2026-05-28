@@ -139,8 +139,6 @@ export class DevicePusher {
   private async pushToLocalEink(localFilePath: string): Promise<PushResult> {
     const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
     const pngBuffer = await fs.readFile(localFilePath);
-    const bitmap = await pngTo1BitBitmap(pngBuffer);
-    console.log(`📐 Bitmap 转换完成: ${bitmap.length} bytes`);
 
     const devices = await getEinkDevices();
     if (devices.length === 0) {
@@ -150,21 +148,20 @@ export class DevicePusher {
 
     const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
     for (const device of devices) {
-      const result = await pushToEinkDevice(device, bitmap);
-      pushResults.push({ device: device.id, ok: result.ok, error: result.error });
-      if (result.ok) {
-        console.log(`✅ ${device.name} 推送成功`);
-      } else {
-        console.error(`❌ ${device.name} 推送失败: ${result.error}`);
+      try {
+        const bitmap = await pngTo1BitBitmap(pngBuffer, device.width, device.height);
+        const result = await pushToEinkDevice(device, bitmap);
+        pushResults.push({ device: device.id, ok: result.ok, error: result.error });
+        if (result.ok) console.log(`✅ ${device.name} (${device.width ?? 'default'}x${device.height ?? 'default'}) 推送成功`);
+        else console.error(`❌ ${device.name} 推送失败: ${result.error}`);
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        pushResults.push({ device: device.id, ok: false, error: msg });
+        console.error(`❌ ${device.name} 转换/推送异常: ${msg}`);
       }
     }
-
     const okCount = pushResults.filter((r) => r.ok).length;
-    return {
-      ok: okCount > 0,
-      deviceResult: `e-ink 推送完成: ${okCount}/${pushResults.length} 成功`,
-      pushResults,
-    };
+    return { ok: okCount > 0, deviceResult: `e-ink 推送完成: ${okCount}/${pushResults.length} 成功`, pushResults };
   }
 }
 

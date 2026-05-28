@@ -226,6 +226,18 @@ export class PostgresDatabase {
       )`,
       `CREATE INDEX IF NOT EXISTS memos_sort_order_idx ON memos(sort_order, created_at)`,
       `CREATE INDEX IF NOT EXISTS memos_status_idx ON memos(status)`,
+      // 推送设备管理表（CRUD，每台设备独立像素尺寸）
+      `CREATE TABLE IF NOT EXISTS push_devices (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        base_url    TEXT NOT NULL,
+        token       TEXT NOT NULL DEFAULT '',
+        width       INTEGER NOT NULL,
+        height      INTEGER NOT NULL,
+        enabled     BOOLEAN NOT NULL DEFAULT true,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
       // Phase 2.5: per-memo target_renderer (device | local-eink | both)
       `ALTER TABLE memos ADD COLUMN IF NOT EXISTS target_renderer TEXT NOT NULL DEFAULT 'both'`,
       `DO $$
@@ -623,6 +635,11 @@ export class PostgresDatabase {
       DROP TRIGGER IF EXISTS update_scheduler_jobs_updated_at ON news_scheduler_jobs;
       CREATE TRIGGER update_scheduler_jobs_updated_at
           BEFORE UPDATE ON news_scheduler_jobs
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+      DROP TRIGGER IF EXISTS update_push_devices_updated_at ON push_devices;
+      CREATE TRIGGER update_push_devices_updated_at
+          BEFORE UPDATE ON push_devices
           FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
       -- 创建清理函数
@@ -2055,6 +2072,56 @@ export class PostgresDatabase {
     } finally {
       client.release();
     }
+  }
+
+  // ==================== Push Devices CRUD ====================
+
+  async getEnabledPushDevices(): Promise<Array<{id:string;name:string;base_url:string;token:string;width:number;height:number}>> {
+    const r = await this.getPool().query(
+      'SELECT id, name, base_url, token, width, height FROM push_devices WHERE enabled = true ORDER BY created_at'
+    );
+    return r.rows;
+  }
+
+  async getAllPushDevices(): Promise<any[]> {
+    const r = await this.getPool().query('SELECT * FROM push_devices ORDER BY created_at');
+    return r.rows;
+  }
+
+  async createPushDevice(d: {id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean}): Promise<any> {
+    const r = await this.getPool().query(
+      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [d.id, d.name, d.base_url, d.token ?? '', d.width, d.height, d.enabled ?? true]
+    );
+    return r.rows[0];
+  }
+
+  async updatePushDevice(id: string, patch: Record<string, any>): Promise<any> {
+    const allowed = ['name','base_url','token','width','height','enabled'];
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let i = 1;
+    for (const k of allowed) {
+      if (patch[k] !== undefined) {
+        sets.push(`${k} = $${i++}`);
+        vals.push(patch[k]);
+      }
+    }
+    if (sets.length === 0) {
+      const cur = await this.getPool().query('SELECT * FROM push_devices WHERE id=$1', [id]);
+      return cur.rows[0];
+    }
+    vals.push(id);
+    const r = await this.getPool().query(
+      `UPDATE push_devices SET ${sets.join(', ')}, updated_at = now() WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    return r.rows[0];
+  }
+
+  async deletePushDevice(id: string): Promise<void> {
+    await this.getPool().query('DELETE FROM push_devices WHERE id = $1', [id]);
   }
 
   /**

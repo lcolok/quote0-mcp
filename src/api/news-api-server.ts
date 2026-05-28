@@ -18,6 +18,7 @@ import type { NewsSchedulerJobConfig } from './news-types.js';
 import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
+import { devicesApp } from './devices-api.js';
 import inventoryApp from './inventory-api.js';
 import labelsApp from './labels-api.js';
 import memosApp from './memos-api.js';
@@ -247,6 +248,9 @@ app.route('/api/ax-training', axTrainingApp);
 
 // LLM Providers API
 app.route('/', llmProvidersApp);
+
+// Devices CRUD API
+app.route('/', devicesApp);
 
 // Inventory API
 app.route('/', inventoryApp);

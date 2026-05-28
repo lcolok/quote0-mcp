@@ -6,6 +6,7 @@
 
 import sharp from 'sharp';
 import { EINK_DEVICE_WIDTH as EINK_WIDTH, EINK_DEVICE_HEIGHT as EINK_HEIGHT } from '../react-widgets/core/device-constants.js';
+import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 
 const EINK_BITMAP_SIZE = (EINK_WIDTH * EINK_HEIGHT) / 8; // 5624
 
@@ -14,6 +15,8 @@ export interface EinkDevice {
   name: string;
   baseUrl: string;
   token: string;
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -21,6 +24,17 @@ export interface EinkDevice {
  * 优先从环境变量 EINK_DEVICES_JSON 读取，fallback 到配置文件
  */
 export async function getEinkDevices(): Promise<EinkDevice[]> {
+  // DB 优先
+  try {
+    const rows = await getPostgresDatabase().getEnabledPushDevices();
+    if (rows.length > 0) {
+      console.log(`📋 从 DB push_devices 读取 E-Ink 设备列表: ${rows.length} 个设备`);
+      return rows.map(r => ({ id: r.id, name: r.name, baseUrl: r.base_url, token: r.token, width: r.width, height: r.height }));
+    }
+  } catch (e) {
+    console.warn('⚠️ 从 DB 读取 push_devices 失败，回退 env/文件:', e);
+  }
+
   // 优先读取环境变量
   const envJson = process.env.EINK_DEVICES_JSON;
   if (envJson && envJson !== '<set-via-lazycat-console>') {
@@ -85,22 +99,25 @@ export async function pushToEinkDevice(
 }
 
 /**
- * 将 PNG buffer 转换为 5624 字节 1-bit packed bitmap
+ * 将 PNG buffer 转换为 1-bit packed bitmap（支持自定义尺寸）
  * @param pngBuffer - 输入 PNG 文件的 buffer
- * @returns 5624 字节的 packed bitmap buffer
+ * @param width - 目标像素宽（默认 EINK_WIDTH）
+ * @param height - 目标像素高（默认 EINK_HEIGHT）
+ * @returns packed bitmap buffer
  */
-export async function pngTo1BitBitmap(pngBuffer: Buffer): Promise<Buffer> {
+export async function pngTo1BitBitmap(pngBuffer: Buffer, width: number = EINK_WIDTH, height: number = EINK_HEIGHT): Promise<Buffer> {
+  const bitmapSize = (width * height) / 8;
   // 1. sharp 加载 PNG → 灰度 → 阈值 128 二值化 → raw 像素
   const raw = await sharp(pngBuffer)
-    .resize(EINK_WIDTH, EINK_HEIGHT, { fit: 'fill' })
+    .resize(width, height, { fit: 'fill' })
     .grayscale()
     .threshold(128)
     .raw()
     .toBuffer();
-  // raw 是 296*152 = 44992 字节，每字节代表一个像素（0 或 255）
+  // raw 每字节代表一个像素（0 或 255）
 
   // 2. Pack 成 1-bit MSB-first, 黑像素 (value=0) → bit=1
-  const packed = Buffer.alloc(EINK_BITMAP_SIZE);
+  const packed = Buffer.alloc(bitmapSize);
   for (let i = 0; i < raw.length; i++) {
     const isBlack = raw[i] < 128;
     if (isBlack) {
