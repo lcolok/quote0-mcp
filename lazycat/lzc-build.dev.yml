@@ -1,0 +1,9 @@
+# 副本部署评测配置 — 与生产 lzc-build.yml 并存
+# 由 lzc-cli project deploy --dev 自动优先读取
+manifest: ./lzc-manifest.yml
+
+package_override:
+  package: me.friday.quote0-mcp.deploy-eval
+
+envs:
+  - DEV_MODE=1
