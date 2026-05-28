@@ -6,6 +6,7 @@
 import { Pool, PoolClient } from 'pg';
 import { createHash } from 'crypto';
 import { NewsData } from '../components/NewsWidget.js';
+import { DECOMMISSIONED_RSS_SOURCES } from './rss-source-policy.js';
 
 export interface CacheKey {
   source: string;
@@ -817,6 +818,20 @@ export class PostgresDatabase {
       { name: 'insert device-content-rotator consumer', sql: `INSERT INTO news_scheduler_jobs (id, name, enabled, data_source, processor, renderer, rss_source, category, interval_ms, job_role, index_strategy)
         SELECT 'device-content-rotator', '设备内容轮播器', true, 'inventory', 'passthrough', 'local-eink', 'inventory', 'inventory', 60000, 'consumer', '{"type":"fair-rotation","poolSize":10,"startIndex":0,"cooldownHours":24,"maxPushCount":5,"rotateAfterEachPush":true,"skipEmptySource":true}'::jsonb
         WHERE NOT EXISTS (SELECT 1 FROM news_scheduler_jobs WHERE id='device-content-rotator')` },
+      // 从所有 job 的 rss_sources 剔除已下线源（幂等，每次启动执行）。
+      // 用 jsonb_array_elements_text 拆开重组，COALESCE 处理全删空 -> []。
+      // 源 id 来自 DECOMMISSIONED_RSS_SOURCES 常量（受控，非用户输入），用单引号拼 IN 列表。
+      ...(DECOMMISSIONED_RSS_SOURCES.length > 0 ? [{
+        name: 'prune decommissioned rss sources from all jobs',
+        sql: `UPDATE news_scheduler_jobs
+              SET rss_sources = COALESCE((
+                SELECT jsonb_agg(s)
+                FROM jsonb_array_elements_text(rss_sources) AS s
+                WHERE s NOT IN (${DECOMMISSIONED_RSS_SOURCES.map(x => `'${x}'`).join(', ')})
+              ), '[]'::jsonb)
+              WHERE rss_sources IS NOT NULL
+                AND rss_sources ?| array[${DECOMMISSIONED_RSS_SOURCES.map(x => `'${x}'`).join(', ')}]`
+      }] : []),
     ];
     const jobResult = await this.runSeedStatements(client, jobRoleSeedStatements);
     console.log(`🔧 Job role seed: ${jobResult.ok} ok, ${jobResult.failed} failed`);

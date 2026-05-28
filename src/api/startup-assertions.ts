@@ -5,6 +5,7 @@
 import { PostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
+import { DECOMMISSIONED_RSS_SOURCES } from '../react-widgets/core/rss-source-policy.js';
 
 export async function runStartupAssertions(postgres: PostgresDatabase): Promise<void> {
   console.log('🩺 启动断言开始...');
@@ -70,6 +71,27 @@ export async function runStartupAssertions(postgres: PostgresDatabase): Promise<
     results.push({ name: 'enabled jobs 字段完整', ok: true });
   } catch (e: any) {
     results.push({ name: 'enabled jobs 字段完整', ok: false, detail: e?.message || String(e) });
+  }
+
+  // 断言 4：没有 enabled job 的 rss_sources 仍引用已下线源
+  try {
+    if (DECOMMISSIONED_RSS_SOURCES.length === 0) {
+      results.push({ name: '无 enabled job 引用已下线 RSS 源', ok: true, detail: '无已登记的下线源' });
+    } else {
+      const result = await postgres.getPool().query(`
+        SELECT id, rss_sources
+        FROM news_scheduler_jobs
+        WHERE enabled = true
+          AND rss_sources IS NOT NULL
+          AND rss_sources ?| array[${DECOMMISSIONED_RSS_SOURCES.map(x => `'${x}'`).join(', ')}]
+      `);
+      if (result.rows.length > 0) {
+        throw new Error(`${result.rows.length} 个 enabled job 仍引用已下线源: ${result.rows.map(r => r.id).join(', ')}`);
+      }
+      results.push({ name: '无 enabled job 引用已下线 RSS 源', ok: true });
+    }
+  } catch (e: any) {
+    results.push({ name: '无 enabled job 引用已下线 RSS 源', ok: false, detail: e?.message || String(e) });
   }
 
   // 打印汇总
