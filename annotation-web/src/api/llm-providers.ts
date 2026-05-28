@@ -14,7 +14,7 @@ export interface LLMProvider {
   slug: string;
   display_name: string;
   base_url: string;
-  api_key: string;
+  api_key?: string;
   api_type: string;
   enabled: boolean;
   created_at: string;

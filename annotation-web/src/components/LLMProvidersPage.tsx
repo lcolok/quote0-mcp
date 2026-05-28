@@ -165,9 +165,11 @@ export default function LLMProvidersPage() {
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
                       {provider.base_url}
+                      {provider.api_key && (
                       <span className="ml-2 text-gray-400">
                         key: ****{provider.api_key.slice(-4)}
                       </span>
+                      )}
                     </div>
                   </div>
                 </div>
