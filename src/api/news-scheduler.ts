@@ -116,6 +116,13 @@ export interface SchedulerSummary {
   consecutiveFailures: number;
   indexStrategy: RequiredSchedulerIndexStrategy;
   enabled: boolean;
+  jobRole?: 'producer' | 'consumer' | 'mixed';
+  renderer?: string;
+  dataSource?: string;
+  rssSource?: string;
+  rssSources?: string[];
+  processor?: string;
+  category?: string;
 }
 
 interface CandidateArticle {
@@ -428,7 +435,14 @@ export class NewsScheduler {
         lastIndex: job.state.lastIndex,
         consecutiveFailures: job.state.consecutiveFailures,
         indexStrategy: job.config.indexStrategy,
-        enabled: true
+        enabled: true,
+        jobRole: job.config.jobRole,
+        renderer: job.config.renderer,
+        dataSource: job.config.dataSource,
+        rssSource: job.config.rssSource,
+        rssSources: job.config.rssSources,
+        processor: job.config.processor,
+        category: job.config.category,
       });
     }
     return summaries;
