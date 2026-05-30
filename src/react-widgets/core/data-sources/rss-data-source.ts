@@ -28,7 +28,9 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
     // 科技资讯
     solidot: {
       name: 'Solidot',
-      url: 'https://www.solidot.org/index.rss',
+      // solidot 官方对机房 IP 封 403（按来源 IP），盒子直抓不到。
+      // 改走 devaiplus(Tailscale)中转服务：经 r.jina.ai 用 jina 的 IP 抓取，输出标准 RSS，不会被封。
+      url: 'http://100.94.204.103:8899/solidot.rss',
       category: 'technology',
       description: '奇客的资讯，重要的东西'
     },
