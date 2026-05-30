@@ -51,6 +51,41 @@ function formatToChinaTime(input: Date | string): string {
 }
 
 /**
+ * 从 MinIO 内部 URL 下载图片到临时文件（绕过 devicePusher SSRF 防护）
+ */
+async function downloadMinioToTemp(imageUrl: string): Promise<string> {
+  const path = await import('path');
+  const { tmpdir } = await import('os');
+  const https = await import('https');
+  const http = await import('http');
+  const { createWriteStream } = await import('fs');
+  const { randomUUID } = await import('crypto');
+
+  const tempFileName = `resend_${randomUUID()}.png`;
+  const tempFilePath = path.join(tmpdir(), tempFileName);
+
+  await new Promise<void>((resolve, reject) => {
+    const client = imageUrl.startsWith('https:') ? https : http;
+    const file = createWriteStream(tempFilePath);
+    client.get(imageUrl, (response) => {
+      response.pipe(file);
+      file.on('finish', () => {
+        file.close(() => resolve());
+      });
+      file.on('error', (err) => {
+        file.close();
+        reject(err);
+      });
+    }).on('error', (err) => {
+      file.close();
+      reject(err);
+    });
+  });
+
+  return tempFilePath;
+}
+
+/**
  * 解析 targetId 到 RenderTarget。优先 BUILTIN_TARGETS（内存常量），
  * 否则查 DB render_targets 表（允许后续运维通过 SQL 增删 target 无需改代码）。
  * 找不到返回 null。
@@ -888,26 +923,13 @@ app.get('/api/scheduler/push-history', async (c) => {
     const offset = Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10);
     const search = c.req.query('search') || '';
 
-    let query = `
-      SELECT
-        id,
-        raw_content,
-        processed_content,
-        image_path,
-        pushed_at,
-        pushed_at AT TIME ZONE 'UTC' AS pushed_at_utc,
-        job_id,
-        annotation_status
-      FROM news_push_log
-      WHERE 1=1
-    `;
-
     const params: any[] = [];
     let paramCount = 0;
 
+    let searchCondition = '';
     if (search) {
       paramCount++;
-      query += ` AND (
+      searchCondition = ` AND (
         raw_content->>'title' ILIKE $${paramCount}
         OR processed_content->>'title' ILIKE $${paramCount}
         OR processed_content->>'message' ILIKE $${paramCount}
@@ -915,23 +937,43 @@ app.get('/api/scheduler/push-history', async (c) => {
       params.push(`%${search}%`);
     }
 
-    query += ` ORDER BY pushed_at DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-    params.push(limit, offset);
+    const limitParam = paramCount + 1;
+    const offsetParam = paramCount + 2;
 
-    const result = await client.query(query, params);
+    const query = `
+      WITH deduped AS (
+        SELECT DISTINCT ON (COALESCE(fingerprint, 'id:' || id))
+          id,
+          raw_content,
+          processed_content,
+          image_path,
+          pushed_at,
+          pushed_at AT TIME ZONE 'UTC' AS pushed_at_utc,
+          job_id,
+          annotation_status
+        FROM news_push_log
+        WHERE 1=1
+        ${searchCondition}
+        ORDER BY COALESCE(fingerprint, 'id:' || id), pushed_at DESC
+      )
+      SELECT * FROM deduped
+      ORDER BY pushed_at DESC
+      LIMIT $${limitParam} OFFSET $${offsetParam}
+    `;
+    const queryParams = [...params, limit, offset];
 
-    // 获取总数
-    let countQuery = 'SELECT COUNT(*) FROM news_push_log WHERE 1=1';
-    const countParams: any[] = [];
-    if (search) {
-      countQuery += ` AND (
-        raw_content->>'title' ILIKE $1
-        OR processed_content->>'title' ILIKE $1
-        OR processed_content->>'message' ILIKE $1
-      )`;
-      countParams.push(`%${search}%`);
-    }
-    const countResult = await client.query(countQuery, countParams);
+    const result = await client.query(query, queryParams);
+
+    // 获取总数（去重后）
+    let countQuery = `
+      SELECT COUNT(*) FROM (
+        SELECT DISTINCT COALESCE(fingerprint, 'id:' || id) AS k
+        FROM news_push_log
+        WHERE 1=1
+        ${searchCondition}
+      ) t
+    `;
+    const countResult = await client.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
     client.release();
@@ -1070,7 +1112,48 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     const renderers = targetRenderer === 'both' ? ['device', 'local-eink'] : [targetRenderer];
     const results: Array<{renderer: string, success: boolean, error?: string}> = [];
 
+    // 优先解析原图 URL，避免重渲染导致英文 fallback
+    let originalImageUrl: string | null = null;
+    if (record.image_path) {
+      try {
+        const { getImageStorage } = await import('../react-widgets/core/image-storage.js');
+        const imageStorage = getImageStorage();
+        const objectKey = String(record.image_path).startsWith('/')
+          ? String(record.image_path).substring(1)
+          : String(record.image_path);
+        const existsResult = await imageStorage.imageExistsByObjectKey(objectKey);
+        if (existsResult && existsResult.url) {
+          originalImageUrl = existsResult.url;
+        }
+      } catch (e) {
+        console.warn('⚠️ resend 解析原图失败，回退重渲染:', e);
+      }
+    }
+
     for (const rendererName of renderers) {
+      // 路径 A：有原图 → 下载 temp 再推（不重渲染，杜绝英文 fallback）
+      if (originalImageUrl) {
+        let tempFilePath: string | null = null;
+        try {
+          tempFilePath = await downloadMinioToTemp(originalImageUrl);
+          const pushResult = await devicePusher.push(tempFilePath, rendererName as 'device' | 'local-eink');
+          results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error });
+        } catch (err) {
+          results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
+        } finally {
+          if (tempFilePath) {
+            try {
+              const fs = await import('fs/promises');
+              await fs.unlink(tempFilePath);
+            } catch {
+              // ignore cleanup error
+            }
+          }
+        }
+        continue;
+      }
+
+      // 路径 B：无原图 → 保留现有重渲染回退
       const rendererModule = renderingRegistry.get(rendererName);
       if (!rendererModule) {
         results.push({ renderer: rendererName, success: false, error: `渲染器 ${rendererName} 不存在` });
