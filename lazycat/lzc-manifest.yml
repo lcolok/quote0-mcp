@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.17.2
+version: 1.17.3
 
 # 应用名称
 name: Quote0 新闻服务
@@ -148,12 +148,11 @@ services:
     mem_limit: 256m
 
   # 标注系统 Web 应用（React SPA + Nginx）
-  # NOTE: DEV_MODE 暂复用 prod latest 镜像 —— 当前源码 TS 跨目录 import 在子目录 build context 下编译失败（known upstream debt）
   annotation-web:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-annotation-web:latest
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-annotation-web:latest
+    image: dev.logic.heiyu.space/friday/quote0-annotation-web:v1.17.3
 #@build end
     depends_on:
       - news-api
@@ -170,7 +169,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-label-web:v1.17.0-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.17.2
+    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.17.3
 #@build end
     depends_on:
       - news-api
@@ -187,7 +186,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.0-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.2
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.3
 #@build end
     environment:
       NODE_ENV: production
