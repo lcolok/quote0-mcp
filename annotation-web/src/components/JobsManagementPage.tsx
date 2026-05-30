@@ -16,7 +16,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { NewsSchedulerJobRecord } from '../../../src/api/news-types';
+import type { SchedulerJob } from '../types/scheduler';
 
 interface JobFormData {
   id: string;
@@ -62,7 +62,7 @@ const DEFAULT_FORM: JobFormData = {
   ),
 };
 
-function jobToForm(job: NewsSchedulerJobRecord): JobFormData {
+function jobToForm(job: SchedulerJob): JobFormData {
   return {
     id: job.id,
     name: job.name || '',
@@ -162,7 +162,7 @@ function JobsManagementPage() {
     refetchInterval: 10000,
   });
 
-  const jobs: NewsSchedulerJobRecord[] = jobsResponse || [];
+  const jobs: SchedulerJob[] = jobsResponse || [];
 
   const stats = useMemo(() => {
     const total = jobs.length;
@@ -247,7 +247,7 @@ function JobsManagementPage() {
     setModalMode('create');
   };
 
-  const handleOpenEdit = (job: NewsSchedulerJobRecord) => {
+  const handleOpenEdit = (job: SchedulerJob) => {
     const f = jobToForm(job);
     setForm(f);
     setOriginalForm(f);
