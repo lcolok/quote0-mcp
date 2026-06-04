@@ -162,6 +162,10 @@ interface CandidateSelectionOutcome {
 const DEFAULT_FETCH_MULTIPLIER = 3;
 const DEFAULT_MIN_FETCH_COUNT = 8;
 
+// 复播时间窗：consumer 只循环复播 created_at 落在此窗口内的库存（单位：小时）。
+// env INVENTORY_REPLAY_WINDOW_HOURS 可覆盖，默认 24h。
+const REPLAY_WINDOW_HOURS = Number(process.env.INVENTORY_REPLAY_WINDOW_HOURS) || 24;
+
 export class NewsScheduler {
   private jobs: Map<string, SchedulerJobInstance> = new Map();
   private started = false;
@@ -1848,23 +1852,24 @@ export class NewsScheduler {
         metadata: { jobRole: 'consumer' }
       });
 
-      // 1. Prefer ready items (FIFO)
+      // 1. Prefer ready items (FIFO)，限制在复播时间窗内
       let item = await this.postgres.query(`
         SELECT * FROM content_inventory
         WHERE state='ready'
+          AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
         ORDER BY created_at ASC
         LIMIT 1
-      `);
+      `, [REPLAY_WINDOW_HOURS]);
 
-      // 2. Fallback to pushed items (LRU 无限循环复播：ready 耗尽时循环播放历史库存，保证墨水屏持续更新)
+      // 2. Fallback to pushed items (LRU 循环复播：仅复播 created_at 在 REPLAY_WINDOW_HOURS 时间窗内的历史库存)
       if (item.rows.length === 0) {
         item = await this.postgres.query(`
           SELECT * FROM content_inventory
           WHERE state='pushed'
-            AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
           ORDER BY last_pushed_at ASC NULLS FIRST
           LIMIT 1
-        `);
+        `, [REPLAY_WINDOW_HOURS]);
       }
 
       // 3. Empty inventory → skip gracefully
@@ -2037,20 +2042,18 @@ export class NewsScheduler {
    */
   private async enforceInventoryCap(): Promise<void> {
     try {
+      // 时间窗老化：created_at 超出 REPLAY_WINDOW_HOURS 的 ready/pushed 退役为 expired，
+      // 与 consumer 复播查询的时间窗保持一致，不再按条数卡上限。
       const result = await this.postgres.query(`
         UPDATE content_inventory SET state='expired'
-        WHERE id IN (
-          SELECT id FROM content_inventory
-          WHERE state IN ('ready', 'pushed')
-          ORDER BY created_at ASC
-          OFFSET 100
-        )
-      `);
+        WHERE state IN ('ready', 'pushed')
+          AND created_at <= CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
+      `, [REPLAY_WINDOW_HOURS]);
       if (result.rowCount && result.rowCount > 0) {
-        console.log(`🧹 Inventory cap enforced: ${result.rowCount} old items marked expired`);
+        console.log(`🧹 Inventory aged out: ${result.rowCount} items older than ${REPLAY_WINDOW_HOURS}h marked expired`);
       }
     } catch (error) {
-      console.warn('⚠️ Inventory cap enforcement failed:', error);
+      console.warn('⚠️ Inventory aging failed:', error);
     }
   }
 }
