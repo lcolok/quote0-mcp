@@ -1856,11 +1856,11 @@ export class NewsScheduler {
         LIMIT 1
       `);
 
-      // 2. Fallback to pushed items with replay budget (LRU)
+      // 2. Fallback to pushed items (LRU 无限循环复播：ready 耗尽时循环播放历史库存，保证墨水屏持续更新)
       if (item.rows.length === 0) {
         item = await this.postgres.query(`
           SELECT * FROM content_inventory
-          WHERE state='pushed' AND replay_count < max_replays
+          WHERE state='pushed'
             AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
           ORDER BY last_pushed_at ASC NULLS FIRST
           LIMIT 1
