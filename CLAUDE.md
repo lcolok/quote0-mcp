@@ -220,8 +220,10 @@ curl -s http://localhost:3001/api/health/modules
 # ❌ 错误做法 - 手动启动容器
 lcctl remote docker run -d --name mefridayquote0-mcp-news-api-1 ...
 
-# ✅ 正确做法 - 通过懒猫正式部署
-lcctl project release --version 1.0.4 --install
+# ❌ 也别用 lcctl project release —— 本项目 manifest 在子目录 lazycat/，
+#    它认不到、会到处探路烧光步数报「假失败」（详见下方「正确的部署流程」）
+
+# ✅ 正确做法 - 本地构建 amd64 + lzc-cli 子目录部署（4 步，见下）
 ```
 
 ### 为什么必须通过懒猫部署？
@@ -234,25 +236,37 @@ lcctl project release --version 1.0.4 --install
 | 配置管理 | ❌ 手动传入 | ✅ lzc-manifest.yml |
 | 状态显示 | ❌ 显示"状态错误" | ✅ 正常显示 |
 
-### 正确的部署流程
+### 正确的部署流程（4 步，本项目 manifest 在子目录 `lazycat/`）
+
+> ⚠️ **别用 `lcctl project release`**：它默认在仓库根目录找 manifest，本项目 manifest 在 `lazycat/lzc-manifest.yml`，它找不到会到处探路、烧光步数报「假失败」（实际可能已部署成功，得 tail 输出找 `Deployed version`/`Running`/`healthy`）。
+> ⚠️ **必须本地构建**：远程 BuildKit 的 `bun install` 会卡死（见 memory `feedback_bun_macos_lan_socket_bug`），用本地 OrbStack/Docker 构建 amd64。
 
 ```bash
-# 1. 构建镜像（本地或远程）
-docker build --platform linux/amd64 -t dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.4 .
+# 1. 改 manifest 版本号（version + 正式 image tag 两处，dev tag 不动）
+#    lazycat/lzc-manifest.yml
 
-# 2. 推送镜像到 LC03 registry
-docker push dev.logic.heiyu.space/friday/quote0-mcp-api:v1.0.4
+# 2. 本地构建 amd64 镜像并 push 到 registry
+docker build --platform linux/amd64 -t dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.8 -f Dockerfile.api .
+docker push dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.8
 
-# 3. 更新 lzc-manifest.yml 中的镜像版本
-# 4. 通过懒猫正式部署
-lcctl project release --version 1.0.4 --install
+# 3. 进子目录构建 lpk（关键：cd 进 manifest 所在目录）
+cd lazycat && lzc-cli project build
+
+# 4. 安装生成的 lpk
+lzc-cli lpk install me.friday.quote0-mcp-v1.17.8.lpk
 ```
 
+实操多由本地 kimi agent `lazycat-deployer` 一站式执行（`kwt agent use lazycat-deployer --yolo -c "$(cat /tmp/x.md)"`），它自带这套 know-how。
+
 ### 教训记录
-- **日期**: 2026-05-12
-- **问题**: 手动启动容器导致懒猫显示"状态错误"
-- **原因**: 懒猫的服务发现机制不认识手动启动的容器
-- **解决**: 通过 `lcctl project release` 正式部署
+- **2026-05-12 — 禁止手动 docker run**
+  - 问题：手动启动容器导致懒猫显示"状态错误"
+  - 原因：懒猫的服务发现机制不认识手动启动的容器
+  - 解决：必须通过懒猫正式部署（上方 4 步流程）
+- **2026-06-04 — `lcctl project release` 不认子目录 manifest（假失败）**
+  - 问题：用 `lcctl project release` 部署，撞 100 步上限报 `exit 1`/`failed`
+  - 原因：本项目 manifest 在 `lazycat/` 子目录，`lcctl project release` 在根目录找不到，反复探路烧光步数；这是「假失败」，部署可能已成功
+  - 解决：改用上方 4 步流程（`cd lazycat && lzc-cli project build` → `lzc-cli lpk install`）；收到 failed 先 tail 输出找成功信号
 
 ## 开发规范
 
