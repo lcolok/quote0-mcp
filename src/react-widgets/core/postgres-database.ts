@@ -779,6 +779,41 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
       CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
 
+      -- 标签批量管理（Label Batch）
+      CREATE TABLE IF NOT EXISTS label_batches (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        name            text NOT NULL,
+        generator       text NOT NULL DEFAULT 'image'
+                        CHECK (generator IN ('image','widget','svg')),
+        model           text,
+        preset_id       uuid REFERENCES image_presets(id) ON DELETE SET NULL,
+        target_id       text NOT NULL DEFAULT 'label-T40x20-320',
+        prompt_template text NOT NULL,
+        template_rev    int  NOT NULL DEFAULT 1,
+        status          text NOT NULL DEFAULT 'draft'
+                        CHECK (status IN ('draft','running','review','done','archived')),
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        updated_at      timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS label_batch_items (
+        id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        batch_id       uuid NOT NULL REFERENCES label_batches(id) ON DELETE CASCADE,
+        idx            int  NOT NULL,
+        name           text NOT NULL,
+        vars           jsonb,
+        ref_image_urls jsonb,
+        job_id         uuid,
+        label_id       uuid REFERENCES labels(id) ON DELETE SET NULL,
+        review         text NOT NULL DEFAULT 'pending'
+                       CHECK (review IN ('pending','approved','rejected')),
+        created_at     timestamptz NOT NULL DEFAULT now(),
+        updated_at     timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (batch_id, idx)
+      );
+
+      CREATE INDEX IF NOT EXISTS label_batch_items_batch_idx ON label_batch_items(batch_id);
+
     `;
   }
 

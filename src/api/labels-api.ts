@@ -12,6 +12,7 @@ import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
+import { enqueueLabelJob } from '../react-widgets/core/label-job-queue.js';
 
 const labelsApp = new Hono();
 const imageStorage = getImageStorage();
@@ -161,46 +162,28 @@ labelsApp.post('/generate-image', async (c) => {
       return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
     }
 
-    const db = getPostgresDatabase();
-
-    // idempotency: 如果 clientRequestId 已存在，直接返回已有 job
-    if (body.clientRequestId) {
-      const dup = await db.getPool().query(
-        `SELECT id, state, created_at FROM label_jobs WHERE client_request_id = $1`,
-        [body.clientRequestId]
-      );
-      if (dup.rows.length > 0) {
-        const row = dup.rows[0];
-        return c.json({ success: true, jobId: row.id, state: row.state, createdAt: row.created_at }, 200);
-      }
-    }
-
-    const insertRes = await db.getPool().query<{ id: string; state: string; created_at: Date }>(
-      `INSERT INTO label_jobs (job_type, payload, client_request_id)
-       VALUES ('image', $1::jsonb, $2)
-       RETURNING id, state, created_at`,
-      [
-        JSON.stringify({
-          prompt: body.prompt,
-          model: body.model,
-          modelOptions: body.modelOptions,
-          targetId: body.targetId,
-          tags: body.tags,
-          presetId: body.presetId ?? undefined,         // ← 新
-          refImageUrls: body.refImageUrls ?? [],        // ← 新
-        }),
-        body.clientRequestId ?? null,
-      ]
-    );
+    const result = await enqueueLabelJob({
+      jobType: 'image',
+      clientRequestId: body.clientRequestId ?? null,
+      payload: {
+        prompt: body.prompt,
+        model: body.model,
+        modelOptions: body.modelOptions,
+        targetId: body.targetId,
+        tags: body.tags,
+        presetId: body.presetId ?? undefined,
+        refImageUrls: body.refImageUrls ?? [],
+      },
+    });
 
     return c.json(
       {
         success: true,
-        jobId: insertRes.rows[0].id,
-        state: insertRes.rows[0].state,
-        createdAt: insertRes.rows[0].created_at,
+        jobId: result.jobId,
+        state: result.state,
+        createdAt: result.createdAt,
       },
-      201
+      result.deduped ? 200 : 201
     );
   } catch (error) {
     console.error('❌ POST /api/labels/generate-image 失败:', error);
@@ -373,45 +356,27 @@ labelsApp.post('/generate-text', async (c) => {
       return c.json({ success: false, stage: 'validate', error: `未知字体: ${body.preferredFont}` }, 400);
     }
 
-    const db = getPostgresDatabase();
-
-    // idempotency: 如果 clientRequestId 已存在，直接返回已有 job
-    if (body.clientRequestId) {
-      const dup = await db.getPool().query(
-        `SELECT id, state, created_at FROM label_jobs WHERE client_request_id = $1`,
-        [body.clientRequestId]
-      );
-      if (dup.rows.length > 0) {
-        const row = dup.rows[0];
-        return c.json({ success: true, jobId: row.id, state: row.state, createdAt: row.created_at }, 200);
-      }
-    }
-
-    const insertRes = await db.getPool().query<{ id: string; state: string; created_at: Date }>(
-      `INSERT INTO label_jobs (job_type, payload, client_request_id)
-       VALUES ('widget', $1::jsonb, $2)
-       RETURNING id, state, created_at`,
-      [
-        JSON.stringify({
-          prompt: body.prompt,
-          preferredWidget: body.preferredWidget,
-          preferredFont: body.preferredFont,
-          forceDecoration: body.forceDecoration,
-          targetId: body.targetId,
-          tags: body.tags,
-        }),
-        body.clientRequestId ?? null,
-      ]
-    );
+    const result = await enqueueLabelJob({
+      jobType: 'widget',
+      clientRequestId: body.clientRequestId ?? null,
+      payload: {
+        prompt: body.prompt,
+        preferredWidget: body.preferredWidget,
+        preferredFont: body.preferredFont,
+        forceDecoration: body.forceDecoration,
+        targetId: body.targetId,
+        tags: body.tags,
+      },
+    });
 
     return c.json(
       {
         success: true,
-        jobId: insertRes.rows[0].id,
-        state: insertRes.rows[0].state,
-        createdAt: insertRes.rows[0].created_at,
+        jobId: result.jobId,
+        state: result.state,
+        createdAt: result.createdAt,
       },
-      201
+      result.deduped ? 200 : 201
     );
   } catch (error) {
     console.error('❌ POST /api/labels/generate-text 失败:', error);

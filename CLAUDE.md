@@ -223,7 +223,7 @@ lcctl remote docker run -d --name mefridayquote0-mcp-news-api-1 ...
 # ❌ 也别用 lcctl project release —— 本项目 manifest 在子目录 lazycat/，
 #    它认不到、会到处探路烧光步数报「假失败」（详见下方「正确的部署流程」）
 
-# ✅ 正确做法 - 本地构建 amd64 + lzc-cli 子目录部署（4 步，见下）
+# ✅ 正确做法 - 零本地 docker：lcctl 盒子端构建 + lzc-cli 打包装（见下）
 ```
 
 ### 为什么必须通过懒猫部署？
@@ -236,27 +236,40 @@ lcctl remote docker run -d --name mefridayquote0-mcp-news-api-1 ...
 | 配置管理 | ❌ 手动传入 | ✅ lzc-manifest.yml |
 | 状态显示 | ❌ 显示"状态错误" | ✅ 正常显示 |
 
-### 正确的部署流程（4 步，本项目 manifest 在子目录 `lazycat/`）
+### 正确的部署流程：零本地 docker，lcctl 盒子端构建（2026-06-11 实测跑通 v1.17.9）
 
-> ⚠️ **别用 `lcctl project release`**：它默认在仓库根目录找 manifest，本项目 manifest 在 `lazycat/lzc-manifest.yml`，它找不到会到处探路、烧光步数报「假失败」（实际可能已部署成功，得 tail 输出找 `Deployed version`/`Running`/`healthy`）。
-> ⚠️ **必须本地构建**：远程 BuildKit 的 `bun install` 会卡死（见 memory `feedback_bun_macos_lan_socket_bug`），用本地 OrbStack/Docker 构建 amd64。
+> 🚫 **永远不要本地 `docker build`/`docker push`**。Mac 上 `docker build --platform linux/amd64` + push 会撞两个坑，都是「本地构建」错路的副产物：
+> 1. **keychain 锁**：非交互会话（Claude/agent 的 Bash）下 docker 凭据助手读不到钥匙串 → push 必失败，**解锁也没用**。
+> 2. **bun SIGILL**：Apple Silicon 上 QEMU 模拟 x86 跑 `bun run build`/`vite build` 报 `CPU lacks AVX` + 段错误，`--network=host` 救不了。
+>
+> 盒子本身是原生 amd64（无 QEMU、无本地 keychain），盒子端构建+推这两个坑根本不出现。「远程 bun install 卡死」是**已被推翻的旧结论**——只对本地朴素 docker build 默认 bridge 网络成立，对 lcctl `remote-build` 的 buildkit 路径**不成立**（盒子上 bun install 正常）。详见 memory `feedback_lazycat_deploy_no_local_docker` / `feedback_bun_macos_lan_socket_bug`。
+
+> ⚠️ **lcctl 114 的一键 `project deploy`/`release` 对本项目的 lazycat-subdir 布局都坏**（manifest 字段推断逐个崩 package-id→version→target-image-repo、多服务自动发现认不出 `#@build` 条件块的 3 个服务）。只有 `plan-release` 的分析是对的；执行得走**单服务 `remote-build` + lzc-cli 打包装**。每条命令带 `TMPDIR=/tmp`（macOS 长 $TMPDIR 撑爆 lzc-cli SSH ControlPath 104 字节）。
 
 ```bash
-# 1. 改 manifest 版本号（version + 正式 image tag 两处，dev tag 不动）
-#    lazycat/lzc-manifest.yml
+# 0. 先问正门拿命令蓝本（只分析、零副作用）
+TMPDIR=/tmp lcctl project plan-release --path . --host root@logic.heiyu.space
 
-# 2. 本地构建 amd64 镜像并 push 到 registry
-docker build --platform linux/amd64 -t dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.8 -f Dockerfile.api .
-docker push dev.logic.heiyu.space/friday/quote0-mcp-api:v1.17.8
+# 1. bump 版本（必须在 lazycat/ 里跑才认得 manifest）；只 bump version + 停在旧版本号的镜像(news-api)
+cd lazycat && TMPDIR=/tmp lcctl project bump --version <X.Y.Z>
+#    ⚠️ 改了 label-web/annotation-web 的话，手动把它们的正式 image tag 也补成 <X.Y.Z>
+#       bump 只动停在旧版本号的镜像；同 tag 不变 → pkgm 不 recreate 容器 → 新代码不上线（trap #8）
 
-# 3. 进子目录构建 lpk（关键：cd 进 manifest 所在目录）
-cd lazycat && lzc-cli project build
+# 2. 盒子端单服务构建+推（每个改过的镜像一条，从仓库根跑，--no-cache 必带防 trap #10 缓存全 hit）
+TMPDIR=/tmp lcctl project remote-build --ssh root@logic.heiyu.space --no-cache \
+  -dockerfile Dockerfile.api -tag dev.logic.heiyu.space/friday/quote0-mcp-api:<X.Y.Z> -context .
+TMPDIR=/tmp lcctl project remote-build --ssh root@logic.heiyu.space --no-cache \
+  -dockerfile Dockerfile.lazycat -tag dev.logic.heiyu.space/friday/quote0-label-web:<X.Y.Z> -context label-web
+#    push 看到新内容层是 `Pushed`（而非全 `Layer already exists`）才算新代码进了镜像
 
-# 4. 安装生成的 lpk
-lzc-cli lpk install me.friday.quote0-mcp-v1.17.8.lpk
+# 3. 打包 lpk + 安装（lcctl release 的 manifest 推断对 subdir 布局会崩，改用底层 lzc-cli）
+cd lazycat && TMPDIR=/tmp lzc-cli project build                       # 出 me.friday.quote0-mcp-v<X.Y.Z>.lpk
+TMPDIR=/tmp lzc-cli lpk install me.friday.quote0-mcp-v<X.Y.Z>.lpk
+
+# 4. 验证新代码真上线（防 trap #10）——app 容器跑在 lzc-docker，容器名 mefridayquote0-mcp-<svc>-1
+ssh root@logic.heiyu.space "docker -H unix:///lzcsys/run/lzc-docker/docker.sock \
+  exec mefridayquote0-mcp-news-api-1 curl -s localhost:3001/api/<新端点>"
 ```
-
-实操多由本地 kimi agent `lazycat-deployer` 一站式执行（`kwt agent use lazycat-deployer --yolo -c "$(cat /tmp/x.md)"`），它自带这套 know-how。
 
 ### 教训记录
 - **2026-05-12 — 禁止手动 docker run**
@@ -266,7 +279,11 @@ lzc-cli lpk install me.friday.quote0-mcp-v1.17.8.lpk
 - **2026-06-04 — `lcctl project release` 不认子目录 manifest（假失败）**
   - 问题：用 `lcctl project release` 部署，撞 100 步上限报 `exit 1`/`failed`
   - 原因：本项目 manifest 在 `lazycat/` 子目录，`lcctl project release` 在根目录找不到，反复探路烧光步数；这是「假失败」，部署可能已成功
-  - 解决：改用上方 4 步流程（`cd lazycat && lzc-cli project build` → `lzc-cli lpk install`）；收到 failed 先 tail 输出找成功信号
+  - 解决：改用上方流程；收到 failed 先 tail 输出找成功信号
+- **2026-06-11 — 「必须本地构建」是错的，已纠正为零本地 docker（部署 v1.17.9）**
+  - 问题：照旧文档「本地构建 amd64」走，撞 ① `docker push` keychain 锁（非交互会话读不到钥匙串，解锁无效）② Apple Silicon QEMU 跨架构 build bun 报 `CPU lacks AVX` + SIGILL 段错误
+  - 原因：这两个坑全是「本地构建」错路的副产物；盒子原生 amd64 构建根本不出现。「远程 bun install 卡死」是被推翻的旧结论，只对本地朴素 docker build 成立
+  - 解决：弃本地 docker，走上方 lcctl 盒子端**单服务 `remote-build`**（盒子构建+推）+ `lzc-cli project build`/`lpk install`。注意 lcctl 114 的一键 `deploy`/`release` 对 subdir 布局都坏，只 `plan-release` 分析可信
 
 ## 开发规范
 
