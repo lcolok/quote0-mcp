@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type DragEvent, type DragEventHandler } from 'react';
 import { toast } from 'sonner';
 import { labelsApi } from '@/api/labels';
 
@@ -78,6 +78,14 @@ export interface UseRefImageUpload {
   handleInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handlePaste: (e: React.ClipboardEvent) => void;
   remove: (idx: number) => void;
+  /** 拖拽上传：把整组事件 spread 到任意容器，配合 isDragging 做高亮 */
+  isDragging: boolean;
+  dragProps: {
+    onDragEnter: DragEventHandler;
+    onDragOver: DragEventHandler;
+    onDragLeave: DragEventHandler;
+    onDrop: DragEventHandler;
+  };
 }
 
 export function useRefImageUpload(opts: {
@@ -172,6 +180,36 @@ export function useRefImageUpload(opts: {
 
   const canAddMore = urls.length < maxImages && !disabled;
 
+  const [isDragging, setIsDragging] = useState(false);
+
+  const dragProps = {
+    onDragEnter: (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (disabled || !canAddMore) return;
+      // 仅在真的拖文件进来时高亮（拖文本/元素不触发）
+      if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) setIsDragging(true);
+    },
+    onDragOver: (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    onDragLeave: (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // 只在离开整个容器时关闭高亮（避免子元素 dragleave 闪烁）
+      if (e.currentTarget === e.target) setIsDragging(false);
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      if (disabled) return;
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length) void processFiles(files);
+    },
+  };
+
   return {
     isUploading,
     canAddMore,
@@ -182,5 +220,7 @@ export function useRefImageUpload(opts: {
     handleInputChange,
     handlePaste,
     remove,
+    isDragging,
+    dragProps,
   };
 }

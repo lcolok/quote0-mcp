@@ -22,6 +22,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 import { useRefImageUpload } from '@/hooks/useRefImageUpload';
+import { cn } from '@/lib/utils';
 import { sessionsApi } from '@/api/sessions';
 import { labelsApi } from '@/api/labels';
 import { deviceKindsForTarget } from '@/types/device';
@@ -986,7 +987,18 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       </Button>
                     </div>
                   )}
-                  <div className="rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
+                  <div
+                    {...up.dragProps}
+                    className={cn(
+                      'relative rounded-lg border bg-background transition focus-within:ring-1 focus-within:ring-ring',
+                      up.isDragging && 'border-primary ring-2 ring-primary bg-primary/5',
+                    )}
+                  >
+                    {up.isDragging && (
+                      <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-primary/10 text-sm font-medium text-primary">
+                        松开以添加参考图
+                      </div>
+                    )}
                     {refUrls.length > 0 && (
                       <div className="flex flex-wrap gap-2 p-2 pb-0">
                         {refUrls.map((url, idx) => (
@@ -1014,12 +1026,12 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       </div>
                     )}
                     <Textarea
-                      rows={3}
-                      placeholder="说说要怎么改,例如:字再大一点、整体更可爱、去掉边框…(支持 Ctrl+V 粘贴参考图)"
+                      rows={2}
+                      placeholder="说说要怎么改,例如:字再大一点、整体更可爱、去掉边框…(支持拖入 / Ctrl+V 粘贴参考图)"
                       value={feedback}
                       onChange={(e) => setFeedback(e.target.value)}
                       onPaste={up.handlePaste}
-                      className="border-0 focus-visible:ring-0 resize-none shadow-none"
+                      className="min-h-[56px] border-0 bg-transparent focus-visible:ring-0 resize-none shadow-none"
                     />
                     <div className="flex items-center justify-between gap-2 p-2 pt-0">
                       <div className="flex items-center gap-2">
