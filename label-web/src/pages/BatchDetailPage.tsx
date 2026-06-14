@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { batchesApi } from '@/api/batches';
 import { labelsApi } from '@/api/labels';
 import SessionEditorDialog from '@/components/SessionEditorDialog';
+import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 
 export default function BatchDetailPage() {
   const { id = '' } = useParams();
@@ -16,6 +17,7 @@ export default function BatchDetailPage() {
   const qc = useQueryClient();
   const [template, setTemplate] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [printOpen, setPrintOpen] = useState(false);
   // 预览编辑器:?item=<itemId> 打开(可刷新/分享)
   const [searchParams, setSearchParams] = useSearchParams();
   const editorItemId = searchParams.get('item');
@@ -75,8 +77,8 @@ export default function BatchDetailPage() {
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '重新生成失败'),
   });
   const printMut = useMutation({
-    mutationFn: () =>
-      batchesApi.print(id, selected.size ? { scope: { itemIds: [...selected] } } : { scope: 'approved' }),
+    mutationFn: (deviceId: string) =>
+      batchesApi.print(id, selected.size ? { scope: { itemIds: [...selected] }, deviceId } : { scope: 'approved', deviceId }),
     onSuccess: (r) => {
       const failed = (r.results ?? []).filter((x) => !x.ok);
       if (failed.length) {
@@ -90,6 +92,7 @@ export default function BatchDetailPage() {
         toast.success(`已打印 ${r.printed} 个`);
       }
       invalidate();
+      setPrintOpen(false);
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '打印失败'),
   });
@@ -249,7 +252,7 @@ export default function BatchDetailPage() {
         <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
           清空
         </Button>
-        <Button size="sm" className="ml-auto" onClick={() => printMut.mutate()} disabled={printMut.isPending}>
+        <Button size="sm" className="ml-auto" onClick={() => setPrintOpen(true)} disabled={printMut.isPending}>
           <Printer className="h-4 w-4 mr-1" />
           {selected.size ? `打印选中(${selected.size})` : '打印已批准'}
         </Button>
@@ -260,6 +263,16 @@ export default function BatchDetailPage() {
         itemId={editorItemId}
         onClose={() => setEditorItem(null)}
         onNavigate={(itemId) => setEditorItem(itemId)}
+      />
+
+      <PrintDeviceDialog
+        open={printOpen}
+        onOpenChange={setPrintOpen}
+        targetId={data.batch.targetId}
+        pending={printMut.isPending}
+        onConfirm={(deviceId) => printMut.mutate(deviceId)}
+        title="打印标签"
+        description="选择一台热敏打印机打印选中/已批准的标签。"
       />
     </div>
   );

@@ -1,6 +1,6 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { Toaster } from 'sonner';
-import { PenLine, History, StickyNote, Layers } from 'lucide-react';
+import { PenLine, History, StickyNote, Layers, HardDrive } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import DesignPage from '@/pages/DesignPage';
 import HistoryPage from '@/pages/HistoryPage';
@@ -9,6 +9,7 @@ import MemoPage from '@/pages/MemoPage';
 import BatchListPage from '@/pages/BatchListPage';
 import BatchCreatePage from '@/pages/BatchCreatePage';
 import BatchDetailPage from '@/pages/BatchDetailPage';
+import DevicesPage from '@/pages/DevicesPage';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useTheme } from '@/components/theme-provider';
 
@@ -46,6 +47,7 @@ function App() {
           <NavLink to="/history" icon={<History className="h-4 w-4" />} label="历史" />
           <NavLink to="/batches" icon={<Layers className="h-4 w-4" />} label="批量" />
           <NavLink to="/memos" icon={<StickyNote className="h-4 w-4" />} label="备忘" />
+          <NavLink to="/devices" icon={<HardDrive className="h-4 w-4" />} label="设备" />
         </div>
       </header>
       <main className="pt-2">
@@ -57,6 +59,7 @@ function App() {
           <Route path="/batches/new" element={<BatchCreatePage />} />
           <Route path="/batches/:id" element={<BatchDetailPage />} />
           <Route path="/memos" element={<MemoPage />} />
+          <Route path="/devices" element={<DevicesPage />} />
         </Routes>
       </main>
     </>

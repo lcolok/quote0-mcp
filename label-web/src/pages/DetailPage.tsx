@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, Printer, RefreshCw, Archive, ImageIcon } from 'lucide-react';
 import SavePresetDialog from '@/components/SavePresetDialog';
 import DitherSelectorGrid from '@/components/DitherSelectorGrid';
+import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -40,6 +42,7 @@ export default function DetailPage() {
   })();
 
   const backLabel = from === 'design' ? '设计' : '历史';
+  const [printOpen, setPrintOpen] = useState(false);
 
   const { data: label, isLoading, refetch } = useQuery({
     queryKey: ['label', id],
@@ -52,6 +55,7 @@ export default function DetailPage() {
       labelsApi.print(lid, req),
     onSuccess: () => {
       toast.success('打印任务已发送');
+      setPrintOpen(false);
       refetch();
     },
     onError: () => {
@@ -103,10 +107,7 @@ export default function DetailPage() {
     },
   });
 
-  const handlePrint = () => {
-    if (!label) return;
-    printMutation.mutate({ lid: label.id });
-  };
+
 
   const handleRegenerate = () => {
     if (!label) return;
@@ -319,24 +320,10 @@ export default function DetailPage() {
         )}
 
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="outline" disabled={printMutation.isPending}>
-                <Printer className="h-4 w-4 mr-2" />
-                {printMutation.isPending ? '打印中...' : '重新打印'}
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>确认重新打印？</AlertDialogTitle>
-                <AlertDialogDescription>将向 niimbot 热敏标签机重新推送本标签。</AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={handlePrint}>打印</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <Button variant="outline" onClick={() => setPrintOpen(true)} disabled={printMutation.isPending}>
+            <Printer className="h-4 w-4 mr-2" />
+            {printMutation.isPending ? '打印中...' : '重新打印'}
+          </Button>
 
           <Button
             variant="outline"
@@ -387,6 +374,18 @@ export default function DetailPage() {
           </AlertDialog>
         </div>
       </Card>
+
+      {label && (
+        <PrintDeviceDialog
+          open={printOpen}
+          onOpenChange={setPrintOpen}
+          targetId={label.targetId}
+          pending={printMutation.isPending}
+          onConfirm={(deviceId) => printMutation.mutate({ lid: label.id, req: { deviceId } })}
+          title="重新打印"
+          description="选择一台热敏打印机重新打印本标签。"
+        />
+      )}
     </div>
   );
 }

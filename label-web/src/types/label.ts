@@ -108,6 +108,7 @@ export interface FontMeta {
 
 export interface PrintRequest {
   niimbotEndpoint?: string;
+  deviceId?: string;
 }
 
 export interface LlmModelMeta {

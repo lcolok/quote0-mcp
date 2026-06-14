@@ -41,7 +41,7 @@ export const batchesApi = {
       .post<{ success: boolean }>(`/label-batches/${id}/items/${itemId}/review`, { review })
       .then((r) => r.data),
 
-  print: (id: string, body: { scope: any; niimbotEndpoint?: string }) =>
+  print: (id: string, body: { scope: any; niimbotEndpoint?: string; deviceId?: string }) =>
     client
       .post<{
         success: boolean;
