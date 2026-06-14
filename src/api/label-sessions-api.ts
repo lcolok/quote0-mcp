@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import sharp from 'sharp';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import {
   createTurn,
@@ -573,7 +574,7 @@ A) "clarify" — ONLY when the request is genuinely AMBIGUOUS and you cannot con
 B) "paths" — when the request is clear enough to act. Propose a FLEXIBLE number of DISTINCT regeneration paths: give just 1 if the best action is obvious; give more ONLY when there are genuinely different worthwhile approaches. Do NOT pad to a fixed number, do NOT invent redundant variants. Each path:
   - baseVersion: which version number to fork from, OR 0 for a FRESH START (brand-new root, inherits NO existing pixels/prompt).
   - mode: "img2img" (preserve composition; needs a base image) or "rewrite" (regenerate from a fresh prompt).
-  - useRefIndices: MINIMAL refs for THIS path (img2img on an existing base → include that base's own image; fresh → ONLY user-provided images source=upload/input, never an AI product).
+  - useRefIndices: ADDITIONAL refs YOU choose for THIS path, kept MINIMAL (img2img on an existing base → include that base's own image; fresh → ONLY user-provided images source=upload/input, never an AI product). IMPORTANT — two distinct image roles: (1) EVERY image shown to you above is CONTEXT for understanding the evolution, NOT necessarily a generation ref. (2) Generation refs = images actually fed to the image model. Any candidate labeled "你本轮选的参考图" (source=upload) is a HARD ref the USER explicitly requires; it is ALWAYS sent regardless of your indices — do not bother listing it. When the user staged NO such pick, it is up to YOU to choose the right generation ref(s) via useRefIndices.
   - prompt: rewrite → full English prompt (<200 words, pure black&white, bold solid shapes, no gradients/grayscale); img2img → concise English change instruction.
   Strategy values you MAY use as appropriate (none mandatory): "incremental" (refine the focused version), "clean-restart" (fork an earlier cleaner version to dodge GIGO), "fresh" (baseVersion 0). Use ONLY the ones that genuinely apply to this request. Mark the single best path recommended:true.
 
@@ -590,10 +591,12 @@ Output ONLY a JSON object, no markdown fence:
   const content: VisionContentPart[] = [
     { type: 'text', text: `Version history (oldest first):\n${versionTable}` },
   ];
-  // 图像有硬上限(LLM 代理对单请求图片数有限制,超了会 400)。全量上下文靠文字版本表,
-  // 图像只送最关键的:最新版 + 聚焦版 + 原始输入图 + 本轮 staged,再按从新到旧补足,总数 ≤ MAX_IMAGES。
+  // 实测(2026-06-14):张数不是问题 —— 50 张真实标签图(单张仅 ~2.7KB,共 180KB)仍 200 OK。
+  // 之前的 400 根因被误判成「图片数硬上限」,真根因是【某张图解码失败拖垮整批】(代理 prepare image failed)。
+  // 故上限放宽到 30(纯为控 token 成本,VLM 看图按 token 计费),并在下方对每张做 sharp 本地重编码剔坏图。
+  // 理解层优先级:最新版 + 聚焦版 + 原始输入图 + 本轮 staged,再从新到旧补足;超出上限的版本靠全量文字版本表兜底。
   const latestV = versions[versions.length - 1];
-  const MAX_IMAGES = 5;
+  const MAX_IMAGES = 30;
   const seenImg = new Set<string>();
   const imgItems: { label: string; get: () => Promise<string> }[] = [];
   const addVer = (v?: SessionVersion) => {
@@ -625,11 +628,17 @@ Output ONLY a JSON object, no markdown fence:
   for (let i = versions.length - 1; i >= 0; i--) addVer(versions[i]); // 其余从新到旧补足
   for (const it of imgItems.slice(0, MAX_IMAGES)) {
     try {
-      const b64 = await it.get();
+      const raw = await it.get();
+      const m = /^data:[^;]+;base64,(.+)$/.exec(raw);
+      if (!m) continue;
+      // 本地 sharp 重 decode→encode 成标准 PNG:坏图(损坏/异常格式)在本地就 throw → 跳过该张,
+      // 绝不塞进请求 —— 否则代理对单张坏图会把【整批】判成 400 prepare image failed(静默降级根因)。
+      const png = await sharp(Buffer.from(m[1], 'base64')).png().toBuffer();
+      const safe = `data:image/png;base64,${png.toString('base64')}`;
       content.push({ type: 'text', text: `\n${it.label}:` });
-      content.push({ type: 'image_url', image_url: { url: b64 } });
+      content.push({ type: 'image_url', image_url: { url: safe } });
     } catch {
-      /* 单张取不到就跳过 */
+      /* 取不到 / sharp 解不开(坏图)→ 跳过该张,不拖垮整批 */
     }
   }
   const clarifyBlock =
