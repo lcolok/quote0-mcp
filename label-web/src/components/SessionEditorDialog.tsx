@@ -8,13 +8,11 @@ import {
   ChevronRight,
   GitBranch,
   HelpCircle,
-  Images,
   Loader2,
   Send,
   Sparkles,
   Sprout,
   X,
-  Zap,
   ZoomIn,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -24,8 +22,6 @@ import RefImageUploader from '@/components/RefImageUploader';
 import { sessionsApi } from '@/api/sessions';
 import type { PlanPath, PlanResponse, SessionTurn } from '@/types/session';
 import type { BatchItem } from '@/types/batch';
-
-const TRUST_KEY = 'label-session-trust-mode';
 
 interface Props {
   items: BatchItem[];
@@ -217,6 +213,7 @@ function PathChooser({
   onConfirm,
   onCancel,
   onZoom,
+  onSupplement,
 }: {
   plan: PlanResponse;
   versionNo: (turnId: string) => number;
@@ -224,9 +221,12 @@ function PathChooser({
   onConfirm: (c: ConfirmedPlan) => void;
   onCancel: () => void;
   onZoom: (url: string) => void;
+  onSupplement: (text: string) => void;
 }) {
   const paths = plan.paths ?? [];
   const [pathId, setPathId] = useState<string>(() => pickRecommended(paths).id);
+  const [suppOpen, setSuppOpen] = useState(false);
+  const [supp, setSupp] = useState('');
   const path = paths.find((p) => p.id === pathId) ?? paths[0];
 
   const [mode, setMode] = useState<'img2img' | 'rewrite'>(path.mode);
@@ -415,6 +415,52 @@ function PathChooser({
         </div>
       </div>
 
+      {/* 补充说明:以上方案都不满意 → 补充更多想法,让 agent 接收后重新出方案(必有的常驻入口) */}
+      <div className="rounded-md border border-dashed">
+        {!suppOpen ? (
+          <button
+            onClick={() => setSuppOpen(true)}
+            className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground transition hover:text-foreground"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+            以上方案都不满意?补充更多想法,让 agent 重新规划
+          </button>
+        ) : (
+          <div className="space-y-1.5 p-2">
+            <Textarea
+              rows={2}
+              autoFocus
+              placeholder="补充你的想法,例如:都太复杂了要更简洁;或保留 v3 构图但换配色…(agent 会结合它重新出方案)"
+              value={supp}
+              onChange={(e) => setSupp(e.target.value)}
+              className="text-xs"
+            />
+            <div className="flex gap-1.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setSuppOpen(false);
+                  setSupp('');
+                }}
+              >
+                收起
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 flex-1 text-xs"
+                disabled={busy || !supp.trim()}
+                onClick={() => onSupplement(supp.trim())}
+              >
+                <Send className="mr-1 h-3.5 w-3.5" />
+                提交补充,重新规划
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* 操作 */}
       <div className="flex items-center gap-1.5">
         <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onCancel}>
@@ -554,122 +600,6 @@ function ClarifyChooser({
   );
 }
 
-/** 参考图池:常驻画廊,列出整个 session 的所有图(输入/参考图 + 各版本产物)。
- *  勾选 = 强制作为生图参考图(ref-image,一定传给生图模型);不勾时 AI 看全部图理解后自动补选。 */
-function ReferencePool({
-  turns,
-  selected,
-  onToggle,
-  onZoom,
-}: {
-  turns: SessionTurn[];
-  selected: Set<string>;
-  onToggle: (url: string) => void;
-  onZoom: (url: string) => void;
-}) {
-  const outSeen = new Set<string>();
-  const outputs: { url: string; label: string }[] = [];
-  turns.forEach((t, i) => {
-    const s = t.label?.sourceImageUrl;
-    if (s && !outSeen.has(s)) {
-      outSeen.add(s);
-      outputs.push({ url: s, label: `v${i + 1}` });
-    }
-  });
-  const inSeen = new Set<string>();
-  const inputs: { url: string; label: string }[] = [];
-  turns.forEach((t, i) => {
-    t.refImageUrls.forEach((u) => {
-      if (u && !inSeen.has(u) && !outSeen.has(u)) {
-        inSeen.add(u);
-        inputs.push({ url: u, label: `v${i + 1} 输入` });
-      }
-    });
-  });
-  // 有输入参考图时默认展开(避免被折叠藏起来找不到)
-  const [open, setOpen] = useState(inputs.length > 0);
-  const total = inputs.length + outputs.length;
-  if (total === 0) return null;
-
-  const Item = ({ url, label }: { url: string; label: string }) => {
-    const on = selected.has(url);
-    return (
-      <div className="group relative w-[56px] shrink-0">
-        <div
-          role="button"
-          onClick={() => onToggle(url)}
-          title={`${label}(点选/取消;🔍 放大)`}
-          className={`cursor-pointer rounded border p-0.5 transition ${
-            on ? 'border-primary ring-1 ring-primary' : 'opacity-60 hover:opacity-100'
-          }`}
-        >
-          <div className="h-9 overflow-hidden rounded bg-muted">
-            <img src={url} alt={label} className="h-full w-full object-cover" />
-          </div>
-          <div className="truncate text-[8px] text-muted-foreground">{label}</div>
-        </div>
-        {on && (
-          <span className="pointer-events-none absolute right-0 top-0 rounded-bl bg-primary p-0.5">
-            <Check className="h-2.5 w-2.5 text-primary-foreground" />
-          </span>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onZoom(url);
-          }}
-          title="放大查看"
-          className="absolute left-0 top-0 hidden rounded-br bg-black/60 p-0.5 group-hover:block"
-        >
-          <ZoomIn className="h-2.5 w-2.5 text-white" />
-        </button>
-      </div>
-    );
-  };
-
-  return (
-    <div className="rounded-md border">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-1 px-2 py-1 text-[10px] text-muted-foreground"
-      >
-        <Images className="h-3 w-3" />
-        参考图池({total}){selected.size ? ` · 已选 ${selected.size}` : ''}
-        <span className="ml-auto">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div className="max-h-40 space-y-2 overflow-y-auto border-t p-2">
-          {inputs.length > 0 && (
-            <div>
-              <div className="mb-1 text-[9px] font-medium text-muted-foreground">
-                🖼 输入/参考图(你提供的)
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {inputs.map((x) => (
-                  <Item key={x.url} url={x.url} label={x.label} />
-                ))}
-              </div>
-            </div>
-          )}
-          {outputs.length > 0 && (
-            <div>
-              <div className="mb-1 text-[9px] font-medium text-muted-foreground">各版本产物</div>
-              <div className="flex flex-wrap gap-1">
-                {outputs.map((x) => (
-                  <Item key={x.url} url={x.url} label={x.label} />
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="text-[9px] text-muted-foreground">
-            勾选 = 强制作为生图参考图(一定传给生图模型) · 不勾时 AI 看全部图后自动补选 · 悬停 🔍 放大
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function SessionEditorDialog({ items, itemId, onClose, onNavigate }: Props) {
   const qc = useQueryClient();
   const item = items.find((i) => i.id === itemId) ?? null;
@@ -702,26 +632,12 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
   const [feedback, setFeedback] = useState('');
   const [refUrls, setRefUrls] = useState<string[]>([]);
   const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
-  const [trustMode, setTrustMode] = useState(() => localStorage.getItem(TRUST_KEY) === '1');
   const [focusedTurnId, setFocusedTurnId] = useState<string | null>(null);
-  // 参考图池里勾选的现有图(与上传框 refUrls 一起作为本轮 staged 上下文)
-  const [poolSel, setPoolSel] = useState<Set<string>>(new Set());
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
-  // 已解决的澄清问答链(每次 clarify 选完追加),作为后续 /plan 的上下文
+  // 已解决的澄清问答 + 用户主动补充想法的累积链,作为后续 /plan 的上下文
   const [clarifyTrail, setClarifyTrail] = useState<string[]>([]);
-  const togglePool = (url: string) =>
-    setPoolSel((prev) => {
-      const n = new Set(prev);
-      n.has(url) ? n.delete(url) : n.add(url);
-      return n;
-    });
 
   const focused = turns.find((t) => t.id === focusedTurnId) ?? adopted;
-
-  const setTrust = (v: boolean) => {
-    setTrustMode(v);
-    localStorage.setItem(TRUST_KEY, v ? '1' : '0');
-  };
 
   // 切换聚焦 item 时清空输入与待确认提案,聚焦交还给采用指针
   useEffect(() => {
@@ -729,7 +645,6 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
     setRefUrls([]);
     setPendingPlan(null);
     setFocusedTurnId(null);
-    setPoolSel(new Set());
     setClarifyTrail([]);
   }, [itemId]);
 
@@ -758,7 +673,6 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
     onSuccess: () => {
       setFeedback('');
       setRefUrls([]);
-      setPoolSel(new Set());
       setPendingPlan(null);
       setClarifyTrail([]);
       toast.success('已开始生成新版本');
@@ -767,40 +681,24 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '生成失败'),
   });
 
-  // 规划:调 /plan 拿多条路径;信任模式直接走推荐路径,否则弹路径选择器
+  // 规划:调 /plan 拿多条路径,弹面板让用户选(总是经过规划这步 —— 多方案天然含选择性,
+  // 且后端保证必有「全新起点」兜底路径)。staged 上下文 = 用户本轮上传的新图。
   const planMut = useMutation({
-    mutationFn: (vars: { fresh: boolean; clarifications: string[] }) => {
-      // 本轮 staged 上下文 = 上传框新图 + 参考图池勾选的现有图
-      const staged = [...new Set([...refUrls, ...poolSel])];
+    mutationFn: (vars: { clarifications: string[] }) => {
+      const staged = [...new Set(refUrls)];
       return sessionsApi.plan(sessionId!, {
         parentTurnId: focused?.id ?? null,
         feedback: feedback.trim(),
         refImageUrls: staged.length ? staged : undefined,
-        fresh: vars.fresh,
+        fresh: false,
         clarifications: vars.clarifications.length ? vars.clarifications : undefined,
       });
     },
     onSuccess: (plan) => {
-      // 需求明确 → 路径;信任模式直接走推荐路径
-      if (plan.kind === 'paths') {
-        if (!plan.paths?.length) {
-          toast.error('未能生成规划路径');
-          return;
-        }
-        if (trustMode) {
-          const p = pickRecommended(plan.paths);
-          refineMut.mutate({
-            parentTurnId: p.baseTurnId,
-            genMode: p.mode,
-            refImageUrls: p.candidateRefs.filter((c) => c.selected).map((c) => c.url),
-            effectivePrompt: p.prompt,
-            agentReply: plan.reply,
-            reasoning: plan.reasoning,
-          });
-          return;
-        }
+      if (plan.kind === 'paths' && !plan.paths?.length) {
+        toast.error('未能生成规划路径');
+        return;
       }
-      // clarify(反问)或 非信任的 paths → 弹面板
       setPendingPlan(plan);
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '规划失败'),
@@ -815,7 +713,14 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
     const newTrail = [...clarifyTrail, qa];
     setClarifyTrail(newTrail);
     setPendingPlan(null);
-    planMut.mutate({ fresh: false, clarifications: newTrail });
+    planMut.mutate({ clarifications: newTrail });
+  };
+  // 用户主动「补充说明」→ 追加到 trail,带着它重新规划(以上方案都不满意时的再规划入口)
+  const onSupplement = (text: string) => {
+    const newTrail = [...clarifyTrail, `补充想法:${text}`];
+    setClarifyTrail(newTrail);
+    setPendingPlan(null);
+    planMut.mutate({ clarifications: newTrail });
   };
 
   // 采用某版本作为当前(打印/显示用),移动指针但不生成
@@ -1024,25 +929,13 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
                     onConfirm={(cp) => refineMut.mutate(cp)}
                     onCancel={cancelPlan}
                     onZoom={setZoomUrl}
+                    onSupplement={onSupplement}
                   />
                 )
               ) : (
                 <>
-                  <div className="flex items-center justify-between">
-                    <label
-                      className="flex cursor-pointer items-center gap-1 text-[10px] text-muted-foreground"
-                      title="开启后跳过路径选择,agent 规划完直接走推荐路径生成"
-                    >
-                      <input
-                        type="checkbox"
-                        className="h-3 w-3 accent-purple-500"
-                        checked={trustMode}
-                        onChange={(e) => setTrust(e.target.checked)}
-                      />
-                      <Zap className="h-3 w-3 text-purple-500" />
-                      信任模式(走推荐路径直生)
-                    </label>
-                    {!focusedIsAdopted && focused && focused.state === 'succeeded' && (
+                  {!focusedIsAdopted && focused && focused.state === 'succeeded' && (
+                    <div className="flex justify-end">
                       <Button
                         size="sm"
                         variant="outline"
@@ -1054,23 +947,17 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
                         <Check className="mr-1 h-3.5 w-3.5" />
                         采用此版本
                       </Button>
-                    )}
-                  </div>
-                  <ReferencePool
-                    turns={turns}
-                    selected={poolSel}
-                    onToggle={togglePool}
-                    onZoom={setZoomUrl}
-                  />
+                    </div>
+                  )}
                   <RefImageUploader
                     urls={refUrls}
                     onChange={setRefUrls}
-                    maxImages={3}
+                    maxImages={10}
                     disabled={busy}
                   />
                   <Textarea
                     rows={3}
-                    placeholder="补充上下文,例如:字再大一点、整体更可爱、去掉边框…(agent 会规划多条路径,含从干净版重开以避免越改越糊)"
+                    placeholder="说说要怎么改,例如:字再大一点、整体更可爱、去掉边框…(agent 会规划多条方案,含从干净版重开 / 全新起点供你选)"
                     value={feedback}
                     onChange={(e) => setFeedback(e.target.value)}
                   />
@@ -1078,28 +965,15 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
                     className="w-full"
                     size="sm"
                     disabled={!focused || !feedback.trim() || busy}
-                    onClick={() => planMut.mutate({ fresh: false, clarifications: clarifyTrail })}
+                    onClick={() => planMut.mutate({ clarifications: clarifyTrail })}
                   >
                     {busy ? (
                       <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                    ) : trustMode ? (
-                      <Zap className="mr-1 h-4 w-4" />
                     ) : (
                       <Send className="mr-1 h-4 w-4" />
                     )}
-                    {trustMode ? '生成' : '让 agent 规划路径'}
+                    让 agent 规划方案
                     {focused ? `(聚焦 v${versionNo(focused.id)})` : ''}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    size="sm"
-                    disabled={!feedback.trim() || busy}
-                    title="开一棵全新的树:只用你上传的图(图生图)或纯文字描述(文生图),不继承任何现有版本的像素/prompt"
-                    onClick={() => planMut.mutate({ fresh: true, clarifications: clarifyTrail })}
-                  >
-                    <Sprout className="mr-1 h-4 w-4 text-green-600" />
-                    全新起点(不继承现有版本)
                   </Button>
                   {focused && !focusedIsAdopted && (
                     <div className="text-center text-[10px] text-blue-500">

@@ -770,6 +770,23 @@ Output ONLY a JSON object, no markdown fence:
     });
   }
   if (paths.length === 0) return fallback();
+  // 兜底:无论 planner 是否主动给,总附加一条「全新起点」路径 —— 作为用户主动另起新树的稳定入口
+  // (前端已去掉独立的「全新起点」按钮,改由这里保证每次规划的多方案里都含此选项)。
+  if (!paths.some((p) => p.strategy === 'fresh' || !p.baseTurnId)) {
+    const hasUserImg = userUploads.length > 0;
+    paths.push({
+      id: `fresh-always-${paths.length}`,
+      label: hasUserImg ? '全新起点 · 只用你的图' : '全新起点 · 纯描述',
+      recommended: false,
+      strategy: 'fresh',
+      baseTurnId: null,
+      baseVersionNo: null,
+      mode: hasUserImg ? 'img2img' : 'rewrite',
+      prompt: feedback,
+      rationale: '不继承任何现有版本的像素/prompt,从你的图或纯描述全新起一棵树。',
+      candidateRefs: refsForPath(new Set(userUploads)),
+    });
+  }
   if (!paths.some((p) => p.recommended)) paths[0].recommended = true;
 
   return {
