@@ -2,10 +2,9 @@ import { Hono } from 'hono';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { renderTemplate } from '../react-widgets/core/label-job-queue.js';
 import { createTurn, ensureBatchItemSession } from '../react-widgets/core/label-session-store.js';
-import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
-import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
+import { getSinkForKind, deviceKindMatchesTarget, type PushDeviceRow } from './output-sinks.js';
 
 const labelBatchesApp = new Hono();
 const imageStorage = getImageStorage();
@@ -392,11 +391,31 @@ labelBatchesApp.post('/:id/items/:itemId/review', async (c) => {
 labelBatchesApp.post('/:id/print', async (c) => {
   try {
     const id = c.req.param('id');
-    const body = (await c.req.json().catch(() => ({}))) as { scope?: any; niimbotEndpoint?: string };
-    const endpoint = body.niimbotEndpoint || process.env.NIIMBOT_ENDPOINT;
-    if (!endpoint) return c.json({ success: false, error: '缺少 niimbotEndpoint（body 或 NIIMBOT_ENDPOINT）' }, 400);
+    const body = (await c.req.json().catch(() => ({}))) as { scope?: any; deviceId?: string; niimbotEndpoint?: string };
 
     const db = getPostgresDatabase();
+
+    // 设备解析:优先 deviceId(查 push_devices 取 kind 路由);否则回退 niimbotEndpoint/env(合成 thermal-printer 设备)
+    let device: PushDeviceRow;
+    if (body.deviceId) {
+      const d = await db.getPushDeviceById(body.deviceId);
+      if (!d) return c.json({ success: false, error: '设备不存在' }, 404);
+      device = d as PushDeviceRow;
+    } else {
+      const endpoint = body.niimbotEndpoint || process.env.NIIMBOT_ENDPOINT;
+      if (!endpoint) return c.json({ success: false, error: '缺少 deviceId 或 niimbotEndpoint（body 或 NIIMBOT_ENDPOINT）' }, 400);
+      device = {
+        id: '__env_niimbot__',
+        name: 'env niimbot',
+        base_url: endpoint,
+        token: '',
+        width: LABEL_T40X20_TARGET.widthPx,
+        height: LABEL_T40X20_TARGET.heightPx,
+        enabled: true,
+        kind: 'thermal-printer',
+        capabilities: ['print'],
+      };
+    }
 
     // 打印前回填 label_id:刚生成完的 item 可能 label_id 还没落到 items 表(原本仅 GET 详情时才回填),
     // 否则下面 IS NOT NULL 查询会把它们静默跳过 → 漏打。复用 GET 详情的回填逻辑。
@@ -433,16 +452,25 @@ labelBatchesApp.post('/:id/print', async (c) => {
     for (const label of labelRows) {
       try {
         const target = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
-        // image / widget 路径：从 MinIO 下 png → pack
+        // 设备 kind 必须匹配标签尺寸 kind,否则拒绝(尺寸不对硬塞会出废纸/废屏)
+        if (!deviceKindMatchesTarget(device.kind, target.kind)) {
+          results.push({ labelId: label.id, ok: false, error: `设备类型 ${device.kind} 与标签 kind=${target.kind} 不匹配` });
+          continue;
+        }
+        const sink = getSinkForKind(device.kind);
+        if (!sink) {
+          results.push({ labelId: label.id, ok: false, error: `无 ${device.kind} 对应的输出通道` });
+          continue;
+        }
+        // 从 MinIO 下 PNG → 交给 sink(sink 内部自己 pack/dither)
         const pngObj = await imageStorage.getClient().getObject(MINIO_BUCKET, label.png_path);
         const chunks: Buffer[] = [];
         for await (const chunk of pngObj) chunks.push(chunk as Buffer);
         const pngBuffer = Buffer.concat(chunks);
-        const bitmapBuffer = await packFromPng(pngBuffer, target);
 
-        const pushResult = await niimbotPush.push(bitmapBuffer, target, endpoint, { printId: label.id });
-        if (!pushResult.queued) {
-          results.push({ labelId: label.id, ok: false, httpStatus: pushResult.status, error: pushResult.error || '推送失败' });
+        const sendResult = await sink.send(pngBuffer, device, target);
+        if (!sendResult.ok) {
+          results.push({ labelId: label.id, ok: false, httpStatus: sendResult.status, error: sendResult.error || '推送失败' });
           continue;
         }
         await db.getPool().query(
@@ -452,9 +480,9 @@ labelBatchesApp.post('/:id/print', async (c) => {
                     'printed_at', now(), 'endpoint', $2::text, 'http_status', $3::int, 'bytes', $4::int),
                   updated_at = now()
             WHERE id = $1`,
-          [label.id, endpoint, pushResult.status ?? null, bitmapBuffer.length]
+          [label.id, device.base_url || device.id, sendResult.status ?? null, pngBuffer.length]
         );
-        results.push({ labelId: label.id, ok: true, httpStatus: pushResult.status });
+        results.push({ labelId: label.id, ok: true, httpStatus: sendResult.status });
       } catch (e) {
         results.push({ labelId: label.id, ok: false, error: e instanceof Error ? e.message : String(e) });
       }

@@ -238,6 +238,18 @@ export class PostgresDatabase {
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
+      // v1.19.0 设备化:push_devices 加 kind(分类) / capabilities(可做行为)
+      // kind 决定行为与输出通道(sink): thermal-printer→print(NiimbotSink) / eink-local→display(EinkSink) / eink-cloud→display(MindResetSink)
+      // 已存在的行历史上都是本地墨水屏 → 默认 eink-local + ['display']
+      `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'eink-local'`,
+      `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '["display"]'::jsonb`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'push_devices_kind_check') THEN
+          ALTER TABLE push_devices ADD CONSTRAINT push_devices_kind_check
+            CHECK (kind IN ('thermal-printer','eink-local','eink-cloud'));
+        END IF;
+      END $$`,
       // Phase 2.5: per-memo target_renderer (device | local-eink | both)
       `ALTER TABLE memos ADD COLUMN IF NOT EXISTS target_renderer TEXT NOT NULL DEFAULT 'both'`,
       `DO $$
@@ -2163,24 +2175,32 @@ export class PostgresDatabase {
     return r.rows;
   }
 
-  async createPushDevice(d: {id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean}): Promise<any> {
+  // 设备化:按 id 取单台设备(含 kind/capabilities),供输出路由按 kind 选 sink 用
+  async getPushDeviceById(id: string): Promise<any | null> {
+    const r = await this.getPool().query('SELECT * FROM push_devices WHERE id = $1', [id]);
+    return r.rows[0] ?? null;
+  }
+
+  async createPushDevice(d: {id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean;kind?:string;capabilities?:string[]}): Promise<any> {
     const r = await this.getPool().query(
-      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [d.id, d.name, d.base_url, d.token ?? '', d.width, d.height, d.enabled ?? true]
+      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled,kind,capabilities)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [d.id, d.name, d.base_url, d.token ?? '', d.width, d.height, d.enabled ?? true,
+       d.kind ?? 'eink-local', JSON.stringify(d.capabilities ?? ['display'])]
     );
     return r.rows[0];
   }
 
   async updatePushDevice(id: string, patch: Record<string, any>): Promise<any> {
-    const allowed = ['name','base_url','token','width','height','enabled'];
+    const allowed = ['name','base_url','token','width','height','enabled','kind','capabilities'];
     const sets: string[] = [];
     const vals: any[] = [];
     let i = 1;
     for (const k of allowed) {
       if (patch[k] !== undefined) {
         sets.push(`${k} = $${i++}`);
-        vals.push(patch[k]);
+        // capabilities 是 jsonb 列:node-pg 会把裸 JS 数组序列化成 PG 数组字面量 {..}(对 jsonb 报错),必须先 JSON.stringify
+        vals.push(k === 'capabilities' ? JSON.stringify(patch[k]) : patch[k]);
       }
     }
     if (sets.length === 0) {
