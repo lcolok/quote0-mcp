@@ -1031,7 +1031,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       value={feedback}
                       onChange={(e) => setFeedback(e.target.value)}
                       onPaste={up.handlePaste}
-                      className="min-h-[56px] border-0 bg-transparent focus-visible:ring-0 resize-none shadow-none"
+                      className="min-h-[56px] resize-none border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
                     />
                     <div className="flex items-center justify-between gap-2 p-2 pt-0">
                       <div className="flex items-center gap-2">
