@@ -398,6 +398,17 @@ labelBatchesApp.post('/:id/print', async (c) => {
 
     const db = getPostgresDatabase();
 
+    // 打印前回填 label_id:刚生成完的 item 可能 label_id 还没落到 items 表(原本仅 GET 详情时才回填),
+    // 否则下面 IS NOT NULL 查询会把它们静默跳过 → 漏打。复用 GET 详情的回填逻辑。
+    await db.getPool().query(
+      `UPDATE label_batch_items i
+          SET label_id = j.label_id, updated_at = now()
+         FROM label_jobs j
+        WHERE i.job_id = j.id AND i.batch_id = $1
+          AND i.label_id IS NULL AND j.state = 'succeeded' AND j.label_id IS NOT NULL`,
+      [id]
+    );
+
     // 取目标 item 的 label（scope: 'approved' | {itemIds}）
     let labelRows: any[];
     if (body.scope && typeof body.scope === 'object' && Array.isArray(body.scope.itemIds)) {

@@ -78,7 +78,17 @@ export default function BatchDetailPage() {
     mutationFn: () =>
       batchesApi.print(id, selected.size ? { scope: { itemIds: [...selected] } } : { scope: 'approved' }),
     onSuccess: (r) => {
-      toast.success(`已打印 ${r.printed} 个`);
+      const failed = (r.results ?? []).filter((x) => !x.ok);
+      if (failed.length) {
+        toast.warning(`已打印 ${r.printed} 个，${failed.length} 个失败(可重新打印)`, {
+          description: failed
+            .slice(0, 4)
+            .map((x) => x.error || '推送失败')
+            .join('；'),
+        });
+      } else {
+        toast.success(`已打印 ${r.printed} 个`);
+      }
       invalidate();
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '打印失败'),

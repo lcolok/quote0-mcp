@@ -3,6 +3,8 @@ import { RenderTarget } from './render-targets.js';
 export interface NiimbotPushOptions {
   timeoutMs?: number;
   printId?: string;
+  /** 503(固件队列满)时的最大尝试次数(含首次),默认 6。退避等固件打印队列腾空。 */
+  maxAttempts?: number;
 }
 
 export interface NiimbotPushResult {
@@ -49,10 +51,15 @@ class NiimbotPushModule {
     try {
       let res = await doFetch();
 
-      // 503 retry once after 1s
-      if (res.status === 503) {
-        await new Promise((r) => setTimeout(r, 1000));
+      // 503 = 固件打印队列满(ESP32 队列深度仅 2,单张热敏打印 6-12s)。线性退避重试,
+      // 等前面打印完、队列腾空再发 —— 否则批量打印第 3+ 张会被固件直接拒绝并【永久漏打】。
+      // 退避 2/4/6/8/10s,累计约 30s,覆盖「队列 2 个 × 单张最长 12s」的等待窗口。
+      const maxAttempts = options.maxAttempts ?? 6;
+      let attempt = 1;
+      while (res.status === 503 && attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
         res = await doFetch();
+        attempt++;
       }
 
       if (!res.ok) {
