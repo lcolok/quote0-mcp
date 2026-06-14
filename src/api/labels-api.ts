@@ -12,7 +12,7 @@ import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
-import { enqueueLabelJob } from '../react-widgets/core/label-job-queue.js';
+import { createTurn, createStandaloneSession } from '../react-widgets/core/label-session-store.js';
 
 const labelsApp = new Hono();
 const imageStorage = getImageStorage();
@@ -162,17 +162,28 @@ labelsApp.post('/generate-image', async (c) => {
       return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
     }
 
-    const result = await enqueueLabelJob({
-      jobType: 'image',
+    // 收敛到 session/turn 总账(docs/Label-Session-Editor-Spec.md):单条设计 = standalone session 的 root turn
+    const sessionId = await createStandaloneSession();
+    const result = await createTurn({
+      sessionId,
+      parentTurnId: null,
+      turnKind: 'root',
+      genMode: body.refImageUrls?.length ? 'img2img' : 'template',
+      refImageUrls: body.refImageUrls ?? null,
+      params: { model: body.model, presetId: body.presetId ?? null, targetId: body.targetId ?? null },
+      effectivePrompt: body.prompt,
       clientRequestId: body.clientRequestId ?? null,
-      payload: {
-        prompt: body.prompt,
-        model: body.model,
-        modelOptions: body.modelOptions,
-        targetId: body.targetId,
-        tags: body.tags,
-        presetId: body.presetId ?? undefined,
-        refImageUrls: body.refImageUrls ?? [],
+      enqueue: {
+        jobType: 'image',
+        payload: {
+          prompt: body.prompt,
+          model: body.model,
+          modelOptions: body.modelOptions,
+          targetId: body.targetId,
+          tags: body.tags,
+          presetId: body.presetId ?? undefined,
+          refImageUrls: body.refImageUrls ?? [],
+        },
       },
     });
 
@@ -180,8 +191,10 @@ labelsApp.post('/generate-image', async (c) => {
       {
         success: true,
         jobId: result.jobId,
-        state: result.state,
-        createdAt: result.createdAt,
+        sessionId,
+        turnId: result.turnId,
+        state: result.jobState,
+        createdAt: result.jobCreatedAt,
       },
       result.deduped ? 200 : 201
     );
@@ -356,16 +369,26 @@ labelsApp.post('/generate-text', async (c) => {
       return c.json({ success: false, stage: 'validate', error: `未知字体: ${body.preferredFont}` }, 400);
     }
 
-    const result = await enqueueLabelJob({
-      jobType: 'widget',
+    // 收敛到 session/turn 总账:widget 单条设计 = standalone session 的 root turn
+    const sessionId = await createStandaloneSession();
+    const result = await createTurn({
+      sessionId,
+      parentTurnId: null,
+      turnKind: 'root',
+      genMode: null,
+      params: { targetId: body.targetId ?? null },
+      effectivePrompt: body.prompt,
       clientRequestId: body.clientRequestId ?? null,
-      payload: {
-        prompt: body.prompt,
-        preferredWidget: body.preferredWidget,
-        preferredFont: body.preferredFont,
-        forceDecoration: body.forceDecoration,
-        targetId: body.targetId,
-        tags: body.tags,
+      enqueue: {
+        jobType: 'widget',
+        payload: {
+          prompt: body.prompt,
+          preferredWidget: body.preferredWidget,
+          preferredFont: body.preferredFont,
+          forceDecoration: body.forceDecoration,
+          targetId: body.targetId,
+          tags: body.tags,
+        },
       },
     });
 
@@ -373,8 +396,10 @@ labelsApp.post('/generate-text', async (c) => {
       {
         success: true,
         jobId: result.jobId,
-        state: result.state,
-        createdAt: result.createdAt,
+        sessionId,
+        turnId: result.turnId,
+        state: result.jobState,
+        createdAt: result.jobCreatedAt,
       },
       result.deduped ? 200 : 201
     );

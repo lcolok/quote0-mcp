@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
-import { enqueueLabelJob, renderTemplate } from '../react-widgets/core/label-job-queue.js';
+import { renderTemplate } from '../react-widgets/core/label-job-queue.js';
+import { createTurn, ensureBatchItemSession } from '../react-widgets/core/label-session-store.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
@@ -145,8 +146,16 @@ labelBatchesApp.get('/:id', async (c) => {
     const iRes = await db.getPool().query(
       `SELECT i.id, i.idx, i.name, i.vars, i.ref_image_urls, i.job_id, i.label_id, i.review,
               j.state AS job_state, j.last_error AS job_error,
-              l.id AS l_id, l.png_path, l.status AS label_status
+              l.id AS l_id, l.png_path, l.status AS label_status,
+              (SELECT count(*) FROM label_gen_turns t WHERE t.session_id = i.session_id) AS turn_count,
+              (SELECT count(*) FROM label_gen_turns t
+                WHERE t.session_id = i.session_id
+                  AND (t.created_at, t.id) <= (SELECT ct.created_at, ct.id
+                                                 FROM label_gen_turns ct
+                                                WHERE ct.id = s.current_turn_id)
+              ) AS current_no
          FROM label_batch_items i
+         LEFT JOIN label_sessions s ON s.id = i.session_id
          LEFT JOIN label_jobs j ON j.id = i.job_id
          LEFT JOIN labels l ON l.id = COALESCE(i.label_id, j.label_id)
         WHERE i.batch_id = $1
@@ -163,6 +172,8 @@ labelBatchesApp.get('/:id', async (c) => {
       review: row.review,
       state: itemState(row.job_state, !!row.l_id),
       lastError: row.job_error ?? null,
+      versionCount: Number(row.turn_count ?? 0),
+      versionNo: Number(row.current_no ?? 0) || null,
       label: row.l_id
         ? { id: row.l_id, pngUrl: pngUrlOf(row.png_path), status: row.label_status }
         : null,
@@ -267,30 +278,42 @@ async function resolveItems(batchId: string, scope: any, sampleSize: number) {
 }
 
 // 内部：对一批 items 渲染模板 + 入队
+// 收敛到 session/turn 总账(docs/Label-Session-Editor-Spec.md):createTurn 负责入队、
+// 注入 session:/turn: tags、推进 current_turn_id、同步 item 的 job_id/label_id
 async function enqueueItems(batch: any, items: any[], opts: { idempotent: boolean }) {
-  const db = getPostgresDatabase();
-  const results: Array<{ itemId: string; jobId: string; deduped: boolean }> = [];
+  const results: Array<{ itemId: string; jobId: string | null; deduped: boolean }> = [];
   for (const it of items) {
     const prompt = renderTemplate(batch.prompt_template, { name: it.name, ...(it.vars ?? {}) });
     const clientRequestId = opts.idempotent
       ? `batch:${batch.id}:item:${it.id}:rev${batch.template_rev}`
       : null;
-    const res = await enqueueLabelJob({
-      jobType: 'image',
-      clientRequestId,
-      payload: {
-        prompt,
+    const session = await ensureBatchItemSession(it.id);
+    const res = await createTurn({
+      sessionId: session.sessionId,
+      parentTurnId: session.currentTurnId,
+      turnKind: session.currentTurnId ? 'refine' : 'root',
+      genMode: 'template',
+      refImageUrls: it.ref_image_urls ?? null,
+      params: {
         model: batch.model,
+        presetId: batch.preset_id ?? null,
         targetId: batch.target_id,
-        presetId: batch.preset_id ?? undefined,
-        refImageUrls: it.ref_image_urls ?? [],
-        tags: [`batch:${batch.id}`, `item:${it.id}`],
+        templateRev: batch.template_rev,
+      },
+      effectivePrompt: prompt,
+      clientRequestId,
+      enqueue: {
+        jobType: 'image',
+        payload: {
+          prompt,
+          model: batch.model,
+          targetId: batch.target_id,
+          presetId: batch.preset_id ?? undefined,
+          refImageUrls: it.ref_image_urls ?? [],
+          tags: [`batch:${batch.id}`, `item:${it.id}`],
+        },
       },
     });
-    await db.getPool().query(
-      `UPDATE label_batch_items SET job_id = $1, label_id = NULL, updated_at = now() WHERE id = $2`,
-      [res.jobId, it.id]
-    );
     results.push({ itemId: it.id, jobId: res.jobId, deduped: res.deduped });
   }
   return results;

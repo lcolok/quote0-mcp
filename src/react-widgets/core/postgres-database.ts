@@ -258,6 +258,46 @@ export class PostgresDatabase {
              E'Output style: Designed for thermal label printer.\nComposition: horizontal wide banner layout, with sufficient white margin around all edges for printer alignment.\nColors: Pure black and white only — no grayscale, no gradients, no shadows, no anti-aliasing, no semi-transparent regions.\nStrokes: Use thick bold lines and large solid black or white shapes, optimized for clean 1-bit dithering at small print sizes.\nAesthetic: Minimal flat illustration / sticker / icon / decorative print, high visual clarity.',
              -100
       WHERE NOT EXISTS (SELECT 1 FROM image_presets WHERE is_system = true AND name = '🌡️ 热敏默认')`,
+      // v1.18.0: 会话式版本树 —— 所有生成路径收敛到 label_sessions/label_gen_turns
+      // (docs/Label-Session-Editor-Spec.md;turn 由 API 层落账,worker 无感知)
+      `CREATE TABLE IF NOT EXISTS label_sessions (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        subject_type    text NOT NULL DEFAULT 'standalone'
+                        CHECK (subject_type IN ('batch_item','standalone')),
+        subject_id      uuid,
+        current_turn_id uuid,
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        updated_at      timestamptz NOT NULL DEFAULT now()
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS label_sessions_subject_uniq
+        ON label_sessions(subject_type, subject_id)
+        WHERE subject_type = 'batch_item'`,
+      `CREATE TABLE IF NOT EXISTS label_gen_turns (
+        id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id        uuid NOT NULL REFERENCES label_sessions(id) ON DELETE CASCADE,
+        parent_turn_id    uuid REFERENCES label_gen_turns(id) ON DELETE SET NULL,
+        turn_kind         text NOT NULL DEFAULT 'refine'
+                          CHECK (turn_kind IN ('root','refine','redither','decoration')),
+        gen_mode          text CHECK (gen_mode IN ('template','img2img','rewrite')),
+        user_feedback     text,
+        ref_image_urls    jsonb,
+        params            jsonb,
+        effective_prompt  text,
+        job_id            uuid REFERENCES label_jobs(id) ON DELETE SET NULL,
+        label_id          uuid REFERENCES labels(id) ON DELETE SET NULL,
+        client_request_id text UNIQUE,
+        created_at        timestamptz NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS label_gen_turns_session_idx
+        ON label_gen_turns(session_id, created_at)`,
+      `ALTER TABLE label_batch_items ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES label_sessions(id) ON DELETE SET NULL`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'label_sessions_current_turn_fk') THEN
+          ALTER TABLE label_sessions ADD CONSTRAINT label_sessions_current_turn_fk
+            FOREIGN KEY (current_turn_id) REFERENCES label_gen_turns(id) ON DELETE SET NULL;
+        END IF;
+      END $$`,
     ];
   }
 
