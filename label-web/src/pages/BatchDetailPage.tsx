@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, Loader2, AlertCircle, Check, X, RefreshCw, Printer, Play } from 'lucide-react';
@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { batchesApi } from '@/api/batches';
 import { labelsApi } from '@/api/labels';
+import SessionEditorDialog from '@/components/SessionEditorDialog';
 
 export default function BatchDetailPage() {
   const { id = '' } = useParams();
@@ -15,6 +16,15 @@ export default function BatchDetailPage() {
   const qc = useQueryClient();
   const [template, setTemplate] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // 预览编辑器:?item=<itemId> 打开(可刷新/分享)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const editorItemId = searchParams.get('item');
+  const setEditorItem = (itemId: string | null) => {
+    const sp = new URLSearchParams(searchParams);
+    if (itemId) sp.set('item', itemId);
+    else sp.delete('item');
+    setSearchParams(sp, { replace: true });
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ['batch', id],
@@ -153,7 +163,16 @@ export default function BatchDetailPage() {
               {it.review === 'approved' && <span className="text-xs text-green-600">已批准</span>}
               {it.review === 'rejected' && <span className="text-xs text-destructive">已打回</span>}
             </div>
-            <div className="aspect-[2/1] overflow-hidden rounded-md bg-muted mb-2 flex items-center justify-center">
+            <div
+              className="relative aspect-[2/1] overflow-hidden rounded-md bg-muted mb-2 flex items-center justify-center cursor-pointer transition hover:ring-2 hover:ring-primary/60"
+              title="点击进入预览编辑器(多轮微调/版本溯源)"
+              onClick={() => setEditorItem(it.id)}
+            >
+              {it.versionCount > 1 && it.versionNo != null && (
+                <span className="absolute right-1 top-1 z-10 rounded bg-black/70 px-1 py-0.5 text-[10px] font-medium leading-none text-white">
+                  v{it.versionNo}/{it.versionCount}
+                </span>
+              )}
               {it.state === 'pending' || it.state === 'running' ? (
                 <div className="flex flex-col items-center gap-1 text-purple-500">
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -225,6 +244,13 @@ export default function BatchDetailPage() {
           {selected.size ? `打印选中(${selected.size})` : '打印已批准'}
         </Button>
       </div>
+
+      <SessionEditorDialog
+        items={items}
+        itemId={editorItemId}
+        onClose={() => setEditorItem(null)}
+        onNavigate={(itemId) => setEditorItem(itemId)}
+      />
     </div>
   );
 }

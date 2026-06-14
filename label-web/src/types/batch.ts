@@ -22,6 +22,9 @@ export interface BatchItem {
   review: BatchItemReview;
   state: BatchItemState;
   lastError: string | null;
+  /** 会话版本角标:当前版本序号 / 总版本数(没迭代过时 versionCount <= 1,不显示) */
+  versionNo: number | null;
+  versionCount: number;
   label: { id: string; pngUrl: string | null; status: string } | null;
 }
 
