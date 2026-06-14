@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -58,7 +58,8 @@ function TurnThumb({ turn }: { turn: SessionTurn }) {
 }
 
 /**
- * 分叉树:按 parent→child 布局(x=代次深度,y=DFS 顺序),SVG 连线。
+ * 演进轨迹(垂直时间线):y = 全局时间序(每版一行),lane = git 风格轨道
+ * (长子继承父 lane,fork/次根开新 lane → 向右缩进)。SVG 折线连 parent→child。
  * 点节点 = 聚焦(预览 + 下一次生成的 fork 基准),不移动采用指针。
  */
 function VersionTree({
@@ -74,95 +75,133 @@ function VersionTree({
   versionNo: (id: string) => number;
   onFocus: (id: string) => void;
 }) {
-  const COL = 96;
-  const ROW = 60;
-  const NW = 80;
-  const NH = 46;
-  const THUMB = 28;
+  const ROW = 50;
+  const ROOT_GAP = 18;
+  const LANE = 16;
+  const THUMB = 36;
+  const PADX = 6;
+  const PADY = 4;
 
   const byId = new Map(turns.map((t) => [t.id, t]));
   const childrenMap = new Map<string, SessionTurn[]>();
-  const roots: SessionTurn[] = [];
   turns.forEach((t) => {
     if (t.parentTurnId && byId.has(t.parentTurnId)) {
       const arr = childrenMap.get(t.parentTurnId) ?? [];
       arr.push(t);
       childrenMap.set(t.parentTurnId, arr);
-    } else {
-      roots.push(t);
     }
   });
 
-  const pos = new Map<string, { x: number; y: number }>();
-  let yc = 0;
-  const visit = (t: SessionTurn, depth: number) => {
-    pos.set(t.id, { x: depth, y: yc++ });
-    (childrenMap.get(t.id) ?? []).forEach((c) => visit(c, depth + 1));
+  // lane:每棵 root 树【独立】从 0 算 —— 不同 root(全新起点)无血缘,都左对齐 lane0;只有树内分叉才缩进。
+  // 不同树的时间段不重叠,所以 lane 数值复用不会水平相撞。长子继承父 lane,次子向右开新 lane。
+  const laneOf = new Map<string, number>();
+  let maxLane = 0;
+  const assignLane = (t: SessionTurn, lane: number) => {
+    laneOf.set(t.id, lane);
+    (childrenMap.get(t.id) ?? []).forEach((c, i) => assignLane(c, i === 0 ? lane : ++maxLane));
   };
-  roots.forEach((r) => visit(r, 0));
+  turns.forEach((t) => {
+    if (!t.parentTurnId || !byId.has(t.parentTurnId)) {
+      maxLane = 0;
+      assignLane(t, 0);
+    }
+  });
 
-  const maxX = pos.size ? Math.max(...[...pos.values()].map((p) => p.x)) : 0;
-  const W = (maxX + 1) * COL;
-  const H = Math.max(1, yc) * ROW;
+  // y 像素位置:时间序累积,每棵新树(全新起点 root)前留 ROOT_GAP 放分隔线
+  const yPx = new Map<string, number>();
+  let acc = PADY;
+  turns.forEach((t, i) => {
+    if ((!t.parentTurnId || !byId.has(t.parentTurnId)) && i > 0) acc += ROOT_GAP;
+    yPx.set(t.id, acc);
+    acc += ROW;
+  });
+  const H = acc + PADY;
+
+  const dotX = (lane: number) => PADX + lane * LANE + THUMB / 2;
+  const dotCY = (id: string) => yPx.get(id)! + THUMB / 2;
+
+  if (turns.length === 0) return null;
 
   return (
-    <div className="overflow-auto" style={{ maxHeight: '12rem' }}>
-      <div className="relative" style={{ width: W, height: H }}>
-        <svg className="pointer-events-none absolute inset-0" width={W} height={H}>
-          {turns.map((t) => {
-            if (!t.parentTurnId || !pos.has(t.parentTurnId) || !pos.has(t.id)) return null;
-            const p = pos.get(t.parentTurnId)!;
-            const c = pos.get(t.id)!;
-            const x1 = p.x * COL + NW;
-            const y1 = p.y * ROW + NH / 2;
-            const x2 = c.x * COL;
-            const y2 = c.y * ROW + NH / 2;
-            const mx = x1 + (x2 - x1) / 2;
-            return (
-              <path
-                key={t.id}
-                d={`M${x1},${y1} H${mx} V${y2} H${x2}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.5}
-                className="text-muted-foreground/40"
-              />
-            );
-          })}
-        </svg>
+    <div className="relative" style={{ height: H }}>
+      <svg className="pointer-events-none absolute inset-0 h-full w-full">
         {turns.map((t) => {
-          const p = pos.get(t.id);
-          if (!p) return null;
-          const adopted = t.id === adoptedId;
-          const focused = t.id === focusedId;
+          if (!t.parentTurnId || !laneOf.has(t.parentTurnId) || !laneOf.has(t.id)) return null;
+          const px = dotX(laneOf.get(t.parentTurnId)!);
+          const py = dotCY(t.parentTurnId);
+          const cx = dotX(laneOf.get(t.id)!);
+          const cy = dotCY(t.id);
+          // 同 lane → 直竖线;跨 lane(fork) → 先竖到子行再横折到子 lane
+          const d = px === cx ? `M${px},${py} V${cy}` : `M${px},${py} V${cy} H${cx}`;
           return (
-            <button
+            <path
               key={t.id}
+              d={d}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              className="text-muted-foreground/50"
+            />
+          );
+        })}
+      </svg>
+      {turns.map((t, i) => {
+        const lane = laneOf.get(t.id)!;
+        const top = yPx.get(t.id)!;
+        const isNewRoot = (!t.parentTurnId || !byId.has(t.parentTurnId)) && i > 0;
+        const adopted = t.id === adoptedId;
+        const focused = t.id === focusedId;
+        return (
+          <Fragment key={t.id}>
+            {isNewRoot && (
+              <div
+                className="absolute flex items-center gap-1 text-[8px] text-muted-foreground/60"
+                style={{ left: 2, right: 2, top: top - ROOT_GAP + 4 }}
+              >
+                <span className="h-px flex-1 bg-border" />
+                全新起点
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            )}
+            <button
               onClick={() => onFocus(t.id)}
               title={t.userFeedback ?? (t.turnKind === 'root' ? '初始版本' : '生成')}
-              className={`absolute rounded-md border bg-background p-0.5 text-left transition ${
+              className={`absolute flex items-center gap-1.5 rounded-md border bg-background p-0.5 pr-1.5 text-left transition ${
                 focused ? 'ring-2 ring-blue-500' : 'hover:border-primary/50'
-              } ${t.state === 'failed' ? 'border-destructive' : adopted ? 'border-primary' : ''}`}
-              style={{ left: p.x * COL, top: p.y * ROW, width: NW }}
+              } ${
+                t.state === 'failed'
+                  ? 'border-destructive'
+                  : adopted
+                    ? 'border-primary'
+                    : 'border-transparent'
+              }`}
+              style={{ left: PADX + lane * LANE, top, maxWidth: 168 }}
             >
               <div
-                className="flex items-center justify-center overflow-hidden rounded bg-muted"
-                style={{ height: THUMB }}
+                className="flex shrink-0 items-center justify-center overflow-hidden rounded bg-muted"
+                style={{ width: THUMB, height: THUMB }}
               >
                 <TurnThumb turn={t} />
               </div>
-              <div className="flex items-center justify-between px-0.5">
-                <span className="text-[9px] text-muted-foreground">v{versionNo(t.id)}</span>
-                {adopted && (
-                  <span className="rounded bg-primary px-1 text-[8px] leading-tight text-primary-foreground">
-                    采用
-                  </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-medium text-foreground/70">v{versionNo(t.id)}</span>
+                  {adopted && (
+                    <span className="rounded bg-primary px-1 text-[8px] leading-tight text-primary-foreground">
+                      采用
+                    </span>
+                  )}
+                </div>
+                {t.userFeedback && (
+                  <div className="truncate text-[9px] leading-tight text-muted-foreground/70">
+                    {t.userFeedback}
+                  </div>
                 )}
               </div>
             </button>
-          );
-        })}
-      </div>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -515,7 +554,8 @@ function ClarifyChooser({
   );
 }
 
-/** 参考图池:常驻画廊,列出整个 session 的所有图(输入/参考图 + 各版本产物),勾选 = 纳入下一轮上下文 */
+/** 参考图池:常驻画廊,列出整个 session 的所有图(输入/参考图 + 各版本产物)。
+ *  勾选 = 强制作为生图参考图(ref-image,一定传给生图模型);不勾时 AI 看全部图理解后自动补选。 */
 function ReferencePool({
   turns,
   selected,
@@ -622,7 +662,7 @@ function ReferencePool({
             </div>
           )}
           <div className="text-[9px] text-muted-foreground">
-            勾选 = 纳入下一轮上下文(一定会用) · 悬停 🔍 放大
+            勾选 = 强制作为生图参考图(一定传给生图模型) · 不勾时 AI 看全部图后自动补选 · 悬停 🔍 放大
           </div>
         </div>
       )}
@@ -834,7 +874,36 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
         </div>
 
         <div className="flex flex-1 min-h-0">
-          {/* 左:聚焦版本大图 + 分叉树 */}
+          {/* 最左:演进轨迹竖列(独占整列高度,垂直时间线 + fork 缩进,垂直滚动) */}
+          <div className="flex w-[196px] shrink-0 flex-col border-r">
+            <div
+              className="flex items-center gap-1 border-b px-2 py-2 text-[10px] text-muted-foreground"
+              title="点任意版本聚焦(蓝框=聚焦);从聚焦版继续改即 fork;采用=打印版"
+            >
+              <GitBranch className="h-3 w-3 shrink-0" />
+              演进轨迹
+            </div>
+            <div className="flex-1 overflow-y-auto px-1 py-1">
+              {turns.length ? (
+                <VersionTree
+                  turns={turns}
+                  adoptedId={adopted?.id ?? null}
+                  focusedId={focused?.id ?? null}
+                  versionNo={versionNo}
+                  onFocus={setFocusedTurnId}
+                />
+              ) : (
+                <div className="px-2 py-4 text-center text-[10px] text-muted-foreground">
+                  {ensureQ.isLoading || treeQ.isLoading ? '加载中…' : '暂无生成历史'}
+                </div>
+              )}
+            </div>
+            <div className="border-t px-2 py-1 text-[8px] leading-tight text-muted-foreground">
+              <span className="text-blue-500">蓝框</span>=聚焦 ·{' '}
+              <span className="text-primary">采用</span>=打印版
+            </div>
+          </div>
+          {/* 中:聚焦版本大图 + 本版 prompt */}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/40 p-6">
               {!focused ? (
@@ -869,22 +938,6 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
                 <p className="mt-1 whitespace-pre-wrap break-all">{focused.effectivePrompt}</p>
               </details>
             )}
-            {/* 分叉树:点节点 = 聚焦(预览 + fork 基准),不移动采用指针 */}
-            <div className="shrink-0 border-t px-3 py-2">
-              <div className="mb-1 flex items-center gap-1 text-[10px] text-muted-foreground">
-                <GitBranch className="h-3 w-3" />
-                演进轨迹(点任意版本聚焦 → 从它继续改即 fork;
-                <span className="text-blue-500">蓝框=聚焦</span>,
-                <span className="text-primary">采用=打印版</span>)
-              </div>
-              <VersionTree
-                turns={turns}
-                adoptedId={adopted?.id ?? null}
-                focusedId={focused?.id ?? null}
-                versionNo={versionNo}
-                onFocus={setFocusedTurnId}
-              />
-            </div>
           </div>
 
           {/* 右:对话流 + 输入区 */}
