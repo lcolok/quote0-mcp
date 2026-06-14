@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Loader2,
   Plus,
+  Upload,
   Printer,
   Send,
   Sparkles,
@@ -757,6 +758,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
     onChange: setRefUrls,
     maxImages: 10,
     disabled: busy,
+    globalDnd: !!itemId, // dialog 打开时整窗口可拖拽/粘贴图片
   });
 
   // ←/→ 切换聚焦 item(输入框聚焦 / 确认面板打开时不抢按键)
@@ -988,17 +990,11 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     </div>
                   )}
                   <div
-                    {...up.dragProps}
                     className={cn(
                       'relative rounded-lg border bg-background transition focus-within:ring-1 focus-within:ring-ring',
-                      up.isDragging && 'border-primary ring-2 ring-primary bg-primary/5',
+                      up.isDragging && 'border-primary',
                     )}
                   >
-                    {up.isDragging && (
-                      <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-primary/10 text-sm font-medium text-primary">
-                        松开以添加参考图
-                      </div>
-                    )}
                     {refUrls.length > 0 && (
                       <div className="flex flex-wrap gap-2 p-2 pb-0">
                         {refUrls.map((url, idx) => (
@@ -1099,6 +1095,17 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
               className="max-h-full max-w-full object-contain"
               style={{ imageRendering: 'pixelated' }}
             />
+          </div>
+        )}
+
+        {/* 全窗口拖拽 overlay(straylight 同款):dialog 打开时拖文件进来即全屏提示，松开即上传 */}
+        {up.isDragging && (
+          <div className="pointer-events-none fixed inset-0 z-[130] flex items-center justify-center bg-background/70 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-card/95 px-12 py-10 shadow-2xl">
+              <Upload className="h-10 w-10 animate-bounce text-primary" />
+              <p className="text-base font-semibold text-foreground">拖拽图片到此处</p>
+              <p className="text-xs text-muted-foreground">松开即添加为参考图 · 最多 10 张</p>
+            </div>
           </div>
         )}
       </DialogContent>

@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent, type DragEventHandler } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type DragEventHandler } from 'react';
 import { toast } from 'sonner';
 import { labelsApi } from '@/api/labels';
 
@@ -93,8 +93,11 @@ export function useRefImageUpload(opts: {
   onChange: (urls: string[]) => void;
   maxImages: number;
   disabled?: boolean;
+  /** 开启后挂 document 级拖拽+粘贴监听(整窗口任意位置可放图)，配合 isDragging 驱动全屏 overlay。
+   *  仅单一消费者(如某个打开的 Dialog)该开，避免多实例重复监听。 */
+  globalDnd?: boolean;
 }): UseRefImageUpload {
-  const { urls, onChange, maxImages, disabled } = opts;
+  const { urls, onChange, maxImages, disabled, globalDnd } = opts;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -209,6 +212,87 @@ export function useRefImageUpload(opts: {
       if (files.length) void processFiles(files);
     },
   };
+
+  // straylight 同款：globalDnd 开启时挂 document 级拖拽+粘贴，整窗口任意位置可放图。
+  // 用 isInternalDrag 区分外部文件 vs 页面内元素拖拽；dragleave 延时去抖防子元素闪烁。
+  useEffect(() => {
+    if (!globalDnd || disabled) return;
+    let internal = false;
+    let leaveTimer: ReturnType<typeof setTimeout>;
+    const onDragStart = () => {
+      internal = true;
+    };
+    const onDragEnd = () => {
+      internal = false;
+    };
+    const isExternalFile = (e: globalThis.DragEvent) => {
+      if (internal) return false;
+      const dt = e.dataTransfer;
+      return !!dt && Array.from(dt.types || []).includes('Files');
+    };
+    const show = () => {
+      clearTimeout(leaveTimer);
+      setIsDragging(true);
+    };
+    const hide = () => {
+      leaveTimer = setTimeout(() => setIsDragging(false), 60);
+    };
+    const onEnter = (e: globalThis.DragEvent) => {
+      if (!isExternalFile(e)) return;
+      e.preventDefault();
+      show();
+    };
+    const onOver = (e: globalThis.DragEvent) => {
+      if (!isExternalFile(e)) return;
+      e.preventDefault();
+      show();
+    };
+    const onLeave = (e: globalThis.DragEvent) => {
+      e.preventDefault();
+      hide();
+    };
+    const onDropDoc = (e: globalThis.DragEvent) => {
+      if (!isExternalFile(e)) return;
+      e.preventDefault();
+      clearTimeout(leaveTimer);
+      setIsDragging(false);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length) void processFiles(files);
+    };
+    const onPasteDoc = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        void processFiles(files);
+      }
+    };
+    document.addEventListener('dragstart', onDragStart, true);
+    document.addEventListener('dragend', onDragEnd, true);
+    document.addEventListener('dragenter', onEnter, true);
+    document.addEventListener('dragover', onOver, true);
+    document.addEventListener('dragleave', onLeave, true);
+    document.addEventListener('drop', onDropDoc, true);
+    document.addEventListener('paste', onPasteDoc);
+    return () => {
+      clearTimeout(leaveTimer);
+      document.removeEventListener('dragstart', onDragStart, true);
+      document.removeEventListener('dragend', onDragEnd, true);
+      document.removeEventListener('dragenter', onEnter, true);
+      document.removeEventListener('dragover', onOver, true);
+      document.removeEventListener('dragleave', onLeave, true);
+      document.removeEventListener('drop', onDropDoc, true);
+      document.removeEventListener('paste', onPasteDoc);
+    };
+  }, [globalDnd, disabled, processFiles]);
 
   return {
     isUploading,
