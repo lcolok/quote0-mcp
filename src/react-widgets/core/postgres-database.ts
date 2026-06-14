@@ -2163,9 +2163,9 @@ export class PostgresDatabase {
 
   // ==================== Push Devices CRUD ====================
 
-  async getEnabledPushDevices(): Promise<Array<{id:string;name:string;base_url:string;token:string;width:number;height:number}>> {
+  async getEnabledPushDevices(): Promise<Array<{id:string;name:string;base_url:string;token:string;width:number;height:number;kind:string}>> {
     const r = await this.getPool().query(
-      'SELECT id, name, base_url, token, width, height FROM push_devices WHERE enabled = true ORDER BY created_at'
+      'SELECT id, name, base_url, token, width, height, kind FROM push_devices WHERE enabled = true ORDER BY created_at'
     );
     return r.rows;
   }

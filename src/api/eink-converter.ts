@@ -27,9 +27,12 @@ export async function getEinkDevices(): Promise<EinkDevice[]> {
   // DB 优先
   try {
     const rows = await getPostgresDatabase().getEnabledPushDevices();
-    if (rows.length > 0) {
-      console.log(`📋 从 DB push_devices 读取 E-Ink 设备列表: ${rows.length} 个设备`);
-      return rows.map(r => ({ id: r.id, name: r.name, baseUrl: r.base_url, token: r.token, width: r.width, height: r.height }));
+    // 设备化:只取 eink-local 设备。push_devices 现在混装多种 kind(thermal-printer 等),
+    // 不过滤会把 niimbot 打印机也当墨水屏,导致 local-eink 推送把 bitmap 误发到打印端点。
+    const einkRows = rows.filter(r => r.kind === 'eink-local');
+    if (einkRows.length > 0) {
+      console.log(`📋 从 DB push_devices 读取 E-Ink 设备列表: ${einkRows.length} 个 eink-local 设备(共 ${rows.length} 台启用)`);
+      return einkRows.map(r => ({ id: r.id, name: r.name, baseUrl: r.base_url, token: r.token, width: r.width, height: r.height }));
     }
   } catch (e) {
     console.warn('⚠️ 从 DB 读取 push_devices 失败，回退 env/文件:', e);
