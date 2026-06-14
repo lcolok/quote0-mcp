@@ -9,6 +9,7 @@ import {
   GitBranch,
   HelpCircle,
   Loader2,
+  Printer,
   Send,
   Sparkles,
   Sprout,
@@ -19,13 +20,17 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import RefImageUploader from '@/components/RefImageUploader';
+import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 import { sessionsApi } from '@/api/sessions';
+import { labelsApi } from '@/api/labels';
+import { deviceKindsForTarget } from '@/types/device';
 import type { PlanPath, PlanResponse, SessionTurn } from '@/types/session';
 import type { BatchItem } from '@/types/batch';
 
 interface Props {
   items: BatchItem[];
   itemId: string | null;
+  targetId: string;
   onClose: () => void;
   onNavigate: (itemId: string) => void;
 }
@@ -600,10 +605,23 @@ function ClarifyChooser({
   );
 }
 
-export default function SessionEditorDialog({ items, itemId, onClose, onNavigate }: Props) {
+export default function SessionEditorDialog({ items, itemId, targetId, onClose, onNavigate }: Props) {
   const qc = useQueryClient();
   const item = items.find((i) => i.id === itemId) ?? null;
   const idx = item ? items.findIndex((i) => i.id === item.id) : -1;
+
+  // 设备化:在编辑器内直接打印/推送「当前采用版」到设备(走单标签 labelsApi.print)
+  const [printOpen, setPrintOpen] = useState(false);
+  const printAction = deviceKindsForTarget(targetId).includes('thermal-printer') ? '打印' : '推送';
+  const printMut = useMutation({
+    mutationFn: (deviceId: string) => labelsApi.print(item!.label!.id, { deviceId }),
+    onSuccess: () => {
+      toast.success(`${printAction}任务已发送`);
+      setPrintOpen(false);
+      qc.invalidateQueries({ queryKey: ['batch'] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? `${printAction}失败`),
+  });
 
   const ensureQ = useQuery({
     queryKey: ['session-ensure', itemId],
@@ -748,6 +766,7 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
   }, [itemId, idx, items, onNavigate, pendingPlan]);
 
   return (
+    <>
     <Dialog
       open={!!itemId}
       onOpenChange={(o) => {
@@ -776,6 +795,17 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
+          {item?.label?.id && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPrintOpen(true)}
+              title={`${printAction}当前采用版本到设备`}
+            >
+              <Printer className="mr-1 h-4 w-4" />
+              {printAction}
+            </Button>
+          )}
         </div>
 
         <div className="flex flex-1 min-h-0">
@@ -1002,5 +1032,17 @@ export default function SessionEditorDialog({ items, itemId, onClose, onNavigate
         )}
       </DialogContent>
     </Dialog>
+    {item?.label?.id && (
+      <PrintDeviceDialog
+        open={printOpen}
+        onOpenChange={setPrintOpen}
+        targetId={targetId}
+        pending={printMut.isPending}
+        onConfirm={(deviceId) => printMut.mutate(deviceId)}
+        title={`${printAction}标签`}
+        description={`选择一台设备${printAction}当前采用版本。`}
+      />
+    )}
+    </>
   );
 }
