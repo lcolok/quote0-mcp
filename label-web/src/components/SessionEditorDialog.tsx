@@ -9,6 +9,7 @@ import {
   GitBranch,
   HelpCircle,
   Loader2,
+  Plus,
   Printer,
   Send,
   Sparkles,
@@ -19,8 +20,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import RefImageUploader from '@/components/RefImageUploader';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
+import { useRefImageUpload } from '@/hooks/useRefImageUpload';
 import { sessionsApi } from '@/api/sessions';
 import { labelsApi } from '@/api/labels';
 import { deviceKindsForTarget } from '@/types/device';
@@ -750,6 +751,12 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
 
   const busy = planMut.isPending || refineMut.isPending;
   const focusedIsAdopted = focused?.id === adopted?.id;
+  const up = useRefImageUpload({
+    urls: refUrls,
+    onChange: setRefUrls,
+    maxImages: 10,
+    disabled: busy,
+  });
 
   // ←/→ 切换聚焦 item(输入框聚焦 / 确认面板打开时不抢按键)
   useEffect(() => {
@@ -979,32 +986,84 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       </Button>
                     </div>
                   )}
-                  <RefImageUploader
-                    urls={refUrls}
-                    onChange={setRefUrls}
-                    maxImages={10}
-                    disabled={busy}
-                  />
-                  <Textarea
-                    rows={3}
-                    placeholder="说说要怎么改,例如:字再大一点、整体更可爱、去掉边框…(agent 会规划多条方案,含从干净版重开 / 全新起点供你选)"
-                    value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
-                  />
-                  <Button
-                    className="w-full"
-                    size="sm"
-                    disabled={!focused || !feedback.trim() || busy}
-                    onClick={() => planMut.mutate({ clarifications: clarifyTrail })}
-                  >
-                    {busy ? (
-                      <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="mr-1 h-4 w-4" />
+                  <div className="rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
+                    {refUrls.length > 0 && (
+                      <div className="flex flex-wrap gap-2 p-2 pb-0">
+                        {refUrls.map((url, idx) => (
+                          <div
+                            key={idx}
+                            className="relative h-14 w-14 overflow-hidden rounded-md border bg-muted group"
+                          >
+                            <img
+                              src={url}
+                              alt={`ref-${idx + 1}`}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => up.remove(idx)}
+                              disabled={busy}
+                              className="absolute top-0.5 right-0.5 rounded bg-background/80 p-0.5 opacity-0 group-hover:opacity-100 hover:bg-destructive hover:text-destructive-foreground transition"
+                              title="移除"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     )}
-                    让 agent 规划方案
-                    {focused ? `(聚焦 v${versionNo(focused.id)})` : ''}
-                  </Button>
+                    <Textarea
+                      rows={3}
+                      placeholder="说说要怎么改,例如:字再大一点、整体更可爱、去掉边框…(支持 Ctrl+V 粘贴参考图)"
+                      value={feedback}
+                      onChange={(e) => setFeedback(e.target.value)}
+                      onPaste={up.handlePaste}
+                      className="border-0 focus-visible:ring-0 resize-none shadow-none"
+                    />
+                    <div className="flex items-center justify-between gap-2 p-2 pt-0">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={up.openPicker}
+                          disabled={!up.canAddMore || up.isUploading}
+                          title="添加参考图（或 Ctrl+V 粘贴）"
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 transition"
+                        >
+                          {up.isUploading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Plus className="h-4 w-4" />
+                          )}
+                        </button>
+                        <span className="text-[10px] text-muted-foreground">
+                          {refUrls.length}/10 · AI 视觉输入
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="h-7"
+                        disabled={!focused || !feedback.trim() || busy}
+                        onClick={() => planMut.mutate({ clarifications: clarifyTrail })}
+                      >
+                        {busy ? (
+                          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="mr-1 h-4 w-4" />
+                        )}
+                        让 agent 规划方案
+                        {focused ? `(聚焦 v${versionNo(focused.id)})` : ''}
+                      </Button>
+                    </div>
+                    <input
+                      type="file"
+                      ref={up.inputRef}
+                      onChange={up.handleInputChange}
+                      accept={up.accept}
+                      multiple
+                      className="hidden"
+                    />
+                  </div>
                   {focused && !focusedIsAdopted && (
                     <div className="text-center text-[10px] text-blue-500">
                       正在基于 v{versionNo(focused.id)} 修改(将从它 fork 出新分支)
