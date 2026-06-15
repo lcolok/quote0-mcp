@@ -778,8 +778,15 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
   useEffect(() => {
     if (showCtxBar) {
       setCtxBarRender(true);
-      const r = requestAnimationFrame(() => setCtxBarShown(true));
-      return () => cancelAnimationFrame(r);
+      // 双 rAF:先让起始态(max-h-0/opacity-0)被 paint 一帧,再切展开态,入场 transition 才会触发
+      let r2 = 0;
+      const r1 = requestAnimationFrame(() => {
+        r2 = requestAnimationFrame(() => setCtxBarShown(true));
+      });
+      return () => {
+        cancelAnimationFrame(r1);
+        cancelAnimationFrame(r2);
+      };
     }
     setCtxBarShown(false);
     const t = setTimeout(() => setCtxBarRender(false), 250);
