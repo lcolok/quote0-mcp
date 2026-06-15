@@ -908,12 +908,35 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 <span className="text-sm text-muted-foreground">无预览</span>
               )}
             </div>
-            {focused?.effectivePrompt && (
+            {focused && (focused.effectivePrompt || focused.refImageUrls.length > 0) && (
               <details className="border-t px-4 py-2 text-xs text-muted-foreground">
                 <summary className="cursor-pointer select-none">
-                  本版本最终 prompt(v{versionNo(focused.id)} · {focused.genMode ?? focused.turnKind})
+                  本版本 context(v{versionNo(focused.id)} · {focused.genMode ?? focused.turnKind})
                 </summary>
-                <p className="mt-1 whitespace-pre-wrap break-all">{focused.effectivePrompt}</p>
+                {focused.refImageUrls.length > 0 && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-micro text-muted-foreground/70">
+                      参考图（{focused.refImageUrls.length}）
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {focused.refImageUrls.map((u) => (
+                        <img
+                          key={u}
+                          src={u}
+                          alt=""
+                          onClick={() => setZoomUrl(u)}
+                          className="h-12 w-12 cursor-zoom-in rounded border object-cover"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {focused.effectivePrompt && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-micro text-muted-foreground/70">prompt</div>
+                    <p className="whitespace-pre-wrap break-all">{focused.effectivePrompt}</p>
+                  </div>
+                )}
               </details>
             )}
           </div>
