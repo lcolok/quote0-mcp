@@ -59,6 +59,10 @@ export default {
           foreground: "hsl(var(--card-foreground))",
         },
       },
+      fontSize: {
+        // 统一字号阶梯(消灭散落的 magic px)：micro 10 → xs 12 → sm 14 → base 16
+        micro: ['0.625rem', { lineHeight: '0.875rem' }], // 元信息/角标专用
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",

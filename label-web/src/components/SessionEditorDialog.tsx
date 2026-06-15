@@ -59,7 +59,7 @@ function TurnThumb({ turn }: { turn: SessionTurn }) {
   if (turn.state === 'failed') return <AlertCircle className="h-4 w-4 text-destructive" />;
   if (turn.label?.pngUrl)
     return <img src={turn.label.pngUrl} alt="" className="h-full w-full object-contain" />;
-  return <span className="text-[10px] text-muted-foreground">无图</span>;
+  return <span className="text-micro text-muted-foreground">无图</span>;
 }
 
 /**
@@ -160,7 +160,7 @@ function VersionTree({
           <Fragment key={t.id}>
             {isNewRoot && (
               <div
-                className="absolute flex items-center gap-1 text-[8px] text-muted-foreground/60"
+                className="absolute flex items-center gap-1 text-micro text-muted-foreground/60"
                 style={{ left: 2, right: 2, top: top - ROOT_GAP + 4 }}
               >
                 <span className="h-px flex-1 bg-border" />
@@ -190,15 +190,15 @@ function VersionTree({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
-                  <span className="text-[10px] font-medium text-foreground/70">v{versionNo(t.id)}</span>
+                  <span className="text-xs font-medium text-foreground/70">v{versionNo(t.id)}</span>
                   {adopted && (
-                    <span className="rounded bg-primary px-1 text-[8px] leading-tight text-primary-foreground">
+                    <span className="rounded bg-primary px-1 text-micro leading-tight text-primary-foreground">
                       采用
                     </span>
                   )}
                 </div>
                 {t.userFeedback && (
-                  <div className="truncate text-[9px] leading-tight text-muted-foreground/70">
+                  <div className="truncate text-xs leading-tight text-muted-foreground/70">
                     {t.userFeedback}
                   </div>
                 )}
@@ -300,14 +300,14 @@ function PathChooser({
         <div className="space-y-0.5">
           <div className="whitespace-pre-wrap">{plan.reply}</div>
           {plan.reasoning && (
-            <div className="text-[10px] text-muted-foreground">{plan.reasoning}</div>
+            <div className="text-micro text-muted-foreground">{plan.reasoning}</div>
           )}
         </div>
       </div>
 
       {/* 路径选择(↑/↓) */}
       <div>
-        <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+        <div className="mb-1 text-micro font-medium text-muted-foreground">
           选择重生成路径(↑/↓ 切换)
         </div>
         <div className="space-y-1.5">
@@ -330,9 +330,9 @@ function PathChooser({
                   )}
                   <span className="font-medium">{p.label}</span>
                   {p.recommended && (
-                    <span className="rounded bg-green-600 px-1 text-[8px] text-white">推荐</span>
+                    <span className="rounded bg-green-600 px-1 text-micro text-white">推荐</span>
                   )}
-                  <span className="ml-auto text-[9px] text-muted-foreground">
+                  <span className="ml-auto text-micro text-muted-foreground">
                     {p.strategy === 'fresh' || !p.baseTurnId
                       ? '全新起点·无继承'
                       : `基于 v${versionNo(p.baseTurnId) || p.baseVersionNo}`}{' '}
@@ -340,7 +340,7 @@ function PathChooser({
                   </span>
                 </div>
                 {p.rationale && (
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">{p.rationale}</div>
+                  <div className="mt-0.5 text-micro text-muted-foreground">{p.rationale}</div>
                 )}
               </button>
             );
@@ -368,7 +368,7 @@ function PathChooser({
 
         {path.candidateRefs.length > 0 && (
           <div>
-            <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+            <div className="mb-1 text-micro font-medium text-muted-foreground">
               参考图(最小纯净上下文,可加/减)
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -387,7 +387,7 @@ function PathChooser({
                       <div className="flex h-10 items-center justify-center overflow-hidden rounded bg-muted">
                         <img src={c.url} alt={c.label} className="h-full w-full object-cover" />
                       </div>
-                      <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{c.label}</div>
+                      <div className="mt-0.5 truncate text-micro text-muted-foreground">{c.label}</div>
                     </div>
                     {on && (
                       <span className="pointer-events-none absolute right-0.5 top-0.5 rounded-full bg-primary p-0.5 text-primary-foreground">
@@ -412,7 +412,7 @@ function PathChooser({
         )}
 
         <div>
-          <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+          <div className="mb-1 text-micro font-medium text-muted-foreground">
             {mode === 'rewrite' ? '重写后的 prompt(可编辑)' : '变更说明(可编辑)'}
           </div>
           <Textarea
@@ -429,7 +429,7 @@ function PathChooser({
         {!suppOpen ? (
           <button
             onClick={() => setSuppOpen(true)}
-            className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground transition hover:text-foreground"
+            className="flex w-full items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground transition hover:text-foreground"
           >
             <Sparkles className="h-3.5 w-3.5 text-purple-500" />
             以上方案都不满意?补充更多想法,让 agent 重新规划
@@ -493,7 +493,7 @@ function PathChooser({
             : `(基于 v${versionNo(path.baseTurnId) || path.baseVersionNo})`}
         </Button>
       </div>
-      <div className="text-center text-[9px] text-muted-foreground">
+      <div className="text-center text-micro text-muted-foreground">
         ↑/↓ 切路径 · Enter 确认 · Esc 取消
       </div>
     </div>
@@ -571,7 +571,7 @@ function ClarifyChooser({
           >
             <div className="text-xs font-medium">{c.label}</div>
             {c.description && (
-              <div className="mt-0.5 text-[10px] text-muted-foreground">{c.description}</div>
+              <div className="mt-0.5 text-micro text-muted-foreground">{c.description}</div>
             )}
           </button>
         ))}
@@ -602,7 +602,7 @@ function ClarifyChooser({
           确认这个方向
         </Button>
       </div>
-      <div className="text-center text-[9px] text-muted-foreground">
+      <div className="text-center text-micro text-muted-foreground">
         ↑/↓ 选 · Enter 确认 · Esc 取消
       </div>
     </div>
@@ -832,7 +832,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
           {/* 最左:演进轨迹竖列(独占整列高度,垂直时间线 + fork 缩进,垂直滚动) */}
           <div className="flex w-[196px] shrink-0 flex-col border-r">
             <div
-              className="flex items-center gap-1 border-b px-2 py-2 text-[10px] text-muted-foreground"
+              className="flex items-center gap-1 border-b px-2 py-2 text-xs font-medium text-muted-foreground"
               title="点任意版本聚焦(蓝框=聚焦);从聚焦版继续改即 fork;采用=打印版"
             >
               <GitBranch className="h-3 w-3 shrink-0" />
@@ -848,12 +848,12 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                   onFocus={setFocusedTurnId}
                 />
               ) : (
-                <div className="px-2 py-4 text-center text-[10px] text-muted-foreground">
+                <div className="px-2 py-4 text-center text-micro text-muted-foreground">
                   {ensureQ.isLoading || treeQ.isLoading ? '加载中…' : '暂无生成历史'}
                 </div>
               )}
             </div>
-            <div className="border-t px-2 py-1 text-[8px] leading-tight text-muted-foreground">
+            <div className="border-t px-2 py-1 text-micro leading-tight text-muted-foreground">
               <span className="text-blue-500">蓝框</span>=聚焦 ·{' '}
               <span className="text-primary">采用</span>=打印版
             </div>
@@ -905,7 +905,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       {t.userFeedback}
                     </div>
                   ) : (
-                    <div className="text-[10px] text-muted-foreground">
+                    <div className="text-micro text-muted-foreground">
                       {t.turnKind === 'root' ? '初始生成(模板)' : '生成'}
                     </div>
                   )}
@@ -938,11 +938,11 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     <div className="flex h-9 w-16 shrink-0 items-center justify-center rounded bg-muted">
                       <TurnThumb turn={t} />
                     </div>
-                    <div className="min-w-0 flex-1 text-[10px] text-muted-foreground">
+                    <div className="min-w-0 flex-1 text-micro text-muted-foreground">
                       <div className="flex items-center gap-1">
                         v{i + 1} · {t.genMode ?? t.turnKind}
                         {t.id === adopted?.id && (
-                          <span className="rounded bg-primary px-1 text-[8px] text-primary-foreground">
+                          <span className="rounded bg-primary px-1 text-micro text-primary-foreground">
                             采用
                           </span>
                         )}
@@ -1048,7 +1048,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       <Textarea
                         ref={feedbackRef}
                         rows={1}
-                        placeholder="说说要怎么改…（可拖入 / 粘贴参考图，Enter 提交）"
+                        placeholder="说说要怎么改…"
                         value={feedback}
                         onChange={(e) => setFeedback(e.target.value)}
                         onPaste={up.handlePaste}
@@ -1091,7 +1091,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     />
                   </div>
                   {focused && !focusedIsAdopted && (
-                    <div className="text-center text-[10px] text-blue-500">
+                    <div className="text-center text-micro text-blue-500">
                       正在基于 v{versionNo(focused.id)} 修改(将从它 fork 出新分支)
                     </div>
                   )}
