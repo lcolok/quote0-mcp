@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -762,6 +762,15 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
     globalDnd: !!itemId, // dialog 打开时整窗口可拖拽/粘贴图片
   });
 
+  // textarea 随内容自动增高(straylight 同款),到 max 再内部滚动
+  const feedbackRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = feedbackRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 40), 160)}px`;
+  }, [feedback, itemId, pendingPlan]);
+
   // ←/→ 切换聚焦 item(输入框聚焦 / 确认面板打开时不抢按键)
   useEffect(() => {
     if (!itemId) return;
@@ -1037,6 +1046,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                         )}
                       </button>
                       <Textarea
+                        ref={feedbackRef}
                         rows={1}
                         placeholder="说说要怎么改…（可拖入 / 粘贴参考图，Enter 提交）"
                         value={feedback}
@@ -1050,7 +1060,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                             }
                           }
                         }}
-                        className="max-h-[160px] min-h-[40px] resize-none self-center border-0 bg-transparent px-0 py-2 shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                        className="max-h-[160px] min-h-[40px] resize-none self-center overflow-y-auto border-0 bg-transparent px-0 py-2 shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
                       />
                       <button
                         type="button"
