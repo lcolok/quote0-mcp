@@ -60,6 +60,7 @@ interface ConfirmedPlan {
   genMode: 'img2img' | 'rewrite';
   refImageUrls: string[];
   effectivePrompt: string;
+  effectivePromptZh: string;
   agentReply: string;
   reasoning: string | null;
 }
@@ -234,6 +235,7 @@ function PathChooser({
   plan,
   versionNo,
   busy,
+  sessionId,
   onConfirm,
   onCancel,
   onZoom,
@@ -242,6 +244,7 @@ function PathChooser({
   plan: PlanResponse;
   versionNo: (turnId: string) => number;
   busy: boolean;
+  sessionId: string | null;
   onConfirm: (c: ConfirmedPlan) => void;
   onCancel: () => void;
   onZoom: (url: string) => void;
@@ -257,13 +260,19 @@ function PathChooser({
   const [sel, setSel] = useState<Set<string>>(
     () => new Set(path.candidateRefs.filter((c) => c.selected).map((c) => c.url))
   );
-  const [prompt, setPrompt] = useState(path.prompt);
+  const [promptZh, setPromptZh] = useState(path.promptZh ?? path.prompt);
+  const [promptEn, setPromptEn] = useState(path.prompt);
+  const [translating, setTranslating] = useState(false);
+  // 中文改动后置 true，必须先「转英文」才能确认（保证中英一致）
+  const [zhDirty, setZhDirty] = useState(false);
 
   // 切换路径 → 重置为该路径的默认 模式/参考图/prompt
   useEffect(() => {
     setMode(path.mode);
     setSel(new Set(path.candidateRefs.filter((c) => c.selected).map((c) => c.url)));
-    setPrompt(path.prompt);
+    setPromptZh(path.promptZh ?? path.prompt);
+    setPromptEn(path.prompt);
+    setZhDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathId]);
 
@@ -274,15 +283,36 @@ function PathChooser({
       return n;
     });
 
-  const confirm = () =>
+  const translate = async () => {
+    const zh = promptZh.trim();
+    if (!zh || translating) return;
+    setTranslating(true);
+    try {
+      const r = await sessionsApi.translatePrompt(sessionId!, zh);
+      setPromptEn(r.prompt);
+      setZhDirty(false);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error ?? '转英文失败');
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const confirm = () => {
+    if (zhDirty) {
+      toast.error('请先点「转英文预览」再确认生成');
+      return;
+    }
     onConfirm({
       parentTurnId: path.baseTurnId,
       genMode: mode,
       refImageUrls: [...sel],
-      effectivePrompt: prompt.trim(),
+      effectivePrompt: promptEn.trim(),
+      effectivePromptZh: promptZh.trim(),
       agentReply: plan.reply,
       reasoning: plan.reasoning,
     });
+  };
 
   // 键盘:↑/↓ 切路径,Enter 确认,Esc 取消(textarea/input 聚焦时不抢)
   useEffect(() => {
@@ -305,7 +335,7 @@ function PathChooser({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, pathId, mode, sel, prompt]);
+  }, [busy, pathId, mode, sel, promptZh, promptEn, zhDirty]);
 
   return (
     <div className="space-y-2.5 rounded-lg border border-purple-300 bg-purple-50/60 p-2.5 dark:border-purple-800 dark:bg-purple-950/30">
@@ -428,14 +458,40 @@ function PathChooser({
 
         <div>
           <div className="mb-1 text-micro font-medium text-muted-foreground">
-            {mode === 'rewrite' ? '重写后的 prompt(可编辑)' : '变更说明(可编辑)'}
+            {mode === 'rewrite' ? '重写后的 prompt(中文编辑)' : '变更说明(中文编辑)'}
           </div>
           <Textarea
             rows={mode === 'rewrite' ? 4 : 2}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            value={promptZh}
+            onChange={(e) => {
+              setPromptZh(e.target.value);
+              setZhDirty(true);
+            }}
             className="text-xs"
           />
+          <div className="mt-1.5 flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={translating || !promptZh.trim()}
+              onClick={translate}
+            >
+              {translating ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+              转英文预览 →
+            </Button>
+            {zhDirty && (
+              <span className="text-micro text-amber-600">中文已改，请先转英文</span>
+            )}
+          </div>
+          {promptEn && (
+            <div className="mt-1.5 rounded-md border border-dashed bg-muted/40 p-1.5">
+              <div className="mb-0.5 text-micro text-muted-foreground/70">英文(喂模型)</div>
+              <p className="whitespace-pre-wrap break-all text-micro text-muted-foreground">
+                {promptEn}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -494,7 +550,7 @@ function PathChooser({
         <Button
           size="sm"
           className="h-7 flex-1 text-xs"
-          disabled={busy || !prompt.trim()}
+          disabled={busy || !promptEn.trim()}
           onClick={confirm}
         >
           {busy ? (
@@ -733,6 +789,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
         genMode: cp.genMode,
         refImageUrls: cp.refImageUrls.length ? cp.refImageUrls : undefined,
         effectivePrompt: cp.effectivePrompt || undefined,
+        effectivePromptZh: cp.effectivePromptZh || undefined,
         agentReply: cp.agentReply || undefined,
         plannerReasoning: cp.reasoning ?? undefined,
         clientRequestId: crypto.randomUUID(),
@@ -1173,6 +1230,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     plan={pendingPlan}
                     versionNo={versionNo}
                     busy={busy}
+                    sessionId={sessionId}
                     onConfirm={(cp) => refineMut.mutate(cp)}
                     onCancel={cancelPlan}
                     onZoom={setZoomUrl}

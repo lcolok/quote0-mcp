@@ -23,6 +23,7 @@ export interface RefineRequest {
   clientRequestId?: string;
   // 确认后执行形态(来自 /plan,前端可编辑)
   effectivePrompt?: string;
+  effectivePromptZh?: string;
   agentReply?: string;
   plannerReasoning?: string;
 }
@@ -48,6 +49,14 @@ export const sessionsApi = {
       .post<{ success: boolean; turnId: string; jobId: string | null }>(
         `/label-sessions/${id}/turns`,
         body
+      )
+      .then((r) => r.data),
+
+  translatePrompt: (id: string, promptZh: string) =>
+    client
+      .post<{ success: boolean; prompt: string; promptZh: string; error?: string }>(
+        `/label-sessions/${id}/translate-prompt`,
+        { promptZh }
       )
       .then((r) => r.data),
 

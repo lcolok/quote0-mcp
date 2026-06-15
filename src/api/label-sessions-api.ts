@@ -335,6 +335,20 @@ labelSessionsApp.post('/:id/turns', async (c) => {
   }
 });
 
+// ============ POST /:id/translate-prompt —— 中译英(编辑中文 prompt → 生图友好的英文) ============
+labelSessionsApp.post('/:id/translate-prompt', async (c) => {
+  try {
+    const body = await c.req.json<{ promptZh?: string }>();
+    const promptZh = (body.promptZh ?? '').trim();
+    if (!promptZh) return c.json({ success: false, error: 'promptZh 不能为空' }, 400);
+    const { prompt, promptZh: outZh } = await translatePromptZhToEn(promptZh);
+    return c.json({ success: true, prompt, promptZh: outZh });
+  } catch (error) {
+    console.error('❌ POST /api/label-sessions/:id/translate-prompt 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
 // ============ POST /:id/select —— 移动当前版本指针(undo/redo/选 fork 分支) ============
 labelSessionsApp.post('/:id/select', async (c) => {
   try {
@@ -920,6 +934,36 @@ function parseLooseJson(text: string): any {
   const end = s.lastIndexOf('}');
   if (start >= 0 && end > start) s = s.slice(start, end + 1);
   return JSON.parse(s);
+}
+
+/** 中译英：用户编辑的中文 prompt → 生图友好的英文 prompt（+ 回填规范化中文）。 */
+async function translatePromptZhToEn(promptZh: string): Promise<{ prompt: string; promptZh: string }> {
+  const db = getPostgresDatabase();
+  const llmConfig = await getActiveLLMConfig(db);
+  const systemPrompt = `You are an expert image-generation prompt engineer for 1-bit thermal label printing.
+The user wrote/edited a prompt in Simplified Chinese. Translate and refine it into a model-friendly English prompt, preserving the user's intent EXACTLY — do not add, remove, or invent subjects.
+Rules:
+1. Output ONLY a JSON object, no markdown fence:
+   {"prompt":"<English prompt under 200 words, pure black&white, bold solid shapes, no gradients/grayscale>","promptZh":"<the user's Chinese intent cleaned up, 50-100 chars>"}
+2. "prompt" is sent directly to the image-generation model, so keep it model-friendly English.
+3. "promptZh" is shown back to the human; keep it faithful to the user's input.`;
+  const content: VisionContentPart[] = [
+    { type: 'text', text: `User's Chinese prompt: "${promptZh}"\n\nWrite the English image-generation prompt now:` },
+  ];
+  const res = await multimodalLLMClient.chat(llmConfig, {
+    systemPrompt,
+    messages: [{ role: 'user', content }],
+    maxTokens: 800,
+    temperature: 0.3,
+  });
+  try {
+    const parsed = JSON.parse(res.text.trim());
+    const prompt = typeof parsed.prompt === 'string' && parsed.prompt.trim() ? parsed.prompt.trim() : res.text.trim();
+    const outZh = typeof parsed.promptZh === 'string' && parsed.promptZh.trim() ? parsed.promptZh.trim() : promptZh;
+    return { prompt, promptZh: outZh };
+  } catch {
+    return { prompt: res.text.trim(), promptZh };
+  }
 }
 
 /** rewrite 模式(旧式直发路径):多模态 LLM 看父版本图 + 父 prompt + 祖先 feedback 链,重写新 prompt */
