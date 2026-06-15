@@ -22,12 +22,23 @@ export class BizyAirClient {
     const endpoint = `${this.baseUrl}/${endpointModel}`;
     const payload = this.buildPayload(req);
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(120_000),  // 120s 上限
-    });
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(75_000),  // 75s 上限（实测成功 ≤62s，留 headroom）
+      });
+    } catch (e: any) {
+      // AbortSignal.timeout 触发 → TimeoutError/AbortError；标记成可识别前缀，供 worker 跳过重试
+      const name = e?.name ?? '';
+      const causeStr = `${e?.cause?.code ?? ''} ${e?.cause?.name ?? ''} ${e?.message ?? ''}`;
+      if (name === 'TimeoutError' || name === 'AbortError' || /timed out|ETIMEDOUT|UND_ERR_CONNECT/i.test(causeStr)) {
+        throw new Error('[BIZYAIR_TIMEOUT] BizyAir 请求超时（75s 上限，疑似 copilot 代理出网间歇断流）');
+      }
+      throw new Error(`BizyAir 网络错误: ${e?.message ?? String(e)}`);
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`BizyAir HTTP ${res.status}: ${text.slice(0, 200)}`);

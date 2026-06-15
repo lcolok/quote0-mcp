@@ -97,8 +97,10 @@ async function executeJob(job: any): Promise<void> {
     console.log(`✅ job ${job.id} succeeded → label ${labelId}`);
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
-    console.error(`❌ job ${job.id} attempt ${job.attempts} failed:`, errMsg);
-    if (job.attempts < job.max_attempts) {
+    // 超时类（代理间歇断流）重试也大概率再等满超时，止损：一次即 fail，不占 3×75s
+    const nonRetryable = errMsg.includes('[BIZYAIR_TIMEOUT]');
+    console.error(`❌ job ${job.id} attempt ${job.attempts} failed${nonRetryable ? ' (non-retryable)' : ''}:`, errMsg);
+    if (!nonRetryable && job.attempts < job.max_attempts) {
       await markRequeued(job.id, errMsg);
     } else {
       await markFailed(job.id, errMsg);
