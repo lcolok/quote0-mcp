@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ArrowUp,
   Check,
+  Crosshair,
   ChevronLeft,
   ChevronRight,
   GitBranch,
@@ -1018,12 +1019,21 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     >
                       {focused && (
                         <div className="flex items-center justify-between gap-2 px-1">
-                          <span className="flex min-w-0 items-center gap-1 text-micro text-blue-500">
-                            <GitBranch className="h-3 w-3 shrink-0" />
-                            <span className="truncate">
-                              基于 v{versionNo(focused.id)} 修改 · 将 fork 新分支
-                            </span>
-                          </span>
+                          {/* context chip:选中的版本=一种上下文参照(同参考图/未来的圈选),中性不预断 fork 行为;✕ 取消=聚焦回采用版 */}
+                          <div className="flex min-w-0 items-center gap-1 rounded-full bg-blue-500/10 py-0.5 pl-2 pr-1 text-micro text-blue-600 dark:text-blue-400">
+                            <Crosshair className="h-3 w-3 shrink-0" />
+                            <span className="truncate">参考 v{versionNo(focused.id)}</span>
+                            {adopted && (
+                              <button
+                                type="button"
+                                onClick={() => setFocusedTurnId(adopted.id)}
+                                title="取消参考(聚焦回采用版)"
+                                className="ml-0.5 shrink-0 rounded-full p-0.5 transition hover:bg-blue-500/20"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
                           {focused.state === 'succeeded' && (
                             <Button
                               size="sm"
