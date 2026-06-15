@@ -8,6 +8,8 @@ import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { batchesApi } from '@/api/batches';
 
+import { friendlyGenError } from '@/lib/gen-error';
+
 import SessionEditorDialog from '@/components/SessionEditorDialog';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 
@@ -230,8 +232,11 @@ export default function BatchDetailPage() {
               ) : it.state === 'failed' ? (
                 <div className="flex flex-col items-center gap-1 text-destructive px-1 text-center">
                   <AlertCircle className="h-5 w-5" />
-                  <span className="text-[10px] truncate max-w-full" title={it.lastError ?? ''}>
-                    {it.lastError ? it.lastError.slice(0, 24) : '失败'}
+                  <span
+                    className="max-w-full truncate text-[10px]"
+                    title={friendlyGenError(it.lastError).hint}
+                  >
+                    {friendlyGenError(it.lastError).title}
                   </span>
                 </div>
               ) : it.label?.pngUrl ? (
@@ -273,6 +278,7 @@ export default function BatchDetailPage() {
       <SessionEditorDialog
         items={items}
         itemId={editorItemId}
+        batchId={id}
         targetId={data.batch.targetId}
         onClose={() => setEditorItem(null)}
         onNavigate={(itemId) => setEditorItem(itemId)}

@@ -12,6 +12,7 @@ import {
   HelpCircle,
   Loader2,
   Plus,
+  RefreshCw,
   Upload,
   Printer,
   Send,
@@ -28,6 +29,8 @@ import { useRefImageUpload } from '@/hooks/useRefImageUpload';
 import { cn } from '@/lib/utils';
 import { sessionsApi } from '@/api/sessions';
 import { labelsApi } from '@/api/labels';
+import { batchesApi } from '@/api/batches';
+import { friendlyGenError } from '@/lib/gen-error';
 import { deviceKindsForTarget } from '@/types/device';
 import type { PlanPath, PlanResponse, SessionTurn } from '@/types/session';
 import type { BatchItem } from '@/types/batch';
@@ -35,6 +38,7 @@ import type { BatchItem } from '@/types/batch';
 interface Props {
   items: BatchItem[];
   itemId: string | null;
+  batchId: string;
   targetId: string;
   onClose: () => void;
   onNavigate: (itemId: string) => void;
@@ -610,7 +614,7 @@ function ClarifyChooser({
   );
 }
 
-export default function SessionEditorDialog({ items, itemId, targetId, onClose, onNavigate }: Props) {
+export default function SessionEditorDialog({ items, itemId, batchId, targetId, onClose, onNavigate }: Props) {
   const qc = useQueryClient();
   const item = items.find((i) => i.id === itemId) ?? null;
   const idx = item ? items.findIndex((i) => i.id === item.id) : -1;
@@ -680,6 +684,15 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
     qc.invalidateQueries({ queryKey: ['session', sessionId] });
     qc.invalidateQueries({ queryKey: ['batch'] });
   };
+
+  const retryMut = useMutation({
+    mutationFn: () => batchesApi.retry(batchId, { scope: { itemIds: [itemId!] } }),
+    onSuccess: () => {
+      toast.success('已重新发起生成');
+      invalidate();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '重试失败'),
+  });
 
   const refineMut = useMutation({
     mutationFn: (cp: ConfirmedPlan) =>
@@ -901,9 +914,39 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                   <span className="text-sm">{focused.state === 'pending' ? '排队中' : '生成中'}</span>
                 </div>
               ) : focused.state === 'failed' ? (
-                <div className="flex max-w-md flex-col items-center gap-2 text-center text-destructive">
-                  <AlertCircle className="h-8 w-8" />
-                  <span className="break-all text-sm">{focused.lastError ?? '生成失败'}</span>
+                <div className="flex max-w-md flex-col items-center gap-3 text-center">
+                  <AlertCircle className="h-8 w-8 text-destructive" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-destructive">
+                      {friendlyGenError(focused.lastError).title}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {friendlyGenError(focused.lastError).hint}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => retryMut.mutate()}
+                    disabled={retryMut.isPending}
+                  >
+                    {retryMut.isPending ? (
+                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                    )}
+                    重试
+                  </Button>
+                  {focused.lastError && (
+                    <details className="w-full text-left">
+                      <summary className="cursor-pointer text-[10px] text-muted-foreground/70 hover:text-muted-foreground">
+                        技术详情
+                      </summary>
+                      <p className="mt-1 break-all rounded bg-muted/60 p-2 text-[10px] text-muted-foreground">
+                        {focused.lastError}
+                      </p>
+                    </details>
+                  )}
                 </div>
               ) : focused.label?.pngUrl ? (
                 <img
