@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeft, Loader2, AlertCircle, Check, X, RefreshCw, Printer, Play } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertCircle, Check, RefreshCw, Printer, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { batchesApi } from '@/api/batches';
-import { labelsApi } from '@/api/labels';
+
 import SessionEditorDialog from '@/components/SessionEditorDialog';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 
@@ -18,6 +18,7 @@ export default function BatchDetailPage() {
   const [template, setTemplate] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [printOpen, setPrintOpen] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
   // 预览编辑器:?item=<itemId> 打开(可刷新/分享)
   const [searchParams, setSearchParams] = useSearchParams();
   const editorItemId = searchParams.get('item');
@@ -63,22 +64,10 @@ export default function BatchDetailPage() {
       invalidate();
     },
   });
-  const reviewMut = useMutation({
-    mutationFn: ({ itemId, review }: { itemId: string; review: 'approved' | 'rejected' }) =>
-      batchesApi.review(id, itemId, review),
-    onSuccess: invalidate,
-  });
-  const regenMut = useMutation({
-    mutationFn: (labelId: string) => labelsApi.regenerate(labelId),
-    onSuccess: () => {
-      toast.success('已重新生成');
-      invalidate();
-    },
-    onError: (e: any) => toast.error(e?.response?.data?.error ?? '重新生成失败'),
-  });
+
   const printMut = useMutation({
     mutationFn: (deviceId: string) =>
-      batchesApi.print(id, selected.size ? { scope: { itemIds: [...selected] }, deviceId } : { scope: 'approved', deviceId }),
+      batchesApi.print(id, { scope: { itemIds: [...selected] }, deviceId }),
     onSuccess: (r) => {
       const failed = (r.results ?? []).filter((x) => !x.ok);
       if (failed.length) {
@@ -168,24 +157,71 @@ export default function BatchDetailPage() {
         </div>
       </Card>
 
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-muted-foreground">标签 {counts.total}</h2>
+        {selectMode ? (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setSelected(new Set(items.filter((i) => i.label).map((i) => i.id)))}
+            >
+              全选
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setSelectMode(false);
+                setSelected(new Set());
+              }}
+            >
+              取消
+            </Button>
+          </div>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => setSelectMode(true)}>
+            选择
+          </Button>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {items.map((it) => (
-          <Card key={it.id} className={`p-3 ${selected.has(it.id) ? 'ring-2 ring-primary' : ''}`}>
-            <div className="flex items-center justify-between mb-1">
-              <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggle(it.id)} />
-              {it.review === 'approved' && <span className="text-xs text-green-600">已批准</span>}
-              {it.review === 'rejected' && <span className="text-xs text-destructive">已打回</span>}
-            </div>
-            <div
-              className="relative aspect-[2/1] overflow-hidden rounded-md bg-muted mb-2 flex items-center justify-center cursor-pointer transition hover:ring-2 hover:ring-primary/60"
-              title="点击进入预览编辑器(多轮微调/版本溯源)"
-              onClick={() => setEditorItem(it.id)}
-            >
-              {it.versionCount > 1 && it.versionNo != null && (
-                <span className="absolute right-1 top-1 z-10 rounded bg-black/70 px-1 py-0.5 text-[10px] font-medium leading-none text-white">
-                  v{it.versionNo}/{it.versionCount}
+          <Card
+            key={it.id}
+            title={selectMode ? '点击选择 / 取消选择' : '点击进入预览编辑器(多轮微调/版本溯源)'}
+            onClick={() => (selectMode ? it.label && toggle(it.id) : setEditorItem(it.id))}
+            className={`p-3 transition cursor-pointer select-none ${selectMode && selected.has(it.id) ? 'ring-2 ring-primary' : ''}`}
+          >
+            <div className="relative aspect-[2/1] overflow-hidden rounded-md bg-muted mb-2 flex items-center justify-center transition hover:ring-2 hover:ring-primary/60">
+              {selectMode && it.label && (
+                <span className="absolute left-1 top-1 z-10">
+                  {selected.has(it.id) ? (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow">
+                      <Check className="h-3.5 w-3.5" />
+                    </span>
+                  ) : (
+                    <span className="block h-5 w-5 rounded-full border-2 border-white/90 bg-black/25 shadow" />
+                  )}
                 </span>
               )}
+              <div className="absolute right-1 top-1 z-10 flex items-center gap-1">
+                {(it.label?.status === 'printed' || (it.label?.printCount ?? 0) > 0) && (
+                  <span
+                    className="flex items-center gap-0.5 rounded bg-green-600/85 px-1 py-0.5 text-[10px] font-medium leading-none text-white"
+                    title={`已打印${it.label?.printCount ? ` ${it.label.printCount} 次` : ''}`}
+                  >
+                    <Printer className="h-2.5 w-2.5" />
+                    {it.label?.printCount ? it.label.printCount : ''}
+                  </span>
+                )}
+                {it.versionCount > 1 && it.versionNo != null && (
+                  <span className="rounded bg-black/70 px-1 py-0.5 text-[10px] font-medium leading-none text-white">
+                    v{it.versionNo}/{it.versionCount}
+                  </span>
+                )}
+              </div>
               {it.state === 'pending' || it.state === 'running' ? (
                 <div className="flex flex-col items-center gap-1 text-purple-500">
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -199,7 +235,12 @@ export default function BatchDetailPage() {
                   </span>
                 </div>
               ) : it.label?.pngUrl ? (
-                <img src={it.label.pngUrl} alt={it.name} className="h-full w-full object-contain" />
+                <img
+                  src={it.label.pngUrl}
+                  alt={it.name}
+                  draggable={false}
+                  className="h-full w-full object-contain pointer-events-none select-none"
+                />
               ) : (
                 <div className="text-xs text-muted-foreground">无预览</div>
               )}
@@ -207,56 +248,27 @@ export default function BatchDetailPage() {
             <p className="text-xs font-medium truncate" title={it.name}>
               {it.name}
             </p>
-            <div className="mt-1 flex items-center gap-1">
-              {it.label && (
-                <>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 px-1.5"
-                    title="重新生成"
-                    onClick={() => regenMut.mutate(it.label!.id)}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 px-1.5 text-green-600"
-                    title="通过"
-                    onClick={() => reviewMut.mutate({ itemId: it.id, review: 'approved' })}
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 px-1.5 text-destructive"
-                    title="打回"
-                    onClick={() => reviewMut.mutate({ itemId: it.id, review: 'rejected' })}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </>
-              )}
-            </div>
           </Card>
         ))}
       </div>
 
-      <div className="sticky bottom-4 flex items-center gap-3 rounded-lg border border-border bg-background/95 backdrop-blur px-4 py-3 shadow-md">
-        <span className="text-sm text-muted-foreground">已选 {selected.size}</span>
-        <Button size="sm" variant="outline" onClick={() => setSelected(new Set(items.map((i) => i.id)))}>
-          全选
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
-          清空
-        </Button>
-        <Button size="sm" className="ml-auto" onClick={() => setPrintOpen(true)} disabled={printMut.isPending}>
-          <Printer className="h-4 w-4 mr-1" />
-          {selected.size ? `打印选中(${selected.size})` : '打印已批准'}
-        </Button>
-      </div>
+      {selectMode && (
+        <div className="sticky bottom-4 flex items-center gap-3 rounded-lg border border-border bg-background/95 backdrop-blur px-4 py-3 shadow-md">
+          <span className="text-sm text-muted-foreground">已选 {selected.size}</span>
+          <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
+            清空
+          </Button>
+          <Button
+            size="sm"
+            className="ml-auto"
+            onClick={() => setPrintOpen(true)}
+            disabled={!selected.size || printMut.isPending}
+          >
+            <Printer className="h-4 w-4 mr-1" />
+            打印选中({selected.size})
+          </Button>
+        </div>
+      )}
 
       <SessionEditorDialog
         items={items}
@@ -273,7 +285,7 @@ export default function BatchDetailPage() {
         pending={printMut.isPending}
         onConfirm={(deviceId) => printMut.mutate(deviceId)}
         title="打印标签"
-        description="选择一台热敏打印机打印选中/已批准的标签。"
+        description="选择一台热敏打印机打印选中的标签。"
       />
     </div>
   );

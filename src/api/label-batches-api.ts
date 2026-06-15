@@ -145,7 +145,7 @@ labelBatchesApp.get('/:id', async (c) => {
     const iRes = await db.getPool().query(
       `SELECT i.id, i.idx, i.name, i.vars, i.ref_image_urls, i.job_id, i.label_id, i.review,
               j.state AS job_state, j.last_error AS job_error,
-              l.id AS l_id, l.png_path, l.status AS label_status,
+              l.id AS l_id, l.png_path, l.status AS label_status, l.print_count AS print_count,
               (SELECT count(*) FROM label_gen_turns t WHERE t.session_id = i.session_id) AS turn_count,
               (SELECT count(*) FROM label_gen_turns t
                 WHERE t.session_id = i.session_id
@@ -174,7 +174,7 @@ labelBatchesApp.get('/:id', async (c) => {
       versionCount: Number(row.turn_count ?? 0),
       versionNo: Number(row.current_no ?? 0) || null,
       label: row.l_id
-        ? { id: row.l_id, pngUrl: pngUrlOf(row.png_path), status: row.label_status }
+        ? { id: row.l_id, pngUrl: pngUrlOf(row.png_path), status: row.label_status, printCount: Number(row.print_count ?? 0) }
         : null,
     }));
 

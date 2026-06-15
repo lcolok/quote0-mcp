@@ -1164,7 +1164,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                             }
                           }
                         }}
-                        className="max-h-[160px] min-h-[40px] resize-none self-center overflow-y-auto border-0 bg-transparent px-0 py-2 shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                        className="max-h-[160px] min-h-[40px] resize-none self-center overflow-y-auto border-0 bg-transparent px-0 py-2 leading-6 shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
                       />
                       <button
                         type="button"
