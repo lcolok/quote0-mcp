@@ -7,6 +7,8 @@ import {
   getSessionTree,
   selectTurn,
 } from '../react-widgets/core/label-session-store.js';
+import { enqueueLabelJob } from '../react-widgets/core/label-job-queue.js';
+import { randomUUID } from 'node:crypto';
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import {
   multimodalLLMClient,
@@ -50,6 +52,31 @@ labelSessionsApp.get('/:id', async (c) => {
     const tree = await getSessionTree(c.req.param('id'));
     if (!tree) return c.json({ success: false, error: 'session 不存在' }, 404);
     const s = tree.session;
+    const mapTurn = (row: any) => ({
+      id: row.id,
+      parentTurnId: row.parent_turn_id,
+      turnKind: row.turn_kind,
+      genMode: row.gen_mode,
+      userFeedback: row.user_feedback,
+      refImageUrls: row.ref_image_urls ?? [],
+      params: row.params,
+      // agent 的确认回复 + planner 决策存在 params.planner(零 schema 改动)
+      agentReply: row.params?.planner?.reply ?? null,
+      effectivePrompt: row.effective_prompt,
+      effectivePromptZh: row.effective_prompt_zh ?? null,
+      jobId: row.job_id,
+      state: turnState(row.job_state, !!row.l_id),
+      lastError: row.job_error ?? null,
+      label: row.l_id
+        ? {
+            id: row.l_id,
+            pngUrl: pngUrlOf(row.png_path),
+            status: row.label_status,
+            sourceImageUrl: row.source_image_url ?? null,
+          }
+        : null,
+      createdAt: row.created_at,
+    });
     return c.json({
       success: true,
       session: {
@@ -59,31 +86,8 @@ labelSessionsApp.get('/:id', async (c) => {
         currentTurnId: s.current_turn_id,
         createdAt: s.created_at,
       },
-      turns: tree.turns.map((row: any) => ({
-        id: row.id,
-        parentTurnId: row.parent_turn_id,
-        turnKind: row.turn_kind,
-        genMode: row.gen_mode,
-        userFeedback: row.user_feedback,
-        refImageUrls: row.ref_image_urls ?? [],
-        params: row.params,
-        // agent 的确认回复 + planner 决策存在 params.planner(零 schema 改动)
-        agentReply: row.params?.planner?.reply ?? null,
-        effectivePrompt: row.effective_prompt,
-        effectivePromptZh: row.effective_prompt_zh ?? null,
-        jobId: row.job_id,
-        state: turnState(row.job_state, !!row.l_id),
-        lastError: row.job_error ?? null,
-        label: row.l_id
-          ? {
-              id: row.l_id,
-              pngUrl: pngUrlOf(row.png_path),
-              status: row.label_status,
-              sourceImageUrl: row.source_image_url ?? null,
-            }
-          : null,
-        createdAt: row.created_at,
-      })),
+      turns: tree.turns.map(mapTurn),
+      recycledTurns: (tree.recycledTurns ?? []).map(mapTurn),
     });
   } catch (error) {
     console.error('❌ GET /api/label-sessions/:id 失败:', error);
@@ -340,6 +344,98 @@ labelSessionsApp.post('/:id/select', async (c) => {
     return c.json({ success: true, labelId: r.labelId });
   } catch (error) {
     console.error('❌ POST /api/label-sessions/:id/select 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /:id/turns/:turnId/retry —— 原地重试失败 turn(同 payload 重入队,不新建版本) ============
+labelSessionsApp.post('/:id/turns/:turnId/retry', async (c) => {
+  try {
+    const sessionId = c.req.param('id');
+    const turnId = c.req.param('turnId');
+    const db = getPostgresDatabase();
+    // 取该 turn 现有 job 的 payload(含已解析的 effective prompt / 参考图 / model)
+    const r = await db.getPool().query(
+      `SELECT j.job_type, j.payload
+         FROM label_gen_turns t JOIN label_jobs j ON j.id = t.job_id
+        WHERE t.id = $1 AND t.session_id = $2 LIMIT 1`,
+      [turnId, sessionId]
+    );
+    if (r.rows.length === 0)
+      return c.json({ success: false, error: 'turn 或其 job 不存在,无法重试' }, 404);
+    const { job_type, payload } = r.rows[0];
+    // 同 payload 重新入队(新 clientRequestId 避免幂等去重)
+    const { jobId } = await enqueueLabelJob({
+      jobType: job_type,
+      payload,
+      clientRequestId: randomUUID(),
+    });
+    // 原地把该 turn 的 job 指针换成新 job,清掉旧 label
+    await db.getPool().query(
+      `UPDATE label_gen_turns SET job_id = $1, label_id = NULL WHERE id = $2`,
+      [jobId, turnId]
+    );
+    // 让该 turn 成为当前 + 同步 batch item 指针到新 job(复用 selectTurn)
+    await selectTurn(sessionId, turnId);
+    return c.json({ success: true, jobId });
+  } catch (error) {
+    console.error('❌ POST /api/label-sessions/:id/turns/:turnId/retry 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ DELETE /:id/turns/:turnId —— 软删除(标记 deleted_at,进回收站,不真删);删当前版则指针移到最近剩余版 ============
+labelSessionsApp.delete('/:id/turns/:turnId', async (c) => {
+  try {
+    const sessionId = c.req.param('id');
+    const turnId = c.req.param('turnId');
+    const pool = getPostgresDatabase().getPool();
+    // 该 session 活跃 turn(按时间升序)
+    const all = await pool.query(
+      `SELECT id FROM label_gen_turns WHERE session_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC`,
+      [sessionId]
+    );
+    if (!all.rows.some((r) => r.id === turnId))
+      return c.json({ success: false, error: 'turn 不存在或不属于该 session' }, 404);
+    if (all.rows.length <= 1)
+      return c.json({ success: false, error: '不能删除最后一个版本' }, 400);
+    // 是否删的是当前采用版
+    const sess = await pool.query(
+      `SELECT current_turn_id FROM label_sessions WHERE id = $1`,
+      [sessionId]
+    );
+    const wasCurrent = sess.rows[0]?.current_turn_id === turnId;
+    // 软删除(FK: parent_turn_id/label_id/job_id 均 ON DELETE SET NULL,不级联误删)
+    await pool.query(`UPDATE label_gen_turns SET deleted_at = now() WHERE id = $1 AND session_id = $2`, [turnId, sessionId]);
+    let currentTurnId: string | null = sess.rows[0]?.current_turn_id ?? null;
+    if (wasCurrent) {
+      const remain = all.rows.filter((r) => r.id !== turnId);
+      const newCurrentTurnId = remain[remain.length - 1].id; // 最近的剩余版
+      currentTurnId = newCurrentTurnId;
+      await selectTurn(sessionId, newCurrentTurnId); // 修指针 + 同步 batch item
+    }
+    return c.json({ success: true, currentTurnId });
+  } catch (error) {
+    console.error('❌ DELETE /api/label-sessions/:id/turns/:turnId 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /:id/turns/:turnId/restore —— 从回收站恢复一个版本 ============
+labelSessionsApp.post('/:id/turns/:turnId/restore', async (c) => {
+  try {
+    const sessionId = c.req.param('id');
+    const turnId = c.req.param('turnId');
+    const pool = getPostgresDatabase().getPool();
+    const r = await pool.query(
+      `UPDATE label_gen_turns SET deleted_at = NULL
+        WHERE id = $1 AND session_id = $2 AND deleted_at IS NOT NULL`,
+      [turnId, sessionId]
+    );
+    if (r.rowCount === 0) return c.json({ success: false, error: '回收的版本不存在' }, 404);
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('❌ POST /api/label-sessions/:id/turns/:turnId/restore 失败:', error);
     return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
   }
 });

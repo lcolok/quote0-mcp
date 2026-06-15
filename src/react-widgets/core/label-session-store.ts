@@ -242,6 +242,7 @@ export async function createStandaloneSession(): Promise<string> {
 export interface SessionTreeRows {
   session: any;
   turns: any[];
+  recycledTurns: any[];
 }
 
 export async function getSessionTree(sessionId: string): Promise<SessionTreeRows | null> {
@@ -252,19 +253,26 @@ export async function getSessionTree(sessionId: string): Promise<SessionTreeRows
     [sessionId]
   );
   if (!s.rows[0]) return null;
-  const t = await pool.query(
-    `SELECT t.id, t.parent_turn_id, t.turn_kind, t.gen_mode, t.user_feedback,
+  const cols = `t.id, t.parent_turn_id, t.turn_kind, t.gen_mode, t.user_feedback,
             t.ref_image_urls, t.params, t.effective_prompt, t.effective_prompt_zh, t.job_id, t.created_at,
             j.state AS job_state, j.last_error AS job_error,
-            l.id AS l_id, l.png_path, l.status AS label_status, l.source_image_url
-       FROM label_gen_turns t
+            l.id AS l_id, l.png_path, l.status AS label_status, l.source_image_url`;
+  const joins = `FROM label_gen_turns t
        LEFT JOIN label_jobs j ON j.id = t.job_id
-       LEFT JOIN labels l ON l.id = COALESCE(t.label_id, j.label_id)
-      WHERE t.session_id = $1
+       LEFT JOIN labels l ON l.id = COALESCE(t.label_id, j.label_id)`;
+  const t = await pool.query(
+    `SELECT ${cols} ${joins}
+      WHERE t.session_id = $1 AND t.deleted_at IS NULL
       ORDER BY t.created_at ASC, t.id ASC`,
     [sessionId]
   );
-  return { session: s.rows[0], turns: t.rows };
+  const recycled = await pool.query(
+    `SELECT ${cols} ${joins}
+      WHERE t.session_id = $1 AND t.deleted_at IS NOT NULL
+      ORDER BY t.deleted_at DESC`,
+    [sessionId]
+  );
+  return { session: s.rows[0], turns: t.rows, recycledTurns: recycled.rows };
 }
 
 /** 移动「当前版本」指针(undo/redo/选 fork 分支),并同步 batch item */

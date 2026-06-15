@@ -121,6 +121,7 @@ export class PostgresDatabase {
     return [
       // Phase F (ADR-0004): BizyAir 图像驱动标签
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'svg'`,
+      `ALTER TABLE label_gen_turns ADD COLUMN IF NOT EXISTS deleted_at timestamptz`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_model text`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_image_url text`,
       // Phase F v1.2.1: async 生成需要新增 generating/failed 状态 + last_error 字段

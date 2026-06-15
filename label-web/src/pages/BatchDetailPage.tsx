@@ -278,7 +278,6 @@ export default function BatchDetailPage() {
       <SessionEditorDialog
         items={items}
         itemId={editorItemId}
-        batchId={id}
         targetId={data.batch.targetId}
         onClose={() => setEditorItem(null)}
         onNavigate={(itemId) => setEditorItem(itemId)}

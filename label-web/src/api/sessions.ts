@@ -55,4 +55,19 @@ export const sessionsApi = {
     client
       .post<{ success: boolean; labelId: string | null }>(`/label-sessions/${id}/select`, { turnId })
       .then((r) => r.data),
+
+  retryTurn: (id: string, turnId: string) =>
+    client
+      .post<{ success: boolean; jobId: string | null }>(`/label-sessions/${id}/turns/${turnId}/retry`)
+      .then((r) => r.data),
+
+  deleteTurn: (id: string, turnId: string) =>
+    client
+      .delete<{ success: boolean; currentTurnId: string | null }>(`/label-sessions/${id}/turns/${turnId}`)
+      .then((r) => r.data),
+
+  restoreTurn: (id: string, turnId: string) =>
+    client
+      .post<{ success: boolean }>(`/label-sessions/${id}/turns/${turnId}/restore`)
+      .then((r) => r.data),
 };

@@ -38,6 +38,7 @@ export interface SessionInfo {
 export interface SessionTree {
   session: SessionInfo;
   turns: SessionTurn[];
+  recycledTurns: SessionTurn[];
 }
 
 /** planner 给出的候选参考图(带默认勾选);用户可在确认面板里加/减 */

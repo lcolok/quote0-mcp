@@ -13,23 +13,34 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  RotateCcw,
   Upload,
   Printer,
   Send,
   Sparkles,
   Sprout,
+  Trash2,
   X,
   ZoomIn,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 import { useRefImageUpload } from '@/hooks/useRefImageUpload';
 import { cn } from '@/lib/utils';
 import { sessionsApi } from '@/api/sessions';
 import { labelsApi } from '@/api/labels';
-import { batchesApi } from '@/api/batches';
 import { friendlyGenError } from '@/lib/gen-error';
 import { deviceKindsForTarget } from '@/types/device';
 import type { PlanPath, PlanResponse, SessionTurn } from '@/types/session';
@@ -38,7 +49,6 @@ import type { BatchItem } from '@/types/batch';
 interface Props {
   items: BatchItem[];
   itemId: string | null;
-  batchId: string;
   targetId: string;
   onClose: () => void;
   onNavigate: (itemId: string) => void;
@@ -614,7 +624,7 @@ function ClarifyChooser({
   );
 }
 
-export default function SessionEditorDialog({ items, itemId, batchId, targetId, onClose, onNavigate }: Props) {
+export default function SessionEditorDialog({ items, itemId, targetId, onClose, onNavigate }: Props) {
   const qc = useQueryClient();
   const item = items.find((i) => i.id === itemId) ?? null;
   const idx = item ? items.findIndex((i) => i.id === item.id) : -1;
@@ -651,6 +661,7 @@ export default function SessionEditorDialog({ items, itemId, batchId, targetId, 
   });
 
   const turns = treeQ.data?.turns ?? [];
+  const recycledTurns = treeQ.data?.recycledTurns ?? [];
   const currentTurnId = treeQ.data?.session.currentTurnId ?? null;
   // adopted = 当前采用版(batch 显示/打印);focused = 正在看/将基于它 fork 的版本
   const adopted = turns.find((t) => t.id === currentTurnId) ?? turns[turns.length - 1] ?? null;
@@ -661,6 +672,7 @@ export default function SessionEditorDialog({ items, itemId, batchId, targetId, 
   const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
   const [focusedTurnId, setFocusedTurnId] = useState<string | null>(null);
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; no: number } | null>(null);
   // 已解决的澄清问答 + 用户主动补充想法的累积链,作为后续 /plan 的上下文
   const [clarifyTrail, setClarifyTrail] = useState<string[]>([]);
 
@@ -686,12 +698,31 @@ export default function SessionEditorDialog({ items, itemId, batchId, targetId, 
   };
 
   const retryMut = useMutation({
-    mutationFn: () => batchesApi.retry(batchId, { scope: { itemIds: [itemId!] } }),
+    mutationFn: () => sessionsApi.retryTurn(sessionId!, focused!.id),
     onSuccess: () => {
       toast.success('已重新发起生成');
       invalidate();
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '重试失败'),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (turnId: string) => sessionsApi.deleteTurn(sessionId!, turnId),
+    onSuccess: () => {
+      toast.success('已删除该版本');
+      setFocusedTurnId(null);
+      invalidate();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '删除失败'),
+  });
+
+  const restoreMut = useMutation({
+    mutationFn: (turnId: string) => sessionsApi.restoreTurn(sessionId!, turnId),
+    onSuccess: () => {
+      toast.success('已恢复该版本');
+      invalidate();
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '恢复失败'),
   });
 
   const refineMut = useMutation({
@@ -1047,35 +1078,83 @@ export default function SessionEditorDialog({ items, itemId, batchId, targetId, 
                       ))}
                     </div>
                   )}
-                  <button
-                    onClick={() => setFocusedTurnId(t.id)}
-                    className={`mr-6 flex w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg border px-2 py-1.5 text-left ${
-                      t.id === focused?.id ? 'ring-2 ring-blue-500' : 'hover:border-primary/50'
-                    } ${t.id === adopted?.id ? 'border-primary' : ''}`}
-                  >
-                    <div className="flex h-9 w-16 shrink-0 items-center justify-center rounded bg-muted">
-                      <TurnThumb turn={t} />
-                    </div>
-                    <div className="min-w-0 flex-1 text-micro text-muted-foreground">
-                      <div className="flex items-center gap-1">
-                        v{i + 1} · {t.genMode ?? t.turnKind}
-                        {t.id === adopted?.id && (
-                          <span className="rounded bg-primary px-1 text-micro text-primary-foreground">
-                            采用
-                          </span>
+                  <div className="group relative">
+                    <button
+                      onClick={() => setFocusedTurnId(t.id)}
+                      className={`mr-6 flex w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg border px-2 py-1.5 text-left ${
+                        t.id === focused?.id ? 'ring-2 ring-blue-500' : 'hover:border-primary/50'
+                      } ${t.id === adopted?.id ? 'border-primary' : ''}`}
+                    >
+                      <div className="flex h-9 w-16 shrink-0 items-center justify-center rounded bg-muted">
+                        <TurnThumb turn={t} />
+                      </div>
+                      <div className="min-w-0 flex-1 text-micro text-muted-foreground">
+                        <div className="flex items-center gap-1">
+                          v{i + 1} · {t.genMode ?? t.turnKind}
+                          {t.id === adopted?.id && (
+                            <span className="rounded bg-primary px-1 text-micro text-primary-foreground">
+                              采用
+                            </span>
+                          )}
+                        </div>
+                        {t.state === 'failed' && (
+                          <div className="truncate text-destructive">{t.lastError ?? '失败'}</div>
                         )}
                       </div>
-                      {t.state === 'failed' && (
-                        <div className="truncate text-destructive">{t.lastError ?? '失败'}</div>
-                      )}
-                    </div>
-                  </button>
+                    </button>
+                    {turns.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingDelete({ id: t.id, no: i + 1 });
+                        }}
+                        disabled={deleteMut.isPending}
+                        title="删除这一版"
+                        className="absolute right-7 top-1 rounded p-1 text-muted-foreground/50 opacity-0 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 disabled:opacity-30"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
               {turns.length === 0 && (
                 <div className="pt-8 text-center text-xs text-muted-foreground">
                   {ensureQ.isLoading || treeQ.isLoading ? '加载中…' : '暂无生成历史'}
                 </div>
+              )}
+              {recycledTurns.length > 0 && (
+                <details className="mt-2 border-t pt-2">
+                  <summary className="cursor-pointer text-micro text-muted-foreground/70 hover:text-muted-foreground">
+                    已回收 ({recycledTurns.length})
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {recycledTurns.map((t) => (
+                      <div
+                        key={t.id}
+                        className="flex items-center gap-2 rounded-lg border border-dashed px-2 py-1.5 opacity-70"
+                      >
+                        <div className="flex h-9 w-16 shrink-0 items-center justify-center rounded bg-muted">
+                          <TurnThumb turn={t} />
+                        </div>
+                        <div className="min-w-0 flex-1 truncate text-micro text-muted-foreground">
+                          {t.userFeedback || (t.turnKind === 'root' ? '初始生成(模板)' : (t.genMode ?? '生成'))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => restoreMut.mutate(t.id)}
+                          disabled={restoreMut.isPending}
+                          title="恢复这一版"
+                          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-micro text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          恢复
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               )}
             </div>
 
@@ -1270,6 +1349,27 @@ export default function SessionEditorDialog({ items, itemId, batchId, targetId, 
         )}
       </DialogContent>
     </Dialog>
+    <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>回收这一版？</AlertDialogTitle>
+          <AlertDialogDescription>
+            版本 v{pendingDelete?.no} 将移入「已回收」,不再出现在会话流中。可随时从回收区恢复。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              if (pendingDelete) deleteMut.mutate(pendingDelete.id);
+              setPendingDelete(null);
+            }}
+          >
+            回收
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     {item?.label?.id && (
       <PrintDeviceDialog
         open={printOpen}
