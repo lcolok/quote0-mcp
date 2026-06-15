@@ -984,19 +984,28 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 )
               ) : (
                 <>
-                  {!focusedIsAdopted && focused && focused.state === 'succeeded' && (
-                    <div className="flex justify-end">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 text-xs"
-                        title="把聚焦的这一版设为当前采用版(batch 显示/打印用),不生成新版本"
-                        disabled={adoptMut.isPending}
-                        onClick={() => adoptMut.mutate(focused.id)}
-                      >
-                        <Check className="mr-1 h-3.5 w-3.5" />
-                        采用此版本
-                      </Button>
+                  {/* 聚焦非采用版时的上下文条:左=基于哪版改 / 右=一键采用,二者合一贴输入框上沿 */}
+                  {focused && !focusedIsAdopted && (
+                    <div className="flex items-center justify-between gap-2 px-1">
+                      <span className="flex min-w-0 items-center gap-1 text-micro text-blue-500">
+                        <GitBranch className="h-3 w-3 shrink-0" />
+                        <span className="truncate">
+                          基于 v{versionNo(focused.id)} 修改 · 将 fork 新分支
+                        </span>
+                      </span>
+                      {focused.state === 'succeeded' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 shrink-0 text-xs"
+                          title="把聚焦的这一版设为当前采用版(batch 显示/打印用),不生成新版本"
+                          disabled={adoptMut.isPending}
+                          onClick={() => adoptMut.mutate(focused.id)}
+                        >
+                          <Check className="mr-1 h-3.5 w-3.5" />
+                          采用此版本
+                        </Button>
+                      )}
                     </div>
                   )}
                   <div
@@ -1090,11 +1099,6 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                       className="hidden"
                     />
                   </div>
-                  {focused && !focusedIsAdopted && (
-                    <div className="text-center text-micro text-blue-500">
-                      正在基于 v{versionNo(focused.id)} 修改(将从它 fork 出新分支)
-                    </div>
-                  )}
                 </>
               )}
             </div>
