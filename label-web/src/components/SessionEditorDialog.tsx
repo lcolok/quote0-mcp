@@ -794,6 +794,15 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
     return () => clearTimeout(t);
   }, [showCtxBar]);
 
+  // 「全部上下文」展开/折叠状态持久化(localStorage),刷新页面后恢复
+  const [ctxOpen, setCtxOpen] = useState(() => {
+    try {
+      return localStorage.getItem('quote0:labelSession:contextOpen') === '1';
+    } catch {
+      return false;
+    }
+  });
+
   // ←/→ 切换聚焦 item(输入框聚焦 / 确认面板打开时不抢按键)
   useEffect(() => {
     if (!itemId) return;
@@ -909,9 +918,21 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
               )}
             </div>
             {focused && (focused.effectivePrompt || focused.refImageUrls.length > 0) && (
-              <details className="border-t px-4 py-2 text-xs text-muted-foreground">
+              <details
+                open={ctxOpen}
+                onToggle={(e) => {
+                  const o = (e.currentTarget as HTMLDetailsElement).open;
+                  setCtxOpen(o);
+                  try {
+                    localStorage.setItem('quote0:labelSession:contextOpen', o ? '1' : '0');
+                  } catch {
+                    /* localStorage 不可用时忽略 */
+                  }
+                }}
+                className="border-t px-4 py-2 text-xs text-muted-foreground"
+              >
                 <summary className="cursor-pointer select-none">
-                  本版本 context(v{versionNo(focused.id)} · {focused.genMode ?? focused.turnKind})
+                  本版本全部上下文(v{versionNo(focused.id)} · {focused.genMode ?? focused.turnKind})
                 </summary>
                 {focused.refImageUrls.length > 0 && (
                   <div className="mt-2">
