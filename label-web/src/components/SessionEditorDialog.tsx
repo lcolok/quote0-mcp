@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   AlertCircle,
+  ArrowUp,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -991,16 +992,16 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                   )}
                   <div
                     className={cn(
-                      'relative rounded-lg border bg-background transition focus-within:ring-1 focus-within:ring-ring',
-                      up.isDragging && 'border-primary',
+                      'relative flex flex-col gap-1 rounded-3xl border border-border/60 bg-muted/40 px-2 py-1.5 shadow-sm transition focus-within:border-border focus-within:ring-1 focus-within:ring-ring',
+                      up.isDragging && 'border-primary ring-1 ring-primary',
                     )}
                   >
                     {refUrls.length > 0 && (
-                      <div className="flex flex-wrap gap-2 p-2 pb-0">
+                      <div className="flex flex-wrap gap-2 px-1 pt-1">
                         {refUrls.map((url, idx) => (
                           <div
                             key={idx}
-                            className="relative h-14 w-14 overflow-hidden rounded-md border bg-muted group"
+                            className="group relative h-16 w-16 overflow-hidden rounded-xl border border-border bg-muted"
                           >
                             <img
                               src={url}
@@ -1012,7 +1013,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                               type="button"
                               onClick={() => up.remove(idx)}
                               disabled={busy}
-                              className="absolute top-0.5 right-0.5 rounded bg-background/80 p-0.5 opacity-0 group-hover:opacity-100 hover:bg-destructive hover:text-destructive-foreground transition"
+                              className="absolute right-1 top-1 rounded-full bg-background/80 p-0.5 opacity-0 transition group-hover:opacity-100 hover:bg-destructive hover:text-destructive-foreground"
                               title="移除"
                             >
                               <X className="h-3 w-3" />
@@ -1021,47 +1022,54 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                         ))}
                       </div>
                     )}
-                    <Textarea
-                      rows={2}
-                      placeholder="说说要怎么改,例如:字再大一点、整体更可爱、去掉边框…(支持拖入 / Ctrl+V 粘贴参考图)"
-                      value={feedback}
-                      onChange={(e) => setFeedback(e.target.value)}
-                      onPaste={up.handlePaste}
-                      className="min-h-[56px] resize-none border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                    />
-                    <div className="flex items-center justify-between gap-2 p-2 pt-0">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={up.openPicker}
-                          disabled={!up.canAddMore || up.isUploading}
-                          title="添加参考图（或 Ctrl+V 粘贴）"
-                          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 transition"
-                        >
-                          {up.isUploading ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Plus className="h-4 w-4" />
-                          )}
-                        </button>
-                        <span className="text-[10px] text-muted-foreground">
-                          {refUrls.length}/10 · AI 视觉输入
-                        </span>
-                      </div>
-                      <Button
-                        size="sm"
-                        className="h-7"
-                        disabled={!focused || !feedback.trim() || busy}
+                    <div className="grid grid-cols-[auto_1fr_auto] items-end gap-1">
+                      <button
+                        type="button"
+                        onClick={up.openPicker}
+                        disabled={!up.canAddMore || up.isUploading}
+                        title="添加参考图（可拖入 / Ctrl+V 粘贴）"
+                        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                      >
+                        {up.isUploading ? (
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : (
+                          <Plus className="h-5 w-5" />
+                        )}
+                      </button>
+                      <Textarea
+                        rows={1}
+                        placeholder="说说要怎么改…（可拖入 / 粘贴参考图，Enter 提交）"
+                        value={feedback}
+                        onChange={(e) => setFeedback(e.target.value)}
+                        onPaste={up.handlePaste}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                            e.preventDefault();
+                            if (focused && feedback.trim() && !busy) {
+                              planMut.mutate({ clarifications: clarifyTrail });
+                            }
+                          }
+                        }}
+                        className="max-h-[160px] min-h-[40px] resize-none self-center border-0 bg-transparent px-0 py-2 shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                      />
+                      <button
+                        type="button"
                         onClick={() => planMut.mutate({ clarifications: clarifyTrail })}
+                        disabled={!focused || !feedback.trim() || busy}
+                        title={`让 agent 规划方案${focused ? ` · 基于 v${versionNo(focused.id)}` : ''}`}
+                        className={cn(
+                          'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-all',
+                          !focused || !feedback.trim() || busy
+                            ? 'cursor-not-allowed bg-muted text-muted-foreground'
+                            : 'bg-primary text-primary-foreground hover:opacity-90',
+                        )}
                       >
                         {busy ? (
-                          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                          <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <Send className="mr-1 h-4 w-4" />
+                          <ArrowUp className="h-5 w-5" strokeWidth={2.5} />
                         )}
-                        让 agent 规划方案
-                        {focused ? `(聚焦 v${versionNo(focused.id)})` : ''}
-                      </Button>
+                      </button>
                     </div>
                     <input
                       type="file"
