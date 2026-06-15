@@ -771,6 +771,21 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 40), 160)}px`;
   }, [feedback, itemId, pendingPlan]);
 
+  // 上下文条 250ms 弹出/缓动收起:showCtxBar 真→挂载并下一帧展开;假→先收起再延时卸载
+  const showCtxBar = !!focused && !focusedIsAdopted;
+  const [ctxBarRender, setCtxBarRender] = useState(false);
+  const [ctxBarShown, setCtxBarShown] = useState(false);
+  useEffect(() => {
+    if (showCtxBar) {
+      setCtxBarRender(true);
+      const r = requestAnimationFrame(() => setCtxBarShown(true));
+      return () => cancelAnimationFrame(r);
+    }
+    setCtxBarShown(false);
+    const t = setTimeout(() => setCtxBarRender(false), 250);
+    return () => clearTimeout(t);
+  }, [showCtxBar]);
+
   // ←/→ 切换聚焦 item(输入框聚焦 / 确认面板打开时不抢按键)
   useEffect(() => {
     if (!itemId) return;
@@ -962,7 +977,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
             </div>
 
             {/* 输入区 / 路径选择器:补充上下文 → 规划(多路径)→ 选路径确认 → 生成 */}
-            <div className="shrink-0 space-y-2 border-t p-3">
+            <div className="shrink-0 border-t p-3">
               {pendingPlan ? (
                 pendingPlan.kind === 'clarify' ? (
                   <ClarifyChooser
@@ -984,27 +999,38 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 )
               ) : (
                 <>
-                  {/* 聚焦非采用版时的上下文条:左=基于哪版改 / 右=一键采用,二者合一贴输入框上沿 */}
-                  {focused && !focusedIsAdopted && (
-                    <div className="flex items-center justify-between gap-2 px-1">
-                      <span className="flex min-w-0 items-center gap-1 text-micro text-blue-500">
-                        <GitBranch className="h-3 w-3 shrink-0" />
-                        <span className="truncate">
-                          基于 v{versionNo(focused.id)} 修改 · 将 fork 新分支
-                        </span>
-                      </span>
-                      {focused.state === 'succeeded' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-6 shrink-0 text-xs"
-                          title="把聚焦的这一版设为当前采用版(batch 显示/打印用),不生成新版本"
-                          disabled={adoptMut.isPending}
-                          onClick={() => adoptMut.mutate(focused.id)}
-                        >
-                          <Check className="mr-1 h-3.5 w-3.5" />
-                          采用此版本
-                        </Button>
+                  {/* 聚焦非采用版上下文条:左=基于哪版改 / 右=一键采用;250ms 弹出/缓动收起(pb-2 自带间距,收起时一并归零不突跳) */}
+                  {ctxBarRender && (
+                    <div
+                      className={cn(
+                        'overflow-hidden transition-all duration-[250ms] ease-out',
+                        ctxBarShown
+                          ? 'max-h-14 translate-y-0 pb-2 opacity-100'
+                          : 'max-h-0 -translate-y-1 pb-0 opacity-0',
+                      )}
+                    >
+                      {focused && (
+                        <div className="flex items-center justify-between gap-2 px-1">
+                          <span className="flex min-w-0 items-center gap-1 text-micro text-blue-500">
+                            <GitBranch className="h-3 w-3 shrink-0" />
+                            <span className="truncate">
+                              基于 v{versionNo(focused.id)} 修改 · 将 fork 新分支
+                            </span>
+                          </span>
+                          {focused.state === 'succeeded' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 shrink-0 text-xs"
+                              title="把聚焦的这一版设为当前采用版(batch 显示/打印用),不生成新版本"
+                              disabled={adoptMut.isPending}
+                              onClick={() => adoptMut.mutate(focused.id)}
+                            >
+                              <Check className="mr-1 h-3.5 w-3.5" />
+                              采用此版本
+                            </Button>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
