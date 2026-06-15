@@ -13,6 +13,8 @@ export interface SessionTurn {
   refImageUrls: string[];
   params: Record<string, any> | null;
   effectivePrompt: string | null;
+  /** 中文版 prompt(双语:给人看/编辑;英文 effectivePrompt 给模型生图)。后端未返回时为 undefined,前端回退英文 */
+  effectivePromptZh?: string | null;
   jobId: string | null;
   state: TurnState;
   lastError: string | null;
@@ -56,6 +58,8 @@ export interface PlanPath {
   baseVersionNo: number | null;
   mode: 'img2img' | 'rewrite';
   prompt: string;
+  /** 中文版 prompt(给人看/编辑);后端未返回时 undefined,前端回退英文 prompt */
+  promptZh?: string;
   rationale: string;
   candidateRefs: CandidateRef[];
 }

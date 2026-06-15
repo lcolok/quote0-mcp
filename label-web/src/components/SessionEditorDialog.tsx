@@ -931,10 +931,18 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     </div>
                   </div>
                 )}
-                {focused.effectivePrompt && (
+                {(focused.effectivePromptZh || focused.effectivePrompt) && (
                   <div className="mt-2">
                     <div className="mb-1 text-micro text-muted-foreground/70">prompt</div>
-                    <p className="whitespace-pre-wrap break-all">{focused.effectivePrompt}</p>
+                    <p className="whitespace-pre-wrap break-all">
+                      {focused.effectivePromptZh || focused.effectivePrompt}
+                    </p>
+                    {/* 双语都有时,英文(实际喂模型的)作为更淡的溯源次要行 */}
+                    {focused.effectivePromptZh && focused.effectivePrompt && (
+                      <p className="mt-1 whitespace-pre-wrap break-all text-micro text-muted-foreground/50">
+                        {focused.effectivePrompt}
+                      </p>
+                    )}
                   </div>
                 )}
               </details>

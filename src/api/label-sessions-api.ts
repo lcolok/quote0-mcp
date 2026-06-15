@@ -70,6 +70,7 @@ labelSessionsApp.get('/:id', async (c) => {
         // agent 的确认回复 + planner 决策存在 params.planner(零 schema 改动)
         agentReply: row.params?.planner?.reply ?? null,
         effectivePrompt: row.effective_prompt,
+        effectivePromptZh: row.effective_prompt_zh ?? null,
         jobId: row.job_id,
         state: turnState(row.job_state, !!row.l_id),
         lastError: row.job_error ?? null,
@@ -107,6 +108,7 @@ interface PlanPath {
   baseVersionNo: number | null;
   mode: 'img2img' | 'rewrite';
   prompt: string;
+  promptZh: string;
   rationale: string;
   candidateRefs: CandidateRef[];
 }
@@ -194,6 +196,7 @@ labelSessionsApp.post('/:id/turns', async (c) => {
       clientRequestId?: string;
       // 确认后执行形态(来自 /plan,前端可编辑)
       effectivePrompt?: string;
+      effectivePromptZh?: string;
       agentReply?: string;
       plannerReasoning?: string;
     }>();
@@ -229,6 +232,7 @@ labelSessionsApp.post('/:id/turns', async (c) => {
     targetId = targetId ?? 'label-T40x20-320';
 
     let effectivePrompt: string;
+    let effectivePromptZh: string | null = null;
     let refs: string[];
 
     if (isFresh) {
@@ -272,11 +276,14 @@ labelSessionsApp.post('/:id/turns', async (c) => {
         effectivePrompt = body.effectivePrompt!.trim();
       } else {
         try {
-          effectivePrompt = await rewritePromptViaLLM(parent, feedback);
+          const r = await rewritePromptViaLLM(parent, feedback);
+          effectivePrompt = r.prompt;
+          effectivePromptZh = r.promptZh;
         } catch (e) {
           // LLM 不可用时降级:父 prompt + 调整指令直接拼接
           console.warn('⚠️ rewrite LLM 调用失败,降级拼接:', e instanceof Error ? e.message : e);
           effectivePrompt = `${parent.effective_prompt ?? ''}\n\nAdjustment: ${feedback}`.trim();
+          effectivePromptZh = feedback;
           extraParams.rewriteDegraded = true;
         }
       }
@@ -300,6 +307,7 @@ labelSessionsApp.post('/:id/turns', async (c) => {
       refImageUrls: body.refImageUrls ?? null,
       params: { model, presetId, targetId, ...(isFresh ? { fresh: true } : {}), ...extraParams },
       effectivePrompt,
+      effectivePromptZh: body.effectivePromptZh ?? effectivePromptZh ?? null,
       clientRequestId: body.clientRequestId ?? null,
       enqueue: {
         jobType: 'image',
@@ -495,6 +503,7 @@ async function planPaths(opts: {
         baseVersionNo: null,
         mode,
         prompt: feedback,
+        promptZh: feedback,
         rationale: '不继承任何现有版本的像素/prompt,从你的图或描述全新起一棵树。',
         candidateRefs: refsForPath(new Set(userUploads)),
       });
@@ -514,6 +523,7 @@ async function planPaths(opts: {
         baseVersionNo: base.versionNo,
         mode,
         prompt: feedback,
+        promptZh: feedback,
         rationale: '在你当前所在版本上微调,保留已有全部改动(可能叠加噪声)。',
         candidateRefs: refsForPath(sel),
       });
@@ -531,6 +541,7 @@ async function planPaths(opts: {
         baseVersionNo: cleanV.versionNo,
         mode: cleanV.srcUrl ? 'img2img' : 'rewrite',
         prompt: feedback,
+        promptZh: feedback,
         rationale: '从更早、未叠加多层修改的干净版本重做,避免 GIGO。',
         candidateRefs: refsForPath(sel),
       });
@@ -575,7 +586,8 @@ B) "paths" — when the request is clear enough to act. Propose a FLEXIBLE numbe
   - baseVersion: which version number to fork from, OR 0 for a FRESH START (brand-new root, inherits NO existing pixels/prompt).
   - mode: "img2img" (preserve composition; needs a base image) or "rewrite" (regenerate from a fresh prompt).
   - useRefIndices: ADDITIONAL refs YOU choose for THIS path, kept MINIMAL (img2img on an existing base → include that base's own image; fresh → ONLY user-provided images source=upload/input, never an AI product). IMPORTANT — two distinct image roles: (1) EVERY image shown to you above is CONTEXT for understanding the evolution, NOT necessarily a generation ref. (2) Generation refs = images actually fed to the image model. Any candidate labeled "你本轮选的参考图" (source=upload) is a HARD ref the USER explicitly requires; it is ALWAYS sent regardless of your indices — do not bother listing it. When the user staged NO such pick, it is up to YOU to choose the right generation ref(s) via useRefIndices.
-  - prompt: rewrite → full English prompt (<200 words, pure black&white, bold solid shapes, no gradients/grayscale); img2img → concise English change instruction.
+  - prompt: rewrite → full English prompt (<200 words, pure black&white, bold solid shapes, no gradients/grayscale), ALWAYS sent to the image model; img2img → concise English change instruction.
+  - promptZh: Simplified Chinese summary (50-100 chars) of the SAME intent as "prompt", for human reading/editing. Must be present for every path.
   Strategy values you MAY use as appropriate (none mandatory): "incremental" (refine the focused version), "clean-restart" (fork an earlier cleaner version to dodge GIGO), "fresh" (baseVersion 0). Use ONLY the ones that genuinely apply to this request. Mark the single best path recommended:true.
 
 Output ONLY a JSON object, no markdown fence:
@@ -584,7 +596,7 @@ Output ONLY a JSON object, no markdown fence:
   "reply": "一句简体中文总览(你的判断与理由)",
   "question": "(仅 kind=clarify)一句简体中文澄清问题",
   "choices": [ { "label": "简体中文选项", "description": "一句简体中文说明" } ],
-  "paths": [ { "label": "简体中文标签", "recommended": true, "strategy": "incremental|clean-restart|fresh", "baseVersion": 0, "mode": "img2img|rewrite", "useRefIndices": [0], "prompt": "...", "rationale": "一句简体中文取舍" } ]
+  "paths": [ { "label": "简体中文标签", "recommended": true, "strategy": "incremental|clean-restart|fresh", "baseVersion": 0, "mode": "img2img|rewrite", "useRefIndices": [0], "prompt": "...", "promptZh": "...", "rationale": "一句简体中文取舍" } ]
 }
 (kind=clarify 时只填 question+choices(2-5 个);kind=paths 时只填 paths(1-N 个,按需))`;
 
@@ -746,6 +758,7 @@ Output ONLY a JSON object, no markdown fence:
     }
 
     const prompt = typeof p.prompt === 'string' && p.prompt.trim() ? p.prompt.trim() : feedback;
+    const promptZh = typeof p.promptZh === 'string' && p.promptZh.trim() ? p.promptZh.trim() : feedback;
     const strategy: PlanPath['strategy'] = wantsFresh
       ? 'fresh'
       : p.strategy === 'clean-restart'
@@ -765,6 +778,7 @@ Output ONLY a JSON object, no markdown fence:
       baseVersionNo: wantsFresh ? null : bv!.versionNo,
       mode,
       prompt,
+      promptZh,
       rationale: typeof p.rationale === 'string' ? p.rationale.trim() : '',
       candidateRefs: refsForPath(sel),
     });
@@ -783,6 +797,7 @@ Output ONLY a JSON object, no markdown fence:
       baseVersionNo: null,
       mode: hasUserImg ? 'img2img' : 'rewrite',
       prompt: feedback,
+      promptZh: feedback,
       rationale: '不继承任何现有版本的像素/prompt,从你的图或纯描述全新起一棵树。',
       candidateRefs: refsForPath(new Set(userUploads)),
     });
@@ -815,7 +830,7 @@ function parseLooseJson(text: string): any {
 async function rewritePromptViaLLM(
   parent: { id: string; effective_prompt: string | null; png_path: string | null },
   feedback: string
-): Promise<string> {
+): Promise<{ prompt: string; promptZh: string }> {
   const db = getPostgresDatabase();
   const llmConfig = await getActiveLLMConfig(db);
 
@@ -836,11 +851,12 @@ async function rewritePromptViaLLM(
 
   const systemPrompt = `You are an expert image-generation prompt engineer for 1-bit thermal label printing.
 Given the CURRENT prompt (and optionally the image it produced), plus the user's adjustment request,
-write a NEW single English prompt that keeps everything the user did not ask to change and applies the requested adjustment.
+write a NEW prompt pair that keeps everything the user did not ask to change and applies the requested adjustment.
 Rules:
-1. Output ONLY the prompt string. No quotes, no markdown, no explanation.
-2. Keep it concise (under 200 words), suitable for direct input to image-generation models.
-3. Preserve thermal-label-friendly style: pure black and white, bold solid shapes, no gradients, no grayscale.`;
+1. Output ONLY a JSON object, no markdown fence:
+   {"prompt":"<English prompt under 200 words, pure black&white, bold solid shapes, no gradients/grayscale>","promptZh":"<Simplified Chinese 50-100 chars, same intent, for human reading/editing>"}
+2. "prompt" is sent directly to the image-generation model, so keep it model-friendly English.
+3. "promptZh" is shown to the human user; it must express the same intent as "prompt" in concise Simplified Chinese.`;
 
   const content: VisionContentPart[] = [
     { type: 'text', text: `CURRENT prompt: "${parent.effective_prompt ?? '(unknown)'}"` },
@@ -868,10 +884,17 @@ Rules:
   const res = await multimodalLLMClient.chat(llmConfig, {
     systemPrompt,
     messages: [{ role: 'user', content }],
-    maxTokens: 500,
+    maxTokens: 800,
     temperature: 0.4,
   });
-  return res.text.trim();
+  try {
+    const parsed = JSON.parse(res.text.trim());
+    const prompt = typeof parsed.prompt === 'string' && parsed.prompt.trim() ? parsed.prompt.trim() : res.text.trim();
+    const promptZh = typeof parsed.promptZh === 'string' && parsed.promptZh.trim() ? parsed.promptZh.trim() : feedback;
+    return { prompt, promptZh };
+  } catch {
+    return { prompt: res.text.trim(), promptZh: feedback };
+  }
 }
 
 export default labelSessionsApp;

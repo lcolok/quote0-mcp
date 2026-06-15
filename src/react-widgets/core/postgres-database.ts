@@ -295,11 +295,13 @@ export class PostgresDatabase {
         ref_image_urls    jsonb,
         params            jsonb,
         effective_prompt  text,
+        effective_prompt_zh text,
         job_id            uuid REFERENCES label_jobs(id) ON DELETE SET NULL,
         label_id          uuid REFERENCES labels(id) ON DELETE SET NULL,
         client_request_id text UNIQUE,
         created_at        timestamptz NOT NULL DEFAULT now()
       )`,
+      `ALTER TABLE label_gen_turns ADD COLUMN IF NOT EXISTS effective_prompt_zh text`,
       `CREATE INDEX IF NOT EXISTS label_gen_turns_session_idx
         ON label_gen_turns(session_id, created_at)`,
       `ALTER TABLE label_batch_items ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES label_sessions(id) ON DELETE SET NULL`,

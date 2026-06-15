@@ -17,6 +17,7 @@ export interface CreateTurnOpts {
   refImageUrls?: string[] | null;
   params?: Record<string, any> | null;
   effectivePrompt?: string | null;
+  effectivePromptZh?: string | null;
   clientRequestId?: string | null;
   /** 异步路径:入队 label_jobs(createTurn 自动注入 session:/turn: tags) */
   enqueue?: { jobType: 'image' | 'widget'; payload: Record<string, any> } | null;
@@ -63,8 +64,8 @@ export async function createTurn(opts: CreateTurnOpts): Promise<CreateTurnResult
   const ins = await pool.query(
     `INSERT INTO label_gen_turns
        (session_id, parent_turn_id, turn_kind, gen_mode, user_feedback,
-        ref_image_urls, params, effective_prompt, label_id, client_request_id)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)
+        ref_image_urls, params, effective_prompt, effective_prompt_zh, label_id, client_request_id)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11)
      ON CONFLICT (client_request_id) DO NOTHING
      RETURNING id`,
     [
@@ -76,6 +77,7 @@ export async function createTurn(opts: CreateTurnOpts): Promise<CreateTurnResult
       opts.refImageUrls && opts.refImageUrls.length ? JSON.stringify(opts.refImageUrls) : null,
       opts.params ? JSON.stringify(opts.params) : null,
       opts.effectivePrompt ?? null,
+      opts.effectivePromptZh ?? null,
       opts.labelId ?? null,
       opts.clientRequestId ?? null,
     ]
@@ -252,7 +254,7 @@ export async function getSessionTree(sessionId: string): Promise<SessionTreeRows
   if (!s.rows[0]) return null;
   const t = await pool.query(
     `SELECT t.id, t.parent_turn_id, t.turn_kind, t.gen_mode, t.user_feedback,
-            t.ref_image_urls, t.params, t.effective_prompt, t.job_id, t.created_at,
+            t.ref_image_urls, t.params, t.effective_prompt, t.effective_prompt_zh, t.job_id, t.created_at,
             j.state AS job_state, j.last_error AS job_error,
             l.id AS l_id, l.png_path, l.status AS label_status, l.source_image_url
        FROM label_gen_turns t
