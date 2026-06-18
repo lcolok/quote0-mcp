@@ -26,6 +26,7 @@ import labelSessionsApp from './label-sessions-api.js';
 import memosApp from './memos-api.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { labelPrintOrchestrator } from '../react-widgets/core/label-print-orchestrator.js';
+import { thermalLabelRenderer } from '../react-widgets/core/thermal-label-rendering-module.js';
 import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
 
 // 时间格式化工具函数
@@ -1539,6 +1540,53 @@ app.post('/api/labels/print', async (c) => {
     }, statusCode);
   } catch (error) {
     console.error('❌ POST /api/labels/print 失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误',
+    }, 500);
+  }
+});
+
+// ============================================================
+// POST /api/labels/voice — 语音标签闭环(供 ESP32-S3 小智调用)
+// 输入: { text, targetId? }；输出: packed 1-bit 位图二进制(application/octet-stream)
+// 与 /api/labels/print 不同：不 push 给打印机，而是把位图回给设备，由设备自己
+// (S3 BLE niimbot) 预览确认后打印。P1 先把语音文本当标题渲染；
+// P3 再接 LLM 分析需求 / BizyAir 生图。
+// ============================================================
+app.post('/api/labels/voice', async (c) => {
+  try {
+    const body = await c.req.json<{ text: string; targetId?: string }>();
+    if (!body.text || typeof body.text !== 'string' || body.text.trim() === '') {
+      return c.json({ success: false, error: 'text 必填，且不能为空字符串' }, 400);
+    }
+
+    const targetId = body.targetId ?? 'label-T40x20-320';
+    const target = await resolveLabelTarget(targetId);
+    if (!target) {
+      return c.json({ success: false, error: `未知 targetId: ${targetId}` }, 400);
+    }
+    if (target.kind !== 'thermal-label') {
+      return c.json({ success: false, error: `target ${targetId} kind=${target.kind} 不是热敏标签` }, 400);
+    }
+
+    // P1: 直接把语音文本当标题渲染（P3 接 LLM 分析/AI 生图后替换这里）
+    const data = { title: body.text.trim() };
+    console.log(`🎙️  语音标签请求: targetId=${targetId} text="${data.title}"`);
+    const r = await thermalLabelRenderer.render(data, target);
+    console.log(`✅ 渲染完成回传: ${r.bitmapBuffer.length} bytes / printId=${r.printId}`);
+
+    // 回传 packed 位图二进制 + 尺寸/预览头(S3 据此 BLE 打印)
+    const buf = r.bitmapBuffer;
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    c.header('Content-Type', 'application/octet-stream');
+    c.header('X-Width-Px', String(target.widthPx));
+    c.header('X-Height-Px', String(target.heightPx));
+    c.header('X-Print-Id', r.printId);
+    c.header('X-Title', encodeURIComponent(data.title));
+    return c.body(ab as ArrayBuffer);
+  } catch (error) {
+    console.error('❌ POST /api/labels/voice 失败:', error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '未知错误',
