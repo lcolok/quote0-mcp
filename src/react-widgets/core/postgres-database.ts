@@ -913,7 +913,7 @@ export class PostgresDatabase {
       { name: 'active setting', sql: `INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
         SELECT 1,
           (SELECT id FROM llm_providers WHERE slug='siliconflow'),
-          (SELECT id FROM llm_models WHERE model_id='deepseek-ai/DeepSeek-V4-Flash')
+          (SELECT id FROM llm_models WHERE model_id='deepseek-ai/DeepSeek-V3')
         WHERE NOT EXISTS (SELECT 1 FROM llm_active_setting)` },
     ];
     const llmResult = await this.runSeedStatements(client, llmSeedStatements);
