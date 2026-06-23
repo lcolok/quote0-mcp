@@ -58,7 +58,7 @@
     "@babel/parser": "^7.29.3",
     "@babel/traverse": "^7.29.0",
     "@modelcontextprotocol/sdk": "^1.17.2",
-    "@resvg/resvg-js": "^2.6.2",
+    "@resvg/resvg-js": "2.7.0-alpha.2",
     "@types/pg": "^8.15.5",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
