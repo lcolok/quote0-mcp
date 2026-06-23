@@ -1048,7 +1048,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 <span className="text-sm text-muted-foreground">无预览</span>
               )}
             </div>
-            {focused && (focused.effectivePrompt || focused.refImageUrls.length > 0) && (
+            {focused && (focused.effectivePrompt || focused.refImageUrls.length > 0 || focused.label?.sourceImageUrl) && (
               <details
                 open={ctxOpen}
                 onToggle={(e) => {
@@ -1065,6 +1065,17 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 <summary className="cursor-pointer select-none">
                   本版本全部上下文(v{versionNo(focused.id)} · {focused.genMode ?? focused.turnKind})
                 </summary>
+                {focused.label?.sourceImageUrl && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-micro text-muted-foreground/70">AI 原图</div>
+                    <img
+                      src={focused.label.sourceImageUrl}
+                      alt="AI 原图"
+                      onClick={() => setZoomUrl(focused.label!.sourceImageUrl)}
+                      className="h-12 w-12 cursor-zoom-in rounded border object-cover"
+                    />
+                  </div>
+                )}
                 {focused.refImageUrls.length > 0 && (
                   <div className="mt-2">
                     <div className="mb-1 text-micro text-muted-foreground/70">
@@ -1390,7 +1401,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
               src={zoomUrl}
               alt=""
               className="max-h-full max-w-full object-contain"
-              style={{ imageRendering: 'pixelated' }}
+              style={{ imageRendering: zoomUrl === focused?.label?.sourceImageUrl ? 'auto' : 'pixelated' }}
             />
           </div>
         )}
