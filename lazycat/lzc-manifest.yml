@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.3
+version: 1.21.4
 
 # 应用名称
 name: Quote0 新闻服务
@@ -169,7 +169,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-label-web:v1.17.0-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.21.0
+    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.21.4
 #@build end
     depends_on:
       - news-api
