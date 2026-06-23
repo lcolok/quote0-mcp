@@ -7,6 +7,7 @@ import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
 import { promptOrchestrator } from '../react-widgets/services/prompt-orchestrator.js';
+import { dpiForDeviceType } from '../react-widgets/core/device-dpi.js';
 import type { RenderTarget } from '../react-widgets/core/render-targets.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
@@ -174,7 +175,7 @@ async function executeImageJob(payload: any): Promise<string> {
       kind: 'thermal-label',
       widthPx: currentLabel.widthPx,
       heightPx: currentLabel.heightPx,
-      dpi: 203,
+      dpi: dpiForDeviceType(currentLabel?.device?.deviceType),
       colorMode: 'mono-1bit',
       physical: { widthMm: currentLabel.spec.w, heightMm: currentLabel.spec.h },
       defaultFontStack: ['smiley-sans'],

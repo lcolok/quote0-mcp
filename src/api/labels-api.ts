@@ -12,6 +12,7 @@ import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
+import { deriveTargetForDevice } from '../react-widgets/core/device-dpi.js';
 import { createTurn, createStandaloneSession } from '../react-widgets/core/label-session-store.js';
 
 const labelsApp = new Hono();
@@ -849,7 +850,13 @@ labelsApp.post('/:id/print', async (c) => {
       return c.json({ success: false, error: `标签生成失败，无法打印: ${label.last_error ?? '未知错误'}` }, 400);
     }
 
-    const target = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
+    let target = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
+
+    // 按目标打印机机型 DPI 派生正确像素（B1 Pro 300dpi vs B21 203dpi）。
+    // 复用已有 niimbotClient（base URL 从 NIIMBOT_ENDPOINT 推导）。
+    const _devInfo = await niimbotClient.getDeviceInfo();
+    target = deriveTargetForDevice(target, _devInfo?.deviceType);
+    console.log(`[print] device_type=${_devInfo?.deviceType ?? 'unknown'} → ${target.widthPx}x${target.heightPx}@${target.dpi}dpi`);
 
     // 按 source_type 分发 bitmap 获取
     let bitmapBuffer: Buffer;

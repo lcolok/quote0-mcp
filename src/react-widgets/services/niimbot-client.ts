@@ -5,6 +5,8 @@
  * gateway 实现位于另一个 repo (esp32-health-station)，本 client 是只读消费方。
  */
 
+import { dpiForDeviceType, mmToWidthPx, mmToHeightPx } from '../core/device-dpi.js';
+
 const NIIMBOT_TIMEOUT_MS = 3000;       // 3s 单请求超时（gateway 在 LAN 内，应该秒回）
 const CLOUD_LOOKUP_TIMEOUT_MS = 8000;  // 云反查给长一点（去外网）
 
@@ -40,7 +42,7 @@ export interface CurrentLabelInfo {
   device: NiimbotDeviceInfo | null;
   rfid: NiimbotRfidInfo;
   spec: NiimbotSpec;
-  widthPx: number;    // mm × 8 (203 DPI = 8 px/mm)
+  widthPx: number;    // 按 device_type DPI 从 mm 换算（B21 203dpi / B1 Pro 300dpi）
   heightPx: number;
   source: 'spec-local' | 'spec-cloud';
 }
@@ -174,12 +176,13 @@ export class NiimbotClient {
     }
     if (!spec) return null;
 
+    const dpi = dpiForDeviceType(device?.deviceType);
     return {
       device,
       rfid,
       spec,
-      widthPx: spec.w * 8,    // 203 DPI = 8 px/mm
-      heightPx: spec.h * 8,
+      widthPx: mmToWidthPx(spec.w, dpi),
+      heightPx: mmToHeightPx(spec.h, dpi),
       source,
     };
   }
