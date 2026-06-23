@@ -957,7 +957,7 @@ Rules:
     temperature: 0.3,
   });
   try {
-    const parsed = JSON.parse(res.text.trim());
+    const parsed = parseLooseJson(res.text);  // 剥 markdown fence（DeepSeek V3 等常返回 ```json 包裹）
     const prompt = typeof parsed.prompt === 'string' && parsed.prompt.trim() ? parsed.prompt.trim() : res.text.trim();
     const outZh = typeof parsed.promptZh === 'string' && parsed.promptZh.trim() ? parsed.promptZh.trim() : promptZh;
     return { prompt, promptZh: outZh };
@@ -1028,7 +1028,7 @@ Rules:
     temperature: 0.4,
   });
   try {
-    const parsed = JSON.parse(res.text.trim());
+    const parsed = parseLooseJson(res.text);  // 剥 markdown fence（DeepSeek V3 等常返回 ```json 包裹）
     const prompt = typeof parsed.prompt === 'string' && parsed.prompt.trim() ? parsed.prompt.trim() : res.text.trim();
     const promptZh = typeof parsed.promptZh === 'string' && parsed.promptZh.trim() ? parsed.promptZh.trim() : feedback;
     return { prompt, promptZh };
