@@ -19,6 +19,30 @@ const labelsApp = new Hono();
 const imageStorage = getImageStorage();
 const MINIO_BUCKET = process.env.MINIO_BUCKET || 'quote0-images';
 
+// ── preview-dither-batch 结果缓存 ──
+// 同一 (原图 URL, 预览尺寸, 算法) 的抖动结果是确定的，缓存 base64 避免每次重算
+// （重抖/重生成会换 source_image_url 或换设备改尺寸 → key 自然失效）。朴素 LRU 容量上限。
+const DITHER_PREVIEW_CACHE = new Map<string, string>();
+const DITHER_PREVIEW_CACHE_MAX = 600; // ≈ 46 标签 × 13 算法
+function ditherPreviewKey(sourceUrl: string, w: number, h: number, algo: string): string {
+  return `${sourceUrl}|${w}x${h}|${algo}`;
+}
+function ditherPreviewGet(key: string): string | undefined {
+  const v = DITHER_PREVIEW_CACHE.get(key);
+  if (v !== undefined) {
+    DITHER_PREVIEW_CACHE.delete(key); // touch：移到末尾标记最近使用
+    DITHER_PREVIEW_CACHE.set(key, v);
+  }
+  return v;
+}
+function ditherPreviewSet(key: string, val: string): void {
+  DITHER_PREVIEW_CACHE.set(key, val);
+  if (DITHER_PREVIEW_CACHE.size > DITHER_PREVIEW_CACHE_MAX) {
+    const oldest = DITHER_PREVIEW_CACHE.keys().next().value; // 最旧 = 最久未用
+    if (oldest !== undefined) DITHER_PREVIEW_CACHE.delete(oldest);
+  }
+}
+
 /**
  * 把 DB row (snake_case) 转成 API 输出 (camelCase)，与 label-web 前端 type 对齐。
  * print_history jsonb 数组内字段也要 transform：
@@ -323,23 +347,33 @@ labelsApp.post('/:id/preview-dither-batch', async (c) => {
       heightPx: previewH,
     };
 
-    // 只 fetch 一次源图 buffer，避免每个算法都拉图
-    const imgRes = await fetch(row.source_image_url, { signal: AbortSignal.timeout(60_000) });
-    if (!imgRes.ok) {
-      throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${row.source_image_url}`);
-    }
-    const sourceBuffer = Buffer.from(await imgRes.arrayBuffer());
+    // 先查缓存，只对未命中的算法现算
+    const wanted = algorithms.map((algo) => ({
+      algo,
+      key: ditherPreviewKey(row.source_image_url, previewW, previewH, algo),
+    }));
+    const misses = wanted.filter((w) => ditherPreviewGet(w.key) === undefined);
 
-    // 并行生成所有算法的预览 PNG（只读，不写 MinIO/DB）
-    const previewResults = await Promise.all(
-      algorithms.map(async (algo) => {
-        const pngBuffer = await imageLabelGenerator.ditherPreview(sourceBuffer, previewTarget, algo);
-        return {
-          algorithm: algo,
-          pngBase64: pngBuffer.toString('base64'),
-        };
-      })
-    );
+    // 仅当存在未命中时才下载源图（命中全部 → 零下载零重算）
+    if (misses.length > 0) {
+      const imgRes = await fetch(row.source_image_url, { signal: AbortSignal.timeout(60_000) });
+      if (!imgRes.ok) {
+        throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${row.source_image_url}`);
+      }
+      const sourceBuffer = Buffer.from(await imgRes.arrayBuffer());
+      // 并行生成未命中算法的预览 PNG（只读，不写 MinIO/DB），写入缓存
+      await Promise.all(
+        misses.map(async ({ algo, key }) => {
+          const pngBuffer = await imageLabelGenerator.ditherPreview(sourceBuffer, previewTarget, algo);
+          ditherPreviewSet(key, pngBuffer.toString('base64'));
+        })
+      );
+    }
+
+    const previewResults = wanted.map(({ algo, key }) => ({
+      algorithm: algo,
+      pngBase64: ditherPreviewGet(key)!,
+    }));
 
     return c.json({
       success: true,

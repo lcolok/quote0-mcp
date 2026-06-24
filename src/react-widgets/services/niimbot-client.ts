@@ -56,9 +56,22 @@ export class NiimbotClient {
    * 现场失败时回退到它，消除界面闪烁与打错尺寸的风险。设备热插拔后会被下次成功读取覆盖。
    */
   private lastDeviceInfo: NiimbotDeviceInfo | null = null;
+  private lastDeviceInfoTs = 0;
 
   /** 上次成功读到的 RFID 信息缓存（同 lastDeviceInfo，现场读失败时回退，避免卡片整体翻离线） */
   private lastRfid: NiimbotRfidInfo | null = null;
+  private lastRfidTs = 0;
+
+  /**
+   * 设备/RFID 读的 TTL 新鲜窗口。
+   * device_type/RFID 纸张只在换机器/换纸卷时变，没必要每次都现场 BLE 读。
+   * TTL 内直接返回缓存、零 C3 调用 → 卡片秒开，且大幅降低 BLE 读频率（少读 = 少 status=13 断连）。
+   * 换纸卷后最多 TTL 毫秒才反映新值，可接受。
+   */
+  private static readonly GATEWAY_TTL_MS = 4000;
+
+  /** spec 按 barcode 是不变量，永久缓存（换纸卷会换 barcode → 自然换 key） */
+  private specCache = new Map<string, NiimbotSpec>();
 
   /**
    * C3 网关访问串行锁。
@@ -85,6 +98,10 @@ export class NiimbotClient {
   async getDeviceInfo(): Promise<NiimbotDeviceInfo | null> {
     const base = this.getBaseUrl();
     if (!base) return this.lastDeviceInfo;
+    // TTL 内直接返回缓存，跳过 BLE 读
+    if (this.lastDeviceInfo && Date.now() - this.lastDeviceInfoTs < NiimbotClient.GATEWAY_TTL_MS) {
+      return this.lastDeviceInfo;
+    }
     return this.serializeGateway(async () => {
       try {
         const r = await fetch(`${base}/api/info`, {
@@ -104,6 +121,7 @@ export class NiimbotClient {
           labelType: d.label_type,
         };
         this.lastDeviceInfo = info; // 记录最近一次成功值
+        this.lastDeviceInfoTs = Date.now();
         return info;
       } catch (e) {
         console.warn('[niimbot] getDeviceInfo failed:', e instanceof Error ? e.message : e);
@@ -115,6 +133,10 @@ export class NiimbotClient {
   async getRfid(): Promise<NiimbotRfidInfo | null> {
     const base = this.getBaseUrl();
     if (!base) return this.lastRfid;
+    // TTL 内直接返回缓存，跳过 BLE 读
+    if (this.lastRfid && Date.now() - this.lastRfidTs < NiimbotClient.GATEWAY_TTL_MS) {
+      return this.lastRfid;
+    }
     return this.serializeGateway(async () => {
       try {
         const r = await fetch(`${base}/api/rfid`, {
@@ -134,6 +156,7 @@ export class NiimbotClient {
           type: d.type,
         };
         this.lastRfid = info; // 记录最近一次成功值
+        this.lastRfidTs = Date.now();
         return info;
       } catch (e) {
         console.warn('[niimbot] getRfid failed:', e instanceof Error ? e.message : e);
@@ -146,6 +169,9 @@ export class NiimbotClient {
   async getLocalSpec(barcode: string): Promise<NiimbotSpec | null> {
     const base = this.getBaseUrl();
     if (!base) return null;
+    // spec 按 barcode 不变，命中永久缓存直接返回，零 C3 调用
+    const cached = this.specCache.get(barcode);
+    if (cached) return cached;
     return this.serializeGateway(async () => {
     try {
       const r = await fetch(`${base}/api/specs`, {
@@ -155,7 +181,7 @@ export class NiimbotClient {
       const list: any[] = await r.json();
       const match = list.find((s) => s.bc === barcode);
       if (!match) return null;
-      return {
+      const spec: NiimbotSpec = {
         bc: match.bc,
         w: match.w,
         h: match.h,
@@ -163,6 +189,8 @@ export class NiimbotClient {
         isCable: match.is_cable,
         cableLen: match.cable_len,
       };
+      this.specCache.set(barcode, spec);
+      return spec;
     } catch (e) {
       console.warn('[niimbot] getLocalSpec failed:', e instanceof Error ? e.message : e);
       return null;
