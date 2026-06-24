@@ -81,6 +81,19 @@ export class ImageLabelGenerator {
     return this.ditherToOutputs(originalBuffer, target, algo);
   }
 
+  /**
+   * 轻量预览：直接对原图 buffer 做缩放→灰度→dither，仅返回 PNG buffer。
+   * 不写 MinIO、不写 DB，供批量预览端点只读调用。
+   */
+  async ditherPreview(
+    sourceBuffer: Buffer,
+    target: RenderTarget,
+    algo: DitherAlgorithm = 'threshold'
+  ): Promise<Buffer> {
+    const { pngBuffer } = await this.ditherToOutputs(sourceBuffer, target, algo);
+    return pngBuffer;
+  }
+
 }
 
 export const imageLabelGenerator = new ImageLabelGenerator();

@@ -7,12 +7,12 @@ import { imageLabelGenerator } from '../react-widgets/services/image-label-gener
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
 import { listWidgets, SUPPORTED_FONTS, getWidget } from '../react-widgets/core/label-widget-registry.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
-import { isDitherAlgorithm, DEFAULT_DITHER, type DitherAlgorithm } from '../react-widgets/core/dither-algorithms.js';
+import { isDitherAlgorithm, DEFAULT_DITHER, DITHER_ALGORITHMS, type DitherAlgorithm } from '../react-widgets/core/dither-algorithms.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
-import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
+import { BUILTIN_TARGETS, LABEL_T40X20_TARGET, type RenderTarget } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
-import { deriveTargetForDevice } from '../react-widgets/core/device-dpi.js';
+import { deriveTargetForDevice, dpiForDeviceType, modelNameForDeviceType } from '../react-widgets/core/device-dpi.js';
 import { createTurn, createStandaloneSession } from '../react-widgets/core/label-session-store.js';
 
 const labelsApp = new Hono();
@@ -266,6 +266,96 @@ labelsApp.post('/:id/redither', async (c) => {
     });
   } catch (error) {
     console.error('❌ POST /api/labels/:id/redither 失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误',
+    }, 500);
+  }
+});
+
+// POST /:id/preview-dither-batch — 批量生成各抖动算法的预览图（纯只读，不写 MinIO/DB）
+labelsApp.post('/:id/preview-dither-batch', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = (await c.req.json().catch(() => ({}))) as {
+      algorithms?: string[];
+      maxWidth?: number;
+    };
+
+    // 入参校验与缺省
+    const algorithms: DitherAlgorithm[] = Array.isArray(body.algorithms)
+      ? body.algorithms.filter(isDitherAlgorithm)
+      : [...DITHER_ALGORITHMS];
+    if (algorithms.length === 0) {
+      return c.json({ success: false, error: 'algorithms 为空或全部非法' }, 400);
+    }
+    const maxWidth = typeof body.maxWidth === 'number' && body.maxWidth > 0
+      ? Math.round(body.maxWidth)
+      : 192;
+
+    const db = getPostgresDatabase();
+    const labelRes = await db.getPool().query(
+      `SELECT target_id, source_type, source_image_url FROM labels WHERE id = $1 AND status != 'archived' LIMIT 1`,
+      [id]
+    );
+    if (labelRes.rows.length === 0) {
+      return c.json({ success: false, error: '标签不存在或已归档' }, 404);
+    }
+    const row = labelRes.rows[0];
+    if (row.source_type !== 'image') {
+      return c.json({ success: false, error: 'preview-dither-batch 仅支持 source_type=image 的标签' }, 400);
+    }
+    if (!row.source_image_url) {
+      return c.json({ success: false, error: '该标签缺 source_image_url' }, 400);
+    }
+
+    // 取设备信息并按真实机型派生打印 target
+    const dev = await niimbotClient.getDeviceInfo();
+    const storedTarget = BUILTIN_TARGETS.find((t) => t.id === row.target_id) ?? LABEL_T40X20_TARGET;
+    const printTarget = deriveTargetForDevice(storedTarget, dev?.deviceType);
+
+    // 按 maxWidth 保持比例缩放到预览 target
+    const previewW = Math.min(maxWidth, printTarget.widthPx);
+    const previewH = Math.round(printTarget.heightPx * (previewW / printTarget.widthPx));
+    const previewTarget: RenderTarget = {
+      ...printTarget,
+      widthPx: previewW,
+      heightPx: previewH,
+    };
+
+    // 只 fetch 一次源图 buffer，避免每个算法都拉图
+    const imgRes = await fetch(row.source_image_url, { signal: AbortSignal.timeout(60_000) });
+    if (!imgRes.ok) {
+      throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${row.source_image_url}`);
+    }
+    const sourceBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+    // 并行生成所有算法的预览 PNG（只读，不写 MinIO/DB）
+    const previewResults = await Promise.all(
+      algorithms.map(async (algo) => {
+        const pngBuffer = await imageLabelGenerator.ditherPreview(sourceBuffer, previewTarget, algo);
+        return {
+          algorithm: algo,
+          pngBase64: pngBuffer.toString('base64'),
+        };
+      })
+    );
+
+    return c.json({
+      success: true,
+      target: {
+        deviceType: dev?.deviceType ?? null,
+        dpi: printTarget.dpi,
+        modelName: modelNameForDeviceType(dev?.deviceType),
+        printWidthPx: printTarget.widthPx,
+        printHeightPx: printTarget.heightPx,
+        previewWidthPx: previewW,
+        previewHeightPx: previewH,
+      },
+      previews: previewResults,
+    });
+  } catch (error) {
+    console.error('❌ POST /api/labels/:id/preview-dither-batch 失败:', error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '未知错误',
@@ -538,6 +628,12 @@ labelsApp.get('/current-target', async (c) => {
         },
       });
     }
+
+    // 复用设备 DPI/机型名工具，向后兼容补充字段
+    const deviceType = info.device?.deviceType ?? null;
+    const dpi = deviceType != null ? dpiForDeviceType(deviceType) : info.widthPx / (info.spec.w / 25.4);
+    const modelName = modelNameForDeviceType(deviceType);
+
     return c.json({
       success: true,
       target: {
@@ -545,6 +641,9 @@ labelsApp.get('/current-target', async (c) => {
         heightMm: info.spec.h,
         widthPx: info.widthPx,
         heightPx: info.heightPx,
+        deviceType,
+        dpi,
+        modelName,
         sku: info.spec.sku,
         rfidBarcode: info.rfid.barcode,
         totalMm: info.rfid.totalMm,

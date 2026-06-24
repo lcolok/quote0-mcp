@@ -5,6 +5,13 @@ export const DEVICE_TYPE_DPI: Record<number, number> = {
   775: 203,   // B21
   4097: 300,  // B1 Pro (0x1001)
 };
+
+// device_type → 机型显示名
+export const DEVICE_TYPE_NAME: Record<number, string> = {
+  775: 'B21',
+  4097: 'B1 Pro',
+};
+
 export const DEFAULT_DPI = 203;
 
 export function dpiForDeviceType(deviceType?: number | null): number {
@@ -12,6 +19,11 @@ export function dpiForDeviceType(deviceType?: number | null): number {
     return DEVICE_TYPE_DPI[deviceType];
   }
   return DEFAULT_DPI;
+}
+
+export function modelNameForDeviceType(deviceType?: number | null): string {
+  if (deviceType == null) return 'Unknown';
+  return DEVICE_TYPE_NAME[deviceType] ?? `Unknown (${deviceType})`;
 }
 
 export function pxPerMm(dpi: number): number {
