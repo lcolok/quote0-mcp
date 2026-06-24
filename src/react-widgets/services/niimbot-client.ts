@@ -48,6 +48,15 @@ export interface CurrentLabelInfo {
 }
 
 export class NiimbotClient {
+  /**
+   * 上次成功读到的设备信息缓存。
+   * C3 的 /api/info 每次都现场向 B1 Pro 发起 BLE 读取，约半数会超时/返回 null，
+   * 导致 getDeviceInfo 间歇性拿不到 device_type，进而让 current-target / 打印派生
+   * 退回 203dpi 默认值（机型 Unknown、打印尺寸算错）。这里缓存最近一次成功值，
+   * 现场失败时回退到它，消除界面闪烁与打错尺寸的风险。设备热插拔后会被下次成功读取覆盖。
+   */
+  private lastDeviceInfo: NiimbotDeviceInfo | null = null;
+
   /** 从 NIIMBOT_ENDPOINT (含 /api/print/raw) 推导 base URL */
   private getBaseUrl(): string | null {
     const ep = process.env.NIIMBOT_ENDPOINT;
@@ -57,14 +66,16 @@ export class NiimbotClient {
 
   async getDeviceInfo(): Promise<NiimbotDeviceInfo | null> {
     const base = this.getBaseUrl();
-    if (!base) return null;
+    if (!base) return this.lastDeviceInfo;
     try {
       const r = await fetch(`${base}/api/info`, {
         signal: AbortSignal.timeout(NIIMBOT_TIMEOUT_MS),
       });
-      if (!r.ok) return null;
+      if (!r.ok) return this.lastDeviceInfo;
       const d: any = await r.json();
-      return {
+      // C3 BLE 读取失败时会返回 null 或缺 device_type，此时回退缓存
+      if (!d || d.device_type == null) return this.lastDeviceInfo;
+      const info: NiimbotDeviceInfo = {
         deviceType: d.device_type,
         serial: d.serial,
         swVersion: d.sw_version,
@@ -73,9 +84,11 @@ export class NiimbotClient {
         density: d.density,
         labelType: d.label_type,
       };
+      this.lastDeviceInfo = info; // 记录最近一次成功值
+      return info;
     } catch (e) {
       console.warn('[niimbot] getDeviceInfo failed:', e instanceof Error ? e.message : e);
-      return null;
+      return this.lastDeviceInfo;
     }
   }
 
