@@ -155,6 +155,7 @@ labelsApp.post('/generate-image', async (c) => {
       clientRequestId?: string;
       presetId?: string;          // 'none' / preset uuid / undefined（兼容老前端）
       refImageUrls?: string[];    // MinIO ref 图 URL 数组
+      ditherAlgorithm?: string;   // 13 种抖动算法之一，缺省/非法 → DEFAULT_DITHER
     }>();
     if (!body.prompt || body.prompt.trim() === '') {
       return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
@@ -162,6 +163,10 @@ labelsApp.post('/generate-image', async (c) => {
     if (!['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2'].includes(body.model)) {
       return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
     }
+
+    const ditherAlgorithm: DitherAlgorithm = isDitherAlgorithm(body.ditherAlgorithm)
+      ? body.ditherAlgorithm
+      : DEFAULT_DITHER;
 
     // 收敛到 session/turn 总账(docs/Label-Session-Editor-Spec.md):单条设计 = standalone session 的 root turn
     const sessionId = await createStandaloneSession();
@@ -184,6 +189,7 @@ labelsApp.post('/generate-image', async (c) => {
           tags: body.tags,
           presetId: body.presetId ?? undefined,
           refImageUrls: body.refImageUrls ?? [],
+          ditherAlgorithm,
         },
       },
     });

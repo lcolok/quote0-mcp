@@ -1,7 +1,8 @@
 import sharp from 'sharp';
 import type { ActiveLLMConfig } from '../core/llm-config.js';
 import type { RenderTarget } from '../core/render-targets.js';
-import { packFromPng } from '../core/bitmap-packer.js';
+import { packMonoBuffer } from '../core/bitmap-packer.js';
+import { ditherGrayscaleToMono, DEFAULT_DITHER, type DitherAlgorithm } from '../core/dither-algorithms.js';
 
 export interface LLMLabelGenResult {
   svg: string;
@@ -113,19 +114,32 @@ export class LLMLabelGenerator {
     return svg;
   }
 
-  /** SVG → PNG → threshold → MSB-first 1-bit pack */
+  /** SVG → PNG → dither → MSB-first 1-bit pack */
   async svgToBitmap(
     svg: string,
-    target: RenderTarget
+    target: RenderTarget,
+    ditherAlgo: DitherAlgorithm = DEFAULT_DITHER
   ): Promise<{ pngBuffer: Buffer; bitmapBuffer: Buffer }> {
-    const pngBuffer = await sharp(Buffer.from(svg), { density: 72 })
+    const { data: raw } = await sharp(Buffer.from(svg), { density: 72 })
       .resize(target.widthPx, target.heightPx, {
         fit: 'contain',
         background: '#ffffff',
       })
+      .grayscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const mono = ditherGrayscaleToMono(
+      new Uint8Array(raw.buffer, raw.byteOffset, raw.length),
+      target.widthPx,
+      target.heightPx,
+      ditherAlgo
+    );
+    const pngBuffer = await sharp(Buffer.from(mono), {
+      raw: { width: target.widthPx, height: target.heightPx, channels: 1 },
+    })
       .png()
       .toBuffer();
-    const bitmapBuffer = await packFromPng(pngBuffer, target);
+    const bitmapBuffer = packMonoBuffer(mono, target);
     return { pngBuffer, bitmapBuffer };
   }
 }

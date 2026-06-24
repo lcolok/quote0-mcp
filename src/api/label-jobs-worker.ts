@@ -9,6 +9,8 @@ import { niimbotClient } from '../react-widgets/services/niimbot-client.js';
 import { promptOrchestrator } from '../react-widgets/services/prompt-orchestrator.js';
 import { dpiForDeviceType } from '../react-widgets/core/device-dpi.js';
 import type { RenderTarget } from '../react-widgets/core/render-targets.js';
+import { isDitherAlgorithm, DEFAULT_DITHER } from '../react-widgets/core/dither-algorithms.js';
+import type { DitherAlgorithm } from '../react-widgets/core/dither-algorithms.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
 const TICK_MS = 5000;
@@ -198,6 +200,11 @@ async function executeImageJob(payload: any): Promise<string> {
     console.warn(`⚠️ niimbot RFID 不可用，fallback target=${target.id}`);
   }
 
+  // 2.5 resolve dither 算法（非法/缺省 fallback DEFAULT_DITHER）
+  const algo: DitherAlgorithm = isDitherAlgorithm(payload.ditherAlgorithm)
+    ? payload.ditherAlgorithm
+    : DEFAULT_DITHER;
+
   // 3. 解析 presetId —— v1.9.0 兼容策略：
   //    - payload.presetId === 'none' → 不应用任何 preset（前端 v1.10 显式传）
   //    - payload.presetId === undefined → 老前端兼容，自动应用系统 "热敏默认"
@@ -285,6 +292,7 @@ async function executeImageJob(payload: any): Promise<string> {
     payload.model,
     target,
     mergedOptions,
+    algo,
   );
 
   // 7. INSERT labels — prompt 字段存原始用户 prompt（让历史 / preset 复用清晰）
@@ -300,16 +308,17 @@ async function executeImageJob(payload: any): Promise<string> {
   );
 
   await db.getPool().query(
-    `INSERT INTO labels (id, prompt, svg, target_id, llm_model, bin_bytes, tags,
+    `INSERT INTO labels (id, prompt, svg, target_id, llm_model, bin_bytes, dither_algorithm, tags,
                           source_type, source_model, png_path, source_image_url, llm_latency_ms,
                           applied_preset_id, status)
-     VALUES ($1, $2, NULL, $3, $4, $5, $6, 'image', $7, $8, $9, $10, $11, 'draft')`,
+     VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'image', $8, $9, $10, $11, $12, 'draft')`,
     [
       labelId,
       payload.prompt,                  // 原始用户 prompt
       target.id,
       payload.model,
       result.bitmapBuffer.length,
+      algo,                            // 实际使用的抖动算法
       payload.tags ?? [],
       payload.model,
       pngPath,
