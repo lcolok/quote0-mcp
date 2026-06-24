@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.6
+version: 1.21.7
 
 # 应用名称
 name: Quote0 新闻服务
@@ -167,9 +167,9 @@ services:
   # ADR-0002 Phase D：LLM-Gen 标签管理系统 Web 应用（React SPA + Nginx）
   label-web:
 #@build if env.DEV_MODE=1
-    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.17.0-dev
+    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.21.7-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.21.4
+    image: dev.logic.heiyu.space/friday/quote0-label-web:v1.21.7
 #@build end
     depends_on:
       - news-api
@@ -186,7 +186,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.5-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.6
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.7
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1
