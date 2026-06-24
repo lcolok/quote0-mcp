@@ -78,11 +78,20 @@ export class NiimbotClient {
   private rfidRefreshInFlight: Promise<NiimbotRfidInfo | null> | null = null;
 
   constructor() {
-    // 启动预热：开机先把设备/RFID 缓存暖上，让首屏也无需等 C3 的 ~2.8s 冷读。
-    // fire-and-forget，失败无妨（下次调用再读）。
-    if (this.getBaseUrl()) {
-      void this.getDeviceInfo();
-      void this.getRfid();
+    // 启动预热：开机就把设备/RFID 缓存暖上，让首屏也无需等 C3 的 ~2.8s 冷读。
+    if (this.getBaseUrl()) void this.warmup();
+  }
+
+  /**
+   * 带重试的启动预热。C3 开机/重连那刻 BLE 可能尚未就绪，单次预热会落空，
+   * 故重试若干次直到设备+RFID 缓存都暖上（或达上限）。fire-and-forget，失败无妨。
+   */
+  private async warmup(): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await this.refreshDeviceInfo();
+      await this.refreshRfid();
+      if (this.lastDeviceInfo && this.lastRfid) return; // 暖好即收
+      await new Promise((res) => setTimeout(res, 2000));
     }
   }
 
