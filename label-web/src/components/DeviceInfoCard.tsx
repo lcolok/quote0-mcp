@@ -98,7 +98,7 @@ export default function DeviceInfoCard() {
             </span>
             <div className="font-medium text-foreground">
               {typeof target.device?.battery === 'number'
-                ? `${target.device.battery}/4`
+                ? `${target.device.battery}%`
                 : '-'}
             </div>
           </div>
