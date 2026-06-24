@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Battery, BatteryWarning, Printer, Ruler, Tag } from 'lucide-react';
+import { Battery, BatteryWarning, Image as ImageIcon, Printer, Ruler, Tag } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { labelsApi } from '@/api/labels';
@@ -70,7 +70,7 @@ export default function DeviceInfoCard() {
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-4 text-sm items-start">
           <div className="space-y-0.5">
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Printer className="h-3 w-3" />
@@ -124,8 +124,11 @@ export default function DeviceInfoCard() {
             )}
           </div>
 
-          <div className="col-span-2 space-y-0.5">
-            <span className="text-xs text-muted-foreground">打印图片尺寸</span>
+          <div className="space-y-0.5">
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <ImageIcon className="h-3 w-3" />
+              打印图片尺寸
+            </span>
             <div className="font-medium text-foreground">
               {target.widthPx}×{target.heightPx} px
             </div>
