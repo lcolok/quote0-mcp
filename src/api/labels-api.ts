@@ -856,7 +856,8 @@ labelsApp.post('/:id/print', async (c) => {
       return c.json({ success: false, error: `标签生成失败，无法打印: ${label.last_error ?? '未知错误'}` }, 400);
     }
 
-    let target = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
+    const storedTarget = BUILTIN_TARGETS.find((t) => t.id === label.target_id) ?? LABEL_T40X20_TARGET;
+    let target = storedTarget;
 
     // 按目标打印机机型 DPI 派生正确像素（B1 Pro 300dpi vs B21 203dpi）。
     // 复用已有 niimbotClient（base URL 从 NIIMBOT_ENDPOINT 推导）。
@@ -867,12 +868,23 @@ labelsApp.post('/:id/print', async (c) => {
     // 按 source_type 分发 bitmap 获取
     let bitmapBuffer: Buffer;
     if (label.source_type === 'image' || label.source_type === 'widget') {
-      // 从 MinIO 下载 dither 后 PNG → 重新 pack
-      const pngObj = await imageStorage.getClient().getObject(MINIO_BUCKET, label.png_path);
-      const chunks: Buffer[] = [];
-      for await (const chunk of pngObj) chunks.push(chunk as Buffer);
-      const pngBuffer = Buffer.concat(chunks);
-      bitmapBuffer = await packFromPng(pngBuffer, target);
+      const sizeMismatch = target.widthPx !== storedTarget.widthPx || target.heightPx !== storedTarget.heightPx;
+      if (sizeMismatch && label.source_image_url) {
+        // 派生尺寸与存储 PNG 不一致：从原图按设备 target 原生重新抖动，避免错位/越界
+        console.log(`[print] re-dither from source ${storedTarget.widthPx}x${storedTarget.heightPx} -> ${target.widthPx}x${target.heightPx} algo=${label.dither_algorithm}`);
+        const { bitmapBuffer: bmp } = await imageLabelGenerator.redither(label.source_image_url, target, label.dither_algorithm);
+        bitmapBuffer = bmp;
+      } else {
+        if (sizeMismatch && !label.source_image_url) {
+          console.warn('[print] size mismatch but no source_image_url, falling back to resize-pack (quality degraded)');
+        }
+        // 从 MinIO 下载 dither 后 PNG → 重新 pack（resize 防御）
+        const pngObj = await imageStorage.getClient().getObject(MINIO_BUCKET, label.png_path);
+        const chunks: Buffer[] = [];
+        for await (const chunk of pngObj) chunks.push(chunk as Buffer);
+        const pngBuffer = Buffer.concat(chunks);
+        bitmapBuffer = await packFromPng(pngBuffer, target);
+      }
     } else {
       // svg (老路径)
       const result = await llmLabelGenerator.svgToBitmap(label.svg, target);

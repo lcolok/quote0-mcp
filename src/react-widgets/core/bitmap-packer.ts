@@ -9,6 +9,7 @@ import type { RenderTarget } from './render-targets.js';
  */
 export async function packFromPng(pngBuffer: Buffer, target: RenderTarget): Promise<Buffer> {
   const { data: raw } = await sharp(pngBuffer)
+    .resize(target.widthPx, target.heightPx, { fit: 'fill' })
     .grayscale()
     .threshold(128)
     .raw()
