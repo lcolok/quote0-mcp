@@ -73,6 +73,19 @@ export class NiimbotClient {
   /** spec 按 barcode 是不变量，永久缓存（换纸卷会换 barcode → 自然换 key） */
   private specCache = new Map<string, NiimbotSpec>();
 
+  /** 后台刷新在途句柄，去重：stale 期间多次调用只触发一次后台读，避免读堆叠 */
+  private deviceRefreshInFlight: Promise<NiimbotDeviceInfo | null> | null = null;
+  private rfidRefreshInFlight: Promise<NiimbotRfidInfo | null> | null = null;
+
+  constructor() {
+    // 启动预热：开机先把设备/RFID 缓存暖上，让首屏也无需等 C3 的 ~2.8s 冷读。
+    // fire-and-forget，失败无妨（下次调用再读）。
+    if (this.getBaseUrl()) {
+      void this.getDeviceInfo();
+      void this.getRfid();
+    }
+  }
+
   /**
    * C3 网关访问串行锁。
    * B1 Pro 是单 BLE 连接，C3 每个 /api/info、/api/rfid 都现场发起 BLE GATT 读取；
@@ -95,14 +108,26 @@ export class NiimbotClient {
     return ep.replace(/\/api\/print\/raw\/?$/, '');
   }
 
+  /**
+   * stale-while-revalidate：有缓存就立即返回（零等待、立即释放网关锁），
+   * 过期则后台异步刷新；只有完全无缓存（进程刚起、预热未完）才阻塞读一次。
+   * 这样除了首启极短窗口，调用方永远不等 C3 的 ~2.8s 冷读。
+   */
   async getDeviceInfo(): Promise<NiimbotDeviceInfo | null> {
-    const base = this.getBaseUrl();
-    if (!base) return this.lastDeviceInfo;
-    // TTL 内直接返回缓存，跳过 BLE 读
-    if (this.lastDeviceInfo && Date.now() - this.lastDeviceInfoTs < NiimbotClient.GATEWAY_TTL_MS) {
+    if (!this.getBaseUrl()) return this.lastDeviceInfo;
+    if (this.lastDeviceInfo) {
+      const stale = Date.now() - this.lastDeviceInfoTs >= NiimbotClient.GATEWAY_TTL_MS;
+      if (stale) void this.refreshDeviceInfo(); // 后台刷新，不阻塞
       return this.lastDeviceInfo;
     }
-    return this.serializeGateway(async () => {
+    return this.refreshDeviceInfo(); // 无缓存 → 阻塞读一次
+  }
+
+  private refreshDeviceInfo(): Promise<NiimbotDeviceInfo | null> {
+    if (this.deviceRefreshInFlight) return this.deviceRefreshInFlight; // 去重
+    const base = this.getBaseUrl();
+    if (!base) return Promise.resolve(this.lastDeviceInfo);
+    const p = this.serializeGateway(async () => {
       try {
         const r = await fetch(`${base}/api/info`, {
           signal: AbortSignal.timeout(NIIMBOT_TIMEOUT_MS),
@@ -128,16 +153,26 @@ export class NiimbotClient {
         return this.lastDeviceInfo;
       }
     });
+    this.deviceRefreshInFlight = p;
+    void p.finally(() => { this.deviceRefreshInFlight = null; });
+    return p;
   }
 
   async getRfid(): Promise<NiimbotRfidInfo | null> {
-    const base = this.getBaseUrl();
-    if (!base) return this.lastRfid;
-    // TTL 内直接返回缓存，跳过 BLE 读
-    if (this.lastRfid && Date.now() - this.lastRfidTs < NiimbotClient.GATEWAY_TTL_MS) {
+    if (!this.getBaseUrl()) return this.lastRfid;
+    if (this.lastRfid) {
+      const stale = Date.now() - this.lastRfidTs >= NiimbotClient.GATEWAY_TTL_MS;
+      if (stale) void this.refreshRfid(); // 后台刷新，不阻塞
       return this.lastRfid;
     }
-    return this.serializeGateway(async () => {
+    return this.refreshRfid(); // 无缓存 → 阻塞读一次
+  }
+
+  private refreshRfid(): Promise<NiimbotRfidInfo | null> {
+    if (this.rfidRefreshInFlight) return this.rfidRefreshInFlight; // 去重
+    const base = this.getBaseUrl();
+    if (!base) return Promise.resolve(this.lastRfid);
+    const p = this.serializeGateway(async () => {
       try {
         const r = await fetch(`${base}/api/rfid`, {
           signal: AbortSignal.timeout(NIIMBOT_TIMEOUT_MS),
@@ -163,6 +198,9 @@ export class NiimbotClient {
         return this.lastRfid;
       }
     });
+    this.rfidRefreshInFlight = p;
+    void p.finally(() => { this.rfidRefreshInFlight = null; });
+    return p;
   }
 
   /** 本地规格库查询（走 C3 /api/specs，非 BLE，但仍串行化避免与 BLE 读在 C3 上撞车） */
