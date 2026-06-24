@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob, ImagePreset, CreatePresetRequest, UpdatePresetRequest, CurrentTargetInfo, RefImageUploadResponse } from '@/types/label';
+import type { Label, GenerateRequest, GenerateImageRequest, GenerateImageResponse, GenerateTextRequest, GenerateTextResponse, WidgetMeta, FontMeta, PrintRequest, LlmModelMeta, ActiveLlmInfo, LabelJob, ImagePreset, CreatePresetRequest, UpdatePresetRequest, CurrentTargetInfo, RefImageUploadResponse, DitherBatchPreviewResponse } from '@/types/label';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
@@ -127,6 +127,11 @@ export const labelsApi = {
   getCurrentTarget: () =>
     client
       .get<{ success: boolean; target?: CurrentTargetInfo; fallback?: CurrentTargetInfo; error?: string }>('/labels/current-target')
+      .then((r) => r.data),
+
+  previewDitherBatch: (id: string, body?: { algorithms?: string[]; maxWidth?: number }) =>
+    client
+      .post<DitherBatchPreviewResponse>(`/labels/${id}/preview-dither-batch`, body ?? {})
       .then((r) => r.data),
 
   uploadRefImage: (file: File) => {

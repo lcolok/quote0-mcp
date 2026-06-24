@@ -190,6 +190,9 @@ export interface CurrentTargetInfo {
   heightMm: number;
   widthPx: number;
   heightPx: number;
+  deviceType?: number;
+  dpi?: number;
+  modelName?: string;
   sku?: string;
   rfidBarcode?: string;
   totalMm?: number;
@@ -202,4 +205,25 @@ export interface CurrentTargetInfo {
     swVersion: string;
   } | null;
   source: 'spec-local' | 'spec-cloud' | 'default';
+}
+
+export interface DitherBatchPreviewItem {
+  algorithm: string;
+  pngBase64: string;
+}
+
+export interface DitherBatchTargetInfo {
+  deviceType: number;
+  dpi: number;
+  modelName: string;
+  printWidthPx: number;
+  printHeightPx: number;
+  previewWidthPx: number;
+  previewHeightPx: number;
+}
+
+export interface DitherBatchPreviewResponse {
+  success: boolean;
+  target: DitherBatchTargetInfo;
+  previews: DitherBatchPreviewItem[];
 }

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { ArrowLeft, Printer, RefreshCw, Archive, ImageIcon } from 'lucide-react';
 import SavePresetDialog from '@/components/SavePresetDialog';
 import DitherSelectorGrid from '@/components/DitherSelectorGrid';
+import DeviceInfoCard from '@/components/DeviceInfoCard';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -149,6 +150,8 @@ export default function DetailPage() {
         </Button>
         <h1 className="text-xl font-semibold text-foreground">标签详情</h1>
       </div>
+
+      <DeviceInfoCard />
 
       <Card className="p-6 space-y-4">
         <div>
