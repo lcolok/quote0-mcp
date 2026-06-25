@@ -5,6 +5,8 @@ export interface NiimbotPushOptions {
   printId?: string;
   /** 503(固件队列满)时的最大尝试次数(含首次),默认 6。退避等固件打印队列腾空。 */
   maxAttempts?: number;
+  /** 打印浓度 1-5。固件不带时默认 3；本服务统一默认 1，可被请求覆盖。 */
+  density?: number;
 }
 
 export interface NiimbotPushResult {
@@ -24,12 +26,16 @@ class NiimbotPushModule {
     const { timeoutMs = 10000 } = options;
     const printId = options.printId ?? crypto.randomUUID();
 
+    // 浓度默认 1，clamp 到 1-5 整数
+    const density = Math.min(5, Math.max(1, Math.round(options.density ?? 1)));
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/octet-stream',
       'X-Width-Px': String(target.widthPx),
       'X-Height-Px': String(target.heightPx),
       'X-Sku': target.id,
       'X-Print-Id': printId,
+      'X-Density': String(density),
     };
 
     const doFetch = async (): Promise<Response> => {

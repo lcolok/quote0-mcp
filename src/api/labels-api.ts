@@ -962,6 +962,8 @@ labelsApp.post('/:id/print', async (c) => {
     const id = c.req.param('id');
     const body = (await c.req.json().catch(() => ({}))) as {
       niimbotEndpoint?: string;
+      /** 打印浓度 1-5，透传给 niimbot 推送。不传则推送模块默认 1。 */
+      density?: number;
     };
     const endpoint =
       body.niimbotEndpoint || process.env.NIIMBOT_ENDPOINT;
@@ -1027,6 +1029,7 @@ labelsApp.post('/:id/print', async (c) => {
     // push 到 niimbot
     const pushResult = await niimbotPush.push(bitmapBuffer, target, endpoint, {
       printId: id,
+      density: body?.density,
     });
 
     if (!pushResult.queued) {

@@ -1479,6 +1479,8 @@ app.post('/api/labels/print', async (c) => {
       content: { title: string; subtitle?: string };
       niimbotEndpoint?: string;
       timeout?: number;
+      /** 打印浓度 1-5，透传给 niimbot 推送。不传则推送模块默认 1。 */
+      density?: number;
     }>();
 
     // 输入校验
@@ -1516,6 +1518,7 @@ app.post('/api/labels/print', async (c) => {
       target,
       endpoint,
       timeout: body.timeout,
+      density: body.density,
     });
 
     if (res.success) {

@@ -9,6 +9,8 @@ export interface LabelPrintRequest {
   endpoint: string;          // niimbot HTTP endpoint，调用方传入
   timeout?: number;          // push 超时 ms，默认 10000
   printId?: string;          // 可选，默认 render 阶段生成
+  /** 打印浓度 1-5，透传给 niimbot 推送。不传则推送模块默认 1。 */
+  density?: number;
 }
 
 export interface LabelPrintResponse {
@@ -46,7 +48,7 @@ export class LabelPrintOrchestrator {
         bitmap,
         req.target,
         req.endpoint,
-        { timeoutMs: req.timeout ?? 10000, printId }
+        { timeoutMs: req.timeout ?? 10000, printId, density: req.density }
       );
       if (!push.queued) {
         console.error(`❌ 推送失败: HTTP ${push.status ?? '?'} - ${push.error ?? 'unknown'}`);
