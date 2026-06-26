@@ -100,7 +100,9 @@ application:
 services:
   # PostgreSQL 主数据库
   postgres:
-    image: dev.logic.heiyu.space/library/postgres:15-alpine
+    # digest 钉死：Docker pull 时密码学校验内容，tag 被覆盖污染也无法替换进来（2026-06-26 加固）
+    # tag 等价物：dev.logic.heiyu.space/library/postgres:15-alpine
+    image: dev.logic.heiyu.space/library/postgres@sha256:eabd2db1e68ad03f1ad9314ce52bbc05b5aa0b0fb6a70a0a29187dcd68600be9
     environment:
       POSTGRES_DB: quote0_cache
       POSTGRES_USER: quote0_user
@@ -118,8 +120,9 @@ services:
 
   # MinIO 对象存储
   minio:
-    # 私有命名空间固定 tag，隔离公共 library/* tag 被其他构建误推污染（2026-06-26 加固）
-    image: dev.logic.heiyu.space/friday/minio:latest
+    # digest 钉死 + 私有命名空间：密码学校验内容，污染无法替换进来（2026-06-26 加固）
+    # tag 等价物：dev.logic.heiyu.space/friday/minio:latest
+    image: dev.logic.heiyu.space/friday/minio@sha256:52dfd5c0bbd38d3219f2058c7af216d9f9a27a994b7b5baad09bbd38866015ff
     environment:
       MINIO_ROOT_USER: quote0_minio
       MINIO_ROOT_PASSWORD: quote0_minio_password
@@ -136,8 +139,9 @@ services:
 
   # Redis 内存缓存
   redis:
-    # 私有命名空间固定 tag，隔离公共 library/* tag 被其他构建误推污染（2026-06-26 加固）
-    image: dev.logic.heiyu.space/friday/redis:7-alpine
+    # digest 钉死 + 私有命名空间：密码学校验内容，污染无法替换进来（2026-06-26 加固）
+    # tag 等价物：dev.logic.heiyu.space/friday/redis:7-alpine
+    image: dev.logic.heiyu.space/friday/redis@sha256:9677a54779e2ab4fcec12638c40ef9b3d8836d4cd58d79fdc1c33dd672eddc05
     command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
     binds:
       - /lzcapp/var/redis:/data
