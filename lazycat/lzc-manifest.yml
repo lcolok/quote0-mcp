@@ -118,7 +118,8 @@ services:
 
   # MinIO 对象存储
   minio:
-    image: dev.logic.heiyu.space/minio/minio:latest
+    # 私有命名空间固定 tag，隔离公共 library/* tag 被其他构建误推污染（2026-06-26 加固）
+    image: dev.logic.heiyu.space/friday/minio:latest
     environment:
       MINIO_ROOT_USER: quote0_minio
       MINIO_ROOT_PASSWORD: quote0_minio_password
@@ -135,7 +136,8 @@ services:
 
   # Redis 内存缓存
   redis:
-    image: dev.logic.heiyu.space/library/redis:7-alpine
+    # 私有命名空间固定 tag，隔离公共 library/* tag 被其他构建误推污染（2026-06-26 加固）
+    image: dev.logic.heiyu.space/friday/redis:7-alpine
     command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
     binds:
       - /lzcapp/var/redis:/data
