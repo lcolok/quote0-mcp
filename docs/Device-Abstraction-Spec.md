@@ -1,6 +1,12 @@
 # 标签设备化抽象 Spec（Device Abstraction）
 
-> 状态：设计已定，待施工
+> 状态：Phase 1 大部分已施工（schema/kind/capabilities/OutputSink/deviceId 路由均已上线）；
+> 2026-07-18 补上 `push_devices.dpi` 静态属性 + niimbotSink 按设备 dpi 动态重算 px，
+> 替代不稳定的 BLE 运行时侦测（`niimbot-client.ts` 那条 legacy 路径未动，仍走 env + BLE）。
+> **回溯影响**：`niimbot-main` 设 `dpi=300`（B1 Pro 实测机头 DPI）后，不只新尺寸，
+> 连既有默认 40×20 标签的打印像素也从 320×160（203dpi 换算）变成 472×236（300dpi 换算）——
+> 这是修正历史尺寸偏差，不是新 bug；真实机型 DPI 务必和硬件确认后再改 push_devices.dpi。
+> Phase 2（前端设备选择 UI）、Phase 3（能力校验/多设备并发）仍待施工。
 > 日期：2026-06-15
 > 背景来源：会话编辑器打印按钮需求 → 深挖出"设备=尺寸+输出通道，必须在生成时绑定"的架构问题
 
