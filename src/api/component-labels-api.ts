@@ -1,8 +1,12 @@
 // 元器件编号标签 API —— 与 labels-api.ts/label-batches-api.ts(LLM 图片批次)完全解耦。
-// 设计原则：本项目只负责"给一个编号字符串 → 渲染+打印一张标签"，不存储任何元件元数据
+// 设计原则：本项目只负责"给一段标识字符串 → 渲染+打印一张标签"，不存储任何元件元数据
 // （型号/厂商/封装/库存等留在外部料号管理系统），component_labels 表只是渲染+打印的幂等索引。
 //
-// renderOne / resolveDeviceAndSink / printOneCode 三个 helper 导出，供
+// 支持两种 widget：
+//  - component-code：料号编号(如嘉立创 LCSC "C25168826")，codeKey 就是编号本身
+//  - component-value：主参数+封装(如 "10kΩ"+"0603")，codeKey 是 `${value}[${package}]` 拼接串
+//
+// renderGeneric/renderOne/resolveDeviceAndSink/printOneCode 导出，供
 // component-label-batches-api.ts（批量录入/进度管理层）复用，避免渲染+打印逻辑重复实现。
 import { Hono } from 'hono';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
@@ -10,6 +14,7 @@ import { textLabelGenerator } from '../react-widgets/services/text-label-generat
 import { BUILTIN_TARGETS, LABEL_T20X8_TARGET, type RenderTarget } from '../react-widgets/core/render-targets.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { getSinkForKind, deviceKindMatchesTarget, type PushDeviceRow, type OutputSink } from './output-sinks.js';
+import type { WidgetId } from '../react-widgets/core/label-widget-registry.js';
 
 const componentLabelsApp = new Hono();
 const imageStorage = getImageStorage();
@@ -19,6 +24,11 @@ const DEFAULT_FONT_FAMILY = 'saira-extra-condensed';
 
 export function normalizeCode(raw: string): string {
   return raw.trim().toUpperCase().slice(0, 40);
+}
+
+/** value/package 拼成幂等键，如 "10KΩ[0603]"。跟 normalizeCode 一样统一转大写、限长 */
+export function valuePackageKey(value: string, pkg: string): string {
+  return normalizeCode(`${value}[${pkg}]`);
 }
 
 function pngUrlOf(pngPath: string | null): string | null {
@@ -32,8 +42,17 @@ export interface RenderOneResult {
   cached: boolean;
 }
 
-/** 渲染或复用缓存：component_labels.code 是幂等键，同一编号默认不重复渲染 */
-export async function renderOne(code: string, targetId: string, force: boolean): Promise<RenderOneResult> {
+/**
+ * 渲染或复用缓存：component_labels.(code,target_id) 是幂等键。
+ * codeKey 只是幂等索引用的字符串标识，真正喂给 widget 的内容是 props。
+ */
+export async function renderGeneric(
+  codeKey: string,
+  widgetId: WidgetId,
+  props: Record<string, any>,
+  targetId: string,
+  force: boolean
+): Promise<RenderOneResult> {
   const db = getPostgresDatabase();
   const target = BUILTIN_TARGETS.find((t) => t.id === targetId) ?? LABEL_T20X8_TARGET;
 
@@ -43,24 +62,19 @@ export async function renderOne(code: string, targetId: string, force: boolean):
          FROM component_labels cl
          LEFT JOIN labels l ON l.id = cl.label_id
         WHERE cl.code = $1 AND cl.target_id = $2 AND l.status != 'archived'`,
-      [code, target.id]
+      [codeKey, target.id]
     );
     if (existing.rows.length > 0 && existing.rows[0].label_id) {
-      return { code, labelId: existing.rows[0].label_id, pngUrl: pngUrlOf(existing.rows[0].png_path), cached: true };
+      return { code: codeKey, labelId: existing.rows[0].label_id, pngUrl: pngUrlOf(existing.rows[0].png_path), cached: true };
     }
   }
 
-  const { pngBuffer } = await textLabelGenerator.rerenderWidget(
-    'component-code',
-    { code },
-    DEFAULT_FONT_FAMILY,
-    target
-  );
+  const { pngBuffer } = await textLabelGenerator.rerenderWidget(widgetId, props, DEFAULT_FONT_FAMILY, target);
 
   const insertRes = await db.getPool().query<{ id: string }>(
     `INSERT INTO labels (prompt, svg, target_id, source_type, status, widget_props, font_family, tags)
      VALUES ($1, '', $2, 'widget', 'approved', $3::jsonb, $4, $5) RETURNING id`,
-    [`component-code:${code}`, target.id, JSON.stringify({ code }), DEFAULT_FONT_FAMILY, ['component-code']]
+    [`${widgetId}:${codeKey}`, target.id, JSON.stringify(props), DEFAULT_FONT_FAMILY, [widgetId]]
   );
   const labelId = insertRes.rows[0].id;
   const pngPath = `labels/${labelId}.png`;
@@ -74,10 +88,25 @@ export async function renderOne(code: string, targetId: string, force: boolean):
     `INSERT INTO component_labels (code, target_id, label_id)
      VALUES ($1, $2, $3)
      ON CONFLICT (code, target_id) DO UPDATE SET label_id = EXCLUDED.label_id, updated_at = now()`,
-    [code, target.id, labelId]
+    [codeKey, target.id, labelId]
   );
 
-  return { code, labelId, pngUrl: pngUrlOf(pngPath), cached: false };
+  return { code: codeKey, labelId, pngUrl: pngUrlOf(pngPath), cached: false };
+}
+
+/** component-code widget 的便捷封装，向后兼容旧调用方(component-label-batches-api.ts) */
+export async function renderOne(code: string, targetId: string, force: boolean): Promise<RenderOneResult> {
+  return renderGeneric(code, 'component-code', { code }, targetId, force);
+}
+
+/** component-value widget 的便捷封装：value+package → 拼接幂等键 */
+export async function renderValuePackage(
+  value: string,
+  pkg: string,
+  targetId: string,
+  force: boolean
+): Promise<RenderOneResult> {
+  return renderGeneric(valuePackageKey(value, pkg), 'component-value', { value, package: pkg }, targetId, force);
 }
 
 export interface ResolvedDevice {
@@ -109,12 +138,11 @@ export interface PrintOneResult {
   error?: string;
 }
 
-/** 打印单个编号(未渲染过会先自动渲染) + 写回 labels/component_labels 的打印统计 */
-export async function printOneCode(code: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
+/** 打印一个已渲染(或即将渲染)结果 + 写回 labels/component_labels 的打印统计 */
+async function printRendered(rendered: RenderOneResult, resolved: ResolvedDevice): Promise<PrintOneResult> {
   const { device, target, sink } = resolved;
   const db = getPostgresDatabase();
   try {
-    const rendered = await renderOne(code, target.id, false);
     const pngObj = await imageStorage.getClient().getObject(
       MINIO_BUCKET,
       rendered.pngUrl!.replace('/api/minio-proxy/', '')
@@ -125,7 +153,7 @@ export async function printOneCode(code: string, resolved: ResolvedDevice): Prom
 
     const sendResult = await sink.send(pngBuffer, device, target);
     if (!sendResult.ok) {
-      return { code, ok: false, labelId: rendered.labelId, httpStatus: sendResult.status, error: sendResult.error || '推送失败' };
+      return { code: rendered.code, ok: false, labelId: rendered.labelId, httpStatus: sendResult.status, error: sendResult.error || '推送失败' };
     }
     await db.getPool().query(
       `UPDATE labels SET status='printed', print_count=print_count+1,
@@ -140,30 +168,71 @@ export async function printOneCode(code: string, resolved: ResolvedDevice): Prom
           print_history = print_history || jsonb_build_object('printed_at', now(), 'device_id', $2::text),
           updated_at = now()
        WHERE code = $1 AND target_id = $3`,
-      [code, device.id, target.id]
+      [rendered.code, device.id, target.id]
     );
-    return { code, ok: true, labelId: rendered.labelId, httpStatus: sendResult.status };
+    return { code: rendered.code, ok: true, labelId: rendered.labelId, httpStatus: sendResult.status };
+  } catch (e) {
+    return { code: rendered.code, ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** 打印单个编号(component-code widget，未渲染过会先自动渲染)，向后兼容旧调用方 */
+export async function printOneCode(code: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
+  try {
+    const rendered = await renderOne(code, resolved.target.id, false);
+    return await printRendered(rendered, resolved);
   } catch (e) {
     return { code, ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** 打印单个 value/package(component-value widget，未渲染过会先自动渲染) */
+export async function printOneValuePackage(value: string, pkg: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
+  const codeKey = valuePackageKey(value, pkg);
+  try {
+    const rendered = await renderValuePackage(value, pkg, resolved.target.id, false);
+    return await printRendered(rendered, resolved);
+  } catch (e) {
+    return { code: codeKey, ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
 // ============ POST /render —— 批量渲染(幂等，默认复用已渲染过的编号) ============
 componentLabelsApp.post('/render', async (c) => {
   try {
-    const body = await c.req.json<{ codes: string[]; targetId?: string; force?: boolean }>();
-    if (!Array.isArray(body.codes) || body.codes.length === 0) {
-      return c.json({ success: false, error: 'codes 不能为空' }, 400);
+    const body = await c.req.json<{
+      codes?: string[];
+      values?: Array<{ value: string; package: string }>;
+      targetId?: string;
+      force?: boolean;
+    }>();
+    const hasCodes = Array.isArray(body.codes) && body.codes.length > 0;
+    const hasValues = Array.isArray(body.values) && body.values.length > 0;
+    if (!hasCodes && !hasValues) {
+      return c.json({ success: false, error: 'codes 或 values 至少填一个' }, 400);
     }
     const targetId = body.targetId ?? DEFAULT_TARGET_ID;
-    const codes = Array.from(new Set(body.codes.map(normalizeCode).filter(Boolean)));
+    const force = body.force ?? false;
 
     const results: Array<RenderOneResult | { code: string; error: string }> = [];
-    for (const code of codes) {
-      try {
-        results.push(await renderOne(code, targetId, body.force ?? false));
-      } catch (e) {
-        results.push({ code, error: e instanceof Error ? e.message : String(e) });
+    if (hasCodes) {
+      const codes = Array.from(new Set(body.codes!.map(normalizeCode).filter(Boolean)));
+      for (const code of codes) {
+        try {
+          results.push(await renderOne(code, targetId, force));
+        } catch (e) {
+          results.push({ code, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+    }
+    if (hasValues) {
+      for (const item of body.values!) {
+        const codeKey = valuePackageKey(item.value ?? '', item.package ?? '');
+        try {
+          results.push(await renderValuePackage(item.value, item.package, targetId, force));
+        } catch (e) {
+          results.push({ code: codeKey, error: e instanceof Error ? e.message : String(e) });
+        }
       }
     }
     return c.json({ success: true, results });
@@ -173,12 +242,19 @@ componentLabelsApp.post('/render', async (c) => {
   }
 });
 
-// ============ POST /print —— 按编号批量打印(编号未渲染过会先自动渲染) ============
+// ============ POST /print —— 批量打印(未渲染过会先自动渲染) ============
 componentLabelsApp.post('/print', async (c) => {
   try {
-    const body = await c.req.json<{ codes: string[]; deviceId: string; targetId?: string }>();
-    if (!Array.isArray(body.codes) || body.codes.length === 0) {
-      return c.json({ success: false, error: 'codes 不能为空' }, 400);
+    const body = await c.req.json<{
+      codes?: string[];
+      values?: Array<{ value: string; package: string }>;
+      deviceId: string;
+      targetId?: string;
+    }>();
+    const hasCodes = Array.isArray(body.codes) && body.codes.length > 0;
+    const hasValues = Array.isArray(body.values) && body.values.length > 0;
+    if (!hasCodes && !hasValues) {
+      return c.json({ success: false, error: 'codes 或 values 至少填一个' }, 400);
     }
     if (!body.deviceId) return c.json({ success: false, error: 'deviceId 必填' }, 400);
 
@@ -190,10 +266,17 @@ componentLabelsApp.post('/print', async (c) => {
       return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 400);
     }
 
-    const codes = Array.from(new Set(body.codes.map(normalizeCode).filter(Boolean)));
     const results: PrintOneResult[] = [];
-    for (const code of codes) {
-      results.push(await printOneCode(code, resolved));
+    if (hasCodes) {
+      const codes = Array.from(new Set(body.codes!.map(normalizeCode).filter(Boolean)));
+      for (const code of codes) {
+        results.push(await printOneCode(code, resolved));
+      }
+    }
+    if (hasValues) {
+      for (const item of body.values!) {
+        results.push(await printOneValuePackage(item.value, item.package, resolved));
+      }
     }
 
     const printed = results.filter((r) => r.ok).length;

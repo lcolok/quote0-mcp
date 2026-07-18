@@ -4,8 +4,9 @@ import { TextTwoLinesWidget } from '../components/labels/text-two-lines.js';
 import { TextWithIconWidget } from '../components/labels/text-with-icon.js';
 import { PriceTagWidget } from '../components/labels/price-tag.js';
 import { ComponentCodeWidget } from '../components/labels/component-code.js';
+import { ComponentValueWidget } from '../components/labels/component-value.js';
 
-export type WidgetId = 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag' | 'component-code';
+export type WidgetId = 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag' | 'component-code' | 'component-value';
 
 export interface WidgetPropsSchemaField {
   name: string;
@@ -87,6 +88,17 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
       { name: 'code', type: 'string', required: true, maxLength: 20, description: '元件编号，如 C25168826(会自动转大写)' },
     ],
     defaultProps: { code: 'C25168826' },
+  },
+  'component-value': {
+    id: 'component-value',
+    displayName: 'SMD元件数值+封装',
+    description: '主参数(如 10kΩ/100nF/220µH)+封装(如 0603)双字号排版，右侧自动嵌入真实IEC电阻/电容/电感符号(按value单位自动判断元件类型)。仅支持数字/常见单位符号(Ω µ)，不适合中文。',
+    component: ComponentValueWidget,
+    propsSchema: [
+      { name: 'value', type: 'string', required: true, maxLength: 16, description: '主参数，如 "10kΩ"/"100nF"/"220µH"' },
+      { name: 'package', type: 'string', required: true, maxLength: 8, description: '封装，如 "0603"/"0805"' },
+    ],
+    defaultProps: { value: '10kΩ', package: '0603' },
   },
 };
 
