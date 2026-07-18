@@ -3,8 +3,9 @@ import { TextSingleWidget } from '../components/labels/text-single.js';
 import { TextTwoLinesWidget } from '../components/labels/text-two-lines.js';
 import { TextWithIconWidget } from '../components/labels/text-with-icon.js';
 import { PriceTagWidget } from '../components/labels/price-tag.js';
+import { ComponentCodeWidget } from '../components/labels/component-code.js';
 
-export type WidgetId = 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag';
+export type WidgetId = 'text-single' | 'text-two-lines' | 'text-with-icon' | 'price-tag' | 'component-code';
 
 export interface WidgetPropsSchemaField {
   name: string;
@@ -77,6 +78,16 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     ],
     defaultProps: { title: '番茄', price: '9.9', unit: '元/斤' },
   },
+  'component-code': {
+    id: 'component-code',
+    displayName: 'SMD元件编号',
+    description: '窄体大字号打印电子元件料号(如嘉立创 LCSC 编号 C25168826)，左对齐贴边+右侧安全内缩，按位数自动缩放字号。仅支持大写字母+数字(ASCII)，不适合中文内容。',
+    component: ComponentCodeWidget,
+    propsSchema: [
+      { name: 'code', type: 'string', required: true, maxLength: 20, description: '元件编号，如 C25168826(会自动转大写)' },
+    ],
+    defaultProps: { code: 'C25168826' },
+  },
 };
 
 export function getWidget(id: string): WidgetMeta | undefined {
@@ -91,6 +102,7 @@ export const SUPPORTED_FONTS = [
   { family: 'smiley-sans', displayName: '得意黑', description: '活泼斜体黑体，适合时尚/标识' },
   { family: 'lxgw-wenkai', displayName: '霞鹜文楷 Medium', description: '楷体，适合诗词/文学/优雅场景' },
   { family: 'alibaba-puhuiti', displayName: '阿里普惠 Heavy', description: '极粗黑体，适合公告/价签/庄重' },
+  { family: 'saira-extra-condensed', displayName: 'Saira Extra Condensed', description: '极窄无衬线字体，仅含拉丁字母+数字字形，专用于元件编号等纯ASCII窄体场景，不支持中文' },
 ] as const;
 
 export type SupportedFontFamily = typeof SUPPORTED_FONTS[number]['family'];

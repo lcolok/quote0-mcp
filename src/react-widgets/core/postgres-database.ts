@@ -837,6 +837,20 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
       CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
 
+      -- 元器件编号标签渲染/打印索引(2026-07-18)：只存"编号→渲染出的 label"的幂等映射 + 打印统计，
+      -- 不存储任何元件元数据(型号/厂商/封装等留给外部料号管理系统，本项目刻意与之解耦)。
+      CREATE TABLE IF NOT EXISTS component_labels (
+        code          text NOT NULL,
+        target_id     text NOT NULL DEFAULT 'label-T20x8-160',
+        label_id      uuid REFERENCES labels(id) ON DELETE SET NULL,
+        print_count   int NOT NULL DEFAULT 0,
+        print_history jsonb NOT NULL DEFAULT '[]'::jsonb,
+        created_at    timestamptz NOT NULL DEFAULT now(),
+        updated_at    timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (code, target_id)
+      );
+      CREATE INDEX IF NOT EXISTS component_labels_label_id_idx ON component_labels(label_id);
+
       -- 标签批量管理（Label Batch）
       CREATE TABLE IF NOT EXISTS label_batches (
         id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
