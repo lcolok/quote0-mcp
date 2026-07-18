@@ -7,6 +7,8 @@ import HistoryPage from '@/pages/HistoryPage';
 import DetailPage from '@/pages/DetailPage';
 import MemoPage from '@/pages/MemoPage';
 import BatchListPage from '@/pages/BatchListPage';
+import ComponentBatchCreatePage from '@/pages/ComponentBatchCreatePage';
+import ComponentBatchDetailPage from '@/pages/ComponentBatchDetailPage';
 import BatchCreatePage from '@/pages/BatchCreatePage';
 import BatchDetailPage from '@/pages/BatchDetailPage';
 import DevicesPage from '@/pages/DevicesPage';
@@ -57,6 +59,8 @@ function App() {
           <Route path="/labels/:id" element={<DetailPage />} />
           <Route path="/batches" element={<BatchListPage />} />
           <Route path="/batches/new" element={<BatchCreatePage />} />
+          <Route path="/batches/component/new" element={<ComponentBatchCreatePage />} />
+          <Route path="/batches/component/:id" element={<ComponentBatchDetailPage />} />
           <Route path="/batches/:id" element={<BatchDetailPage />} />
           <Route path="/memos" element={<MemoPage />} />
           <Route path="/devices" element={<DevicesPage />} />
