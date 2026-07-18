@@ -131,6 +131,54 @@ GET /api/component-labels/C25168826?targetId=label-T20x8-160&widgetId=component-
 ```
 未渲染过的编号返回 `404`。
 
+## 2.5 料号 ↔ 数值+封装 映射绑定
+
+一个元件通常需要贴两张标签：料号（如嘉立创 LCSC `C25168826`）+ 数值封装（如 `10kΩ[0603]`）。这套绑定机制让你把这两者关联起来，之后一次调用就能把两张标签一起渲染、一起打印，方便贴在同一个料盒/元件袋上。
+
+只存 `code → {value, package}` 这一层映射本身，不存任何元件元数据（型号、厂商、库存、价格），延续本 API 一贯的解耦设计。
+
+### `POST /api/component-labels/bindings`
+
+建立或更新映射。
+
+请求：
+```json
+{ "code": "C25168826", "value": "10kΩ", "package": "0603" }
+```
+响应：
+```json
+{ "success": true, "binding": { "code": "C25168826", "value": "10kΩ", "package": "0603", "created_at": "...", "updated_at": "..." } }
+```
+
+### `GET /api/component-labels/bindings/:code`
+
+查映射。未绑定过返回 `404`。
+
+### `POST /api/component-labels/print-pair`
+
+**核心端点**——一次调用，打印「料号标签 + 数值封装标签」两张。
+
+请求（两种用法）：
+```json
+// 用法一：顺带建立/更新映射，同时打印
+{ "code": "C25168826", "value": "10kΩ", "package": "0603", "deviceId": "niimbot-main" }
+
+// 用法二：只传 code，用之前建立好的映射
+{ "code": "C25168826", "deviceId": "niimbot-main" }
+```
+`code` 没有对应映射、又没传 `value`/`package` 时返回 `404`，提示先建映射。
+
+响应：
+```json
+{
+  "success": true,
+  "printed": 2,
+  "code": { "code": "C25168826", "ok": true, "labelId": "uuid", "httpStatus": 200 },
+  "value": { "code": "10KΩ[0603]", "ok": true, "labelId": "uuid", "httpStatus": 200 }
+}
+```
+`code`/`value` 两个字段分别是料号标签、数值封装标签各自的打印结果，字段结构跟 `/print` 端点的单条结果一致——同一套幂等逻辑，重复调用不会重复渲染。
+
 ## 3. `/api/component-label-batches`（批次管理层）
 
 > 2026-07-19：这套批次现在也有浏览器界面可以手动管理——`https://labels-quote0.logic.heiyu.space/batches`（label-web「批量标签」页），跟原有的图片批次卡片混在同一个列表里展示（带 🏷️ 图标区分），可以直接在页面上新建批次、渲染、批量打印，不需要写代码调 API。前端界面走懒猫 SSO 登录，跟这里说的"外部 API 公开访问"是两条独立路径，互不影响。
