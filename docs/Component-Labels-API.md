@@ -133,6 +133,8 @@ GET /api/component-labels/C25168826?targetId=label-T20x8-160&widgetId=component-
 
 ## 3. `/api/component-label-batches`（批次管理层）
 
+> 2026-07-19：这套批次现在也有浏览器界面可以手动管理——`https://labels-quote0.logic.heiyu.space/batches`（label-web「批量标签」页），跟原有的图片批次卡片混在同一个列表里展示（带 🏷️ 图标区分），可以直接在页面上新建批次、渲染、批量打印，不需要写代码调 API。前端界面走懒猫 SSO 登录，跟这里说的"外部 API 公开访问"是两条独立路径，互不影响。
+
 ### `POST /api/component-label-batches`
 
 创建批次并录入编号（不会自动渲染，需要另调 `/render` 或 `/print`）。
