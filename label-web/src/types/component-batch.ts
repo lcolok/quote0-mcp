@@ -17,6 +17,9 @@ export interface ComponentBatchItem {
   labelStatus: string | null;
   printCount: number;
   lastPrintedAt: string | null;
+  /** 该 code 绑定的数值+封装(component_bindings 表)，未绑定则为 null。
+   *  批量打印时若存在绑定，会连数值封装标签一起打印。 */
+  binding: { value: string; package: string } | null;
 }
 
 export interface ComponentBatchDetail {

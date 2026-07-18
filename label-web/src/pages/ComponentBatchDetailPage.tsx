@@ -2,17 +2,25 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeft, RefreshCw, Printer } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Printer, Link2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import PrintDeviceDialog from '@/components/PrintDeviceDialog';
 import { componentBatchesApi } from '@/api/component-batches';
+import type { ComponentBatchItem } from '@/types/component-batch';
 
 export default function ComponentBatchDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [printOpen, setPrintOpen] = useState(false);
+  const [bindingItem, setBindingItem] = useState<ComponentBatchItem | null>(null);
+  const [bindValue, setBindValue] = useState('');
+  const [bindPackage, setBindPackage] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['component-batch', id],
@@ -37,11 +45,22 @@ export default function ComponentBatchDetailPage() {
   const printMut = useMutation({
     mutationFn: (deviceId: string) => componentBatchesApi.print(id!, { deviceId }),
     onSuccess: (res) => {
-      toast.success(`打印完成：${res.printed} 个`);
+      toast.success(`打印完成：${res.printed} 张`);
       setPrintOpen(false);
       queryClient.invalidateQueries({ queryKey: ['component-batch', id] });
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '打印失败'),
+  });
+
+  const bindMut = useMutation({
+    mutationFn: () =>
+      componentBatchesApi.pair(id!, bindingItem!.id, { value: bindValue.trim(), package: bindPackage.trim() }),
+    onSuccess: () => {
+      toast.success('已绑定，下次打印会连数值封装标签一起打印');
+      setBindingItem(null);
+      queryClient.invalidateQueries({ queryKey: ['component-batch', id] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '绑定失败'),
   });
 
   if (isLoading || !data) {
@@ -55,6 +74,13 @@ export default function ComponentBatchDetailPage() {
   const { batch, items } = data;
   const renderedCount = items.filter((it) => !!it.labelId).length;
   const printedCount = items.filter((it) => it.printCount > 0).length;
+  const boundCount = items.filter((it) => !!it.binding).length;
+
+  function openBindingDialog(item: ComponentBatchItem) {
+    setBindingItem(item);
+    setBindValue(item.binding?.value ?? '');
+    setBindPackage(item.binding?.package ?? '');
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 space-y-6">
@@ -67,12 +93,14 @@ export default function ComponentBatchDetailPage() {
         <span className="text-xs text-muted-foreground">{batch.status}</span>
       </div>
 
-      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+      <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
         <span>{items.length} 个编号</span>
         <span>·</span>
         <span>已渲染 {renderedCount}/{items.length}</span>
         <span>·</span>
         <span>已打印 {printedCount}/{items.length}</span>
+        <span>·</span>
+        <span>已绑定数值封装 {boundCount}/{items.length}</span>
       </div>
 
       <div className="flex items-center gap-3">
@@ -82,7 +110,7 @@ export default function ComponentBatchDetailPage() {
         </Button>
         <Button onClick={() => setPrintOpen(true)} disabled={renderedCount === 0}>
           <Printer className="h-4 w-4 mr-2" />
-          批量打印
+          批量打印{boundCount > 0 ? `（含 ${boundCount} 个数值封装配对）` : ''}
         </Button>
       </div>
 
@@ -99,6 +127,18 @@ export default function ComponentBatchDetailPage() {
             <div className="text-xs font-medium text-foreground truncate" title={it.code}>
               {it.code}
             </div>
+            <button
+              type="button"
+              onClick={() => openBindingDialog(it)}
+              className="flex items-center gap-1 text-xs w-full text-left"
+            >
+              <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />
+              {it.binding ? (
+                <span className="text-foreground truncate">{it.binding.value}[{it.binding.package}]</span>
+              ) : (
+                <span className="text-muted-foreground underline">绑定数值/封装</span>
+              )}
+            </button>
             {it.printCount > 0 && (
               <div className="text-xs text-muted-foreground">已打印 {it.printCount} 次</div>
             )}
@@ -113,8 +153,40 @@ export default function ComponentBatchDetailPage() {
         pending={printMut.isPending}
         onConfirm={(deviceId) => printMut.mutate(deviceId)}
         title="批量打印元件标签"
-        description={`把 ${renderedCount} 个已渲染的编号发送到设备打印。`}
+        description={`把 ${renderedCount} 个已渲染的编号发送到设备打印${boundCount > 0 ? `，其中 ${boundCount} 个已绑定的会连数值封装标签一起打印` : ''}。`}
       />
+
+      <Dialog open={!!bindingItem} onOpenChange={(v) => !v && setBindingItem(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>绑定数值/封装</DialogTitle>
+            <DialogDescription>
+              给料号 <span className="font-mono">{bindingItem?.code}</span> 关联主参数+封装，之后批量打印会连数值封装标签一起打印。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">主参数</label>
+              <Input value={bindValue} onChange={(e) => setBindValue(e.target.value)} placeholder="如 10kΩ / 100nF / 220µH" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">封装</label>
+              <Input value={bindPackage} onChange={(e) => setBindPackage(e.target.value)} placeholder="如 0603" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBindingItem(null)} disabled={bindMut.isPending}>
+              取消
+            </Button>
+            <Button
+              onClick={() => bindMut.mutate()}
+              disabled={bindMut.isPending || !bindValue.trim() || !bindPackage.trim()}
+            >
+              {bindMut.isPending ? '保存中…' : '保存绑定'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

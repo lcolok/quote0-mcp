@@ -37,7 +37,13 @@ export const componentBatchesApi = {
       .post<{
         success: boolean;
         printed: number;
-        results?: Array<{ itemId: string; code: string; ok: boolean; httpStatus?: number; error?: string }>;
+        results?: Array<{ itemId: string; code: string; widgetId?: string; ok: boolean; httpStatus?: number; error?: string }>;
       }>(`/component-label-batches/${id}/print`, body)
+      .then((r) => r.data),
+
+  /** 给批次内某条目建/改「数值+封装」配对，之后打印会连配对标签一起打印 */
+  pair: (batchId: string, itemId: string, body: { value: string; package: string }) =>
+    client
+      .post<{ success: boolean }>(`/component-label-batches/${batchId}/items/${itemId}/pair`, body)
       .then((r) => r.data),
 };

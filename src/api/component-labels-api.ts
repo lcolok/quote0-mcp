@@ -145,7 +145,11 @@ export interface PrintOneResult {
   error?: string;
 }
 
-/** 打印一个已渲染(或即将渲染)结果 + 写回 labels/component_labels 的打印统计(带 widget_id 精确匹配) */
+/**
+ * 打印一个已渲染(或即将渲染)结果 + 写回 labels 的打印统计。
+ * 单一数据源是 labels 表——不再往 component_labels/批次条目重复记一遍打印次数，
+ * 那两处只是幂等索引，读打印状态一律经 label_id 关联查 labels。
+ */
 async function printRendered(rendered: RenderOneResult, resolved: ResolvedDevice): Promise<PrintOneResult> {
   const { device, target, sink } = resolved;
   const db = getPostgresDatabase();
@@ -170,38 +174,39 @@ async function printRendered(rendered: RenderOneResult, resolved: ResolvedDevice
        WHERE id = $1`,
       [rendered.labelId, device.base_url || device.id, sendResult.status ?? null, pngBuffer.length]
     );
-    await db.getPool().query(
-      `UPDATE component_labels SET print_count = print_count + 1,
-          print_history = print_history || jsonb_build_object('printed_at', now(), 'device_id', $2::text),
-          updated_at = now()
-       WHERE code = $1 AND target_id = $3 AND widget_id = $4`,
-      [rendered.code, device.id, target.id, rendered.widgetId]
-    );
     return { code: rendered.code, ok: true, labelId: rendered.labelId, httpStatus: sendResult.status };
   } catch (e) {
     return { code: rendered.code, ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-/** 打印单个编号(component-code widget，未渲染过会先自动渲染)，向后兼容旧调用方 */
-export async function printOneCode(code: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
+/**
+ * 通用渲染+打印原语：任意 (codeKey, widgetId, props) 三元组都走这一条路径。
+ * printOneCode/printOneValuePackage 是它的便捷封装；批次层(component-label-batches-api.ts)
+ * 的条目也是泛化的 widget_id+props 结构，直接调这个函数，不需要为每种 widget 各写一份打印逻辑。
+ */
+export async function printGeneric(
+  codeKey: string,
+  widgetId: WidgetId,
+  props: Record<string, any>,
+  resolved: ResolvedDevice
+): Promise<PrintOneResult> {
   try {
-    const rendered = await renderOne(code, resolved.target.id, false);
-    return await printRendered(rendered, resolved);
-  } catch (e) {
-    return { code, ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-/** 打印单个 value/package(component-value widget，未渲染过会先自动渲染) */
-export async function printOneValuePackage(value: string, pkg: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
-  const codeKey = valuePackageKey(value, pkg);
-  try {
-    const rendered = await renderValuePackage(value, pkg, resolved.target.id, false);
+    const rendered = await renderGeneric(codeKey, widgetId, props, resolved.target.id, false);
     return await printRendered(rendered, resolved);
   } catch (e) {
     return { code: codeKey, ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** 打印单个编号(component-code widget，未渲染过会先自动渲染)，向后兼容旧调用方 */
+export async function printOneCode(code: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
+  return printGeneric(code, 'component-code', { code }, resolved);
+}
+
+/** 打印单个 value/package(component-value widget，未渲染过会先自动渲染) */
+export async function printOneValuePackage(value: string, pkg: string, resolved: ResolvedDevice): Promise<PrintOneResult> {
+  return printGeneric(valuePackageKey(value, pkg), 'component-value', { value, package: pkg }, resolved);
 }
 
 // ============ POST /render —— 批量渲染(幂等，默认复用已渲染过的编号) ============
@@ -410,7 +415,8 @@ componentLabelsApp.get('/:code', async (c) => {
     const widgetId = (c.req.query('widgetId') as WidgetId) ?? DEFAULT_WIDGET_ID;
     const db = getPostgresDatabase();
     const r = await db.getPool().query(
-      `SELECT cl.*, l.png_path, l.status AS label_status
+      `SELECT cl.code, cl.widget_id, cl.label_id, l.png_path, l.status AS label_status,
+              l.print_count, l.print_history
          FROM component_labels cl LEFT JOIN labels l ON l.id = cl.label_id
         WHERE cl.code = $1 AND cl.target_id = $2 AND cl.widget_id = $3`,
       [code, targetId, widgetId]
@@ -424,8 +430,8 @@ componentLabelsApp.get('/:code', async (c) => {
       labelId: row.label_id,
       pngUrl: pngUrlOf(row.png_path),
       labelStatus: row.label_status,
-      printCount: row.print_count,
-      printHistory: row.print_history,
+      printCount: row.print_count ?? 0,
+      printHistory: row.print_history ?? [],
     });
   } catch (error) {
     console.error('❌ GET /api/component-labels/:code 失败:', error);

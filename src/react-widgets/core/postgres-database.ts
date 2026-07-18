@@ -134,6 +134,42 @@ export class PostgresDatabase {
           ALTER TABLE component_labels ADD CONSTRAINT component_labels_pkey PRIMARY KEY (code, target_id, widget_id);
         END IF;
       END $$`,
+      // v1.21.25 硬化：component_labels 打印统计不再自己记账，单一数据源是 labels 表
+      // (经 label_id 关联查)。之前 labels/component_labels 各记一遍会漂移。
+      `ALTER TABLE component_labels DROP COLUMN IF EXISTS print_count`,
+      `ALTER TABLE component_labels DROP COLUMN IF EXISTS print_history`,
+      // v1.21.25 硬化：component_label_batch_items 泛化为 widget_id+props，跟单条渲染层
+      // renderGeneric(codeKey,widgetId,props,...) 同构；配对关系用 pair_item_id 自引用表达，
+      // 不再依赖"按 code 字符串查全局 component_bindings 表"这种旁路手段；打印统计不再自己
+      // 记账，单一数据源是 labels 表。老数据(只有 code 列)自动回填成 props={code}。
+      `ALTER TABLE component_label_batch_items ADD COLUMN IF NOT EXISTS widget_id TEXT NOT NULL DEFAULT 'component-code'`,
+      `ALTER TABLE component_label_batch_items ADD COLUMN IF NOT EXISTS code_key TEXT`,
+      `ALTER TABLE component_label_batch_items ADD COLUMN IF NOT EXISTS props JSONB`,
+      `ALTER TABLE component_label_batch_items ADD COLUMN IF NOT EXISTS pair_item_id UUID REFERENCES component_label_batch_items(id) ON DELETE SET NULL`,
+      `DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'component_label_batch_items' AND column_name = 'code'
+        ) THEN
+          UPDATE component_label_batch_items
+             SET code_key = code, props = jsonb_build_object('code', code)
+           WHERE code_key IS NULL;
+          ALTER TABLE component_label_batch_items DROP COLUMN code;
+        END IF;
+      END $$`,
+      `DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'component_label_batch_items' AND column_name = 'code_key' AND is_nullable = 'YES'
+        ) THEN
+          ALTER TABLE component_label_batch_items ALTER COLUMN code_key SET NOT NULL;
+          ALTER TABLE component_label_batch_items ALTER COLUMN props SET NOT NULL;
+        END IF;
+      END $$`,
+      `ALTER TABLE component_label_batch_items DROP COLUMN IF EXISTS print_count`,
+      `ALTER TABLE component_label_batch_items DROP COLUMN IF EXISTS last_printed_at`,
       // v1.21.16: push_devices 加 dpi（设备静态属性，替代不稳定的 BLE 运行时侦测），
       // null = 不覆盖，沿用 RenderTarget 自身 dpi（向后兼容旧行为）
       `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS dpi INTEGER`,
@@ -852,14 +888,13 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
       CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
 
-      -- 元器件编号标签渲染/打印索引(2026-07-18)：只存"编号→渲染出的 label"的幂等映射 + 打印统计，
+      -- 元器件编号标签渲染/打印索引(2026-07-18)：只存"编号→渲染出的 label"的幂等映射，
       -- 不存储任何元件元数据(型号/厂商/封装等留给外部料号管理系统，本项目刻意与之解耦)。
+      -- 2026-07-19 硬化：打印统计不在这里重复记账，单一数据源是 labels 表(经 label_id 关联查)。
       CREATE TABLE IF NOT EXISTS component_labels (
         code          text NOT NULL,
         target_id     text NOT NULL DEFAULT 'label-T20x8-160',
         label_id      uuid REFERENCES labels(id) ON DELETE SET NULL,
-        print_count   int NOT NULL DEFAULT 0,
-        print_history jsonb NOT NULL DEFAULT '[]'::jsonb,
         created_at    timestamptz NOT NULL DEFAULT now(),
         updated_at    timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (code, target_id)
@@ -878,8 +913,8 @@ export class PostgresDatabase {
       );
 
       -- 元器件编号「批次管理」层(2026-07-18)：对齐 label_batches 给用户的批量录入/进度/打印体验，
-      -- 但生成走确定性 widget 渲染(component-labels-api.ts::renderOne)，不经 LLM/job 队列。
-      -- 同样与元件元数据解耦：item 只存 code 字符串本身。
+      -- 但生成走确定性 widget 渲染(component-labels-api.ts::renderGeneric)，不经 LLM/job 队列。
+      -- 同样与元件元数据解耦。
       CREATE TABLE IF NOT EXISTS component_label_batches (
         id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         name        text NOT NULL,
@@ -890,14 +925,20 @@ export class PostgresDatabase {
         updated_at  timestamptz NOT NULL DEFAULT now()
       );
 
+      -- 2026-07-19 硬化：条目泛化为 widget_id+props(跟单条渲染层 renderGeneric(codeKey,widgetId,
+      -- props,...) 同构)，不再只认"code 字符串"，批次里能直接放纯 component-value 条目。
+      -- 配对关系(料号+数值封装一起打印)用 pair_item_id 自引用表达，是批次内部显式关系，
+      -- 不依赖"按 code 字符串查全局 component_bindings 表"这种旁路手段。
+      -- 打印统计不在这里存(单一数据源是 labels 表，经 label_id 关联查)。
       CREATE TABLE IF NOT EXISTS component_label_batch_items (
         id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         batch_id        uuid NOT NULL REFERENCES component_label_batches(id) ON DELETE CASCADE,
         idx             int  NOT NULL,
-        code            text NOT NULL,
+        widget_id       text NOT NULL DEFAULT 'component-code',
+        code_key        text NOT NULL,
+        props           jsonb NOT NULL,
+        pair_item_id    uuid REFERENCES component_label_batch_items(id) ON DELETE SET NULL,
         label_id        uuid REFERENCES labels(id) ON DELETE SET NULL,
-        print_count     int  NOT NULL DEFAULT 0,
-        last_printed_at timestamptz,
         created_at      timestamptz NOT NULL DEFAULT now(),
         updated_at      timestamptz NOT NULL DEFAULT now(),
         UNIQUE (batch_id, idx)
