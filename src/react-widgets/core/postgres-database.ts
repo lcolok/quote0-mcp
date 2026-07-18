@@ -119,6 +119,21 @@ export class PostgresDatabase {
    */
   private getMigrationStatements(): string[] {
     return [
+      // v1.21.20: component_labels 加 widget_id 并入主键(code,target_id,widget_id)。
+      // 之前 code 命名空间在 component-code/component-value 两种 widget 间共享，
+      // 理论上存在撞键后返回错误 widget 渲染结果的风险；加 widget_id 从结构上杜绝。
+      `ALTER TABLE component_labels ADD COLUMN IF NOT EXISTS widget_id TEXT NOT NULL DEFAULT 'component-code'`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.key_column_usage
+          WHERE table_name = 'component_labels' AND column_name = 'widget_id'
+            AND constraint_name = 'component_labels_pkey'
+        ) THEN
+          ALTER TABLE component_labels DROP CONSTRAINT IF EXISTS component_labels_pkey;
+          ALTER TABLE component_labels ADD CONSTRAINT component_labels_pkey PRIMARY KEY (code, target_id, widget_id);
+        END IF;
+      END $$`,
       // v1.21.16: push_devices 加 dpi（设备静态属性，替代不稳定的 BLE 运行时侦测），
       // null = 不覆盖，沿用 RenderTarget 自身 dpi（向后兼容旧行为）
       `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS dpi INTEGER`,

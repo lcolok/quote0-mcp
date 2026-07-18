@@ -6,6 +6,11 @@
 //  - component-code：料号编号(如嘉立创 LCSC "C25168826")，codeKey 就是编号本身
 //  - component-value：主参数+封装(如 "10kΩ"+"0603")，codeKey 是 `${value}[${package}]` 拼接串
 //
+// 2026-07-19：component_labels 加了 widget_id 列并入主键(code,target_id,widget_id)——
+// 之前 code 命名空间在两种 widget 间共享，理论上存在撞键后返回错误 widget 渲染结果的风险
+// (哪怕字符串巧合相同也不该混用)。现在同一个 code 字符串在不同 widget 下是完全独立的行，
+// 结构上杜绝跨 widget 撞键，不再依赖"字符串凑巧不一样"这种脆弱假设。
+//
 // renderGeneric/renderOne/resolveDeviceAndSink/printOneCode 导出，供
 // component-label-batches-api.ts（批量录入/进度管理层）复用，避免渲染+打印逻辑重复实现。
 import { Hono } from 'hono';
@@ -21,6 +26,7 @@ const imageStorage = getImageStorage();
 const MINIO_BUCKET = process.env.MINIO_BUCKET || 'quote0-images';
 export const DEFAULT_TARGET_ID = 'label-T20x8-160';
 const DEFAULT_FONT_FAMILY = 'saira-extra-condensed';
+const DEFAULT_WIDGET_ID: WidgetId = 'component-code';
 
 export function normalizeCode(raw: string): string {
   return raw.trim().toUpperCase().slice(0, 40);
@@ -37,14 +43,15 @@ function pngUrlOf(pngPath: string | null): string | null {
 
 export interface RenderOneResult {
   code: string;
+  widgetId: WidgetId;
   labelId: string;
   pngUrl: string | null;
   cached: boolean;
 }
 
 /**
- * 渲染或复用缓存：component_labels.(code,target_id) 是幂等键。
- * codeKey 只是幂等索引用的字符串标识，真正喂给 widget 的内容是 props。
+ * 渲染或复用缓存：component_labels.(code,target_id,widget_id) 是幂等键，widget_id 参与主键
+ * 保证不同 widget 之间即使 codeKey 字符串巧合相同也不会互相覆盖/读到对方的渲染结果。
  */
 export async function renderGeneric(
   codeKey: string,
@@ -61,11 +68,11 @@ export async function renderGeneric(
       `SELECT cl.label_id, l.png_path
          FROM component_labels cl
          LEFT JOIN labels l ON l.id = cl.label_id
-        WHERE cl.code = $1 AND cl.target_id = $2 AND l.status != 'archived'`,
-      [codeKey, target.id]
+        WHERE cl.code = $1 AND cl.target_id = $2 AND cl.widget_id = $3 AND l.status != 'archived'`,
+      [codeKey, target.id, widgetId]
     );
     if (existing.rows.length > 0 && existing.rows[0].label_id) {
-      return { code: codeKey, labelId: existing.rows[0].label_id, pngUrl: pngUrlOf(existing.rows[0].png_path), cached: true };
+      return { code: codeKey, widgetId, labelId: existing.rows[0].label_id, pngUrl: pngUrlOf(existing.rows[0].png_path), cached: true };
     }
   }
 
@@ -85,13 +92,13 @@ export async function renderGeneric(
   await db.getPool().query(`UPDATE labels SET png_path = $1 WHERE id = $2`, [pngPath, labelId]);
 
   await db.getPool().query(
-    `INSERT INTO component_labels (code, target_id, label_id)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (code, target_id) DO UPDATE SET label_id = EXCLUDED.label_id, updated_at = now()`,
-    [codeKey, target.id, labelId]
+    `INSERT INTO component_labels (code, target_id, widget_id, label_id)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (code, target_id, widget_id) DO UPDATE SET label_id = EXCLUDED.label_id, updated_at = now()`,
+    [codeKey, target.id, widgetId, labelId]
   );
 
-  return { code: codeKey, labelId, pngUrl: pngUrlOf(pngPath), cached: false };
+  return { code: codeKey, widgetId, labelId, pngUrl: pngUrlOf(pngPath), cached: false };
 }
 
 /** component-code widget 的便捷封装，向后兼容旧调用方(component-label-batches-api.ts) */
@@ -138,7 +145,7 @@ export interface PrintOneResult {
   error?: string;
 }
 
-/** 打印一个已渲染(或即将渲染)结果 + 写回 labels/component_labels 的打印统计 */
+/** 打印一个已渲染(或即将渲染)结果 + 写回 labels/component_labels 的打印统计(带 widget_id 精确匹配) */
 async function printRendered(rendered: RenderOneResult, resolved: ResolvedDevice): Promise<PrintOneResult> {
   const { device, target, sink } = resolved;
   const db = getPostgresDatabase();
@@ -167,8 +174,8 @@ async function printRendered(rendered: RenderOneResult, resolved: ResolvedDevice
       `UPDATE component_labels SET print_count = print_count + 1,
           print_history = print_history || jsonb_build_object('printed_at', now(), 'device_id', $2::text),
           updated_at = now()
-       WHERE code = $1 AND target_id = $3`,
-      [rendered.code, device.id, target.id]
+       WHERE code = $1 AND target_id = $3 AND widget_id = $4`,
+      [rendered.code, device.id, target.id, rendered.widgetId]
     );
     return { code: rendered.code, ok: true, labelId: rendered.labelId, httpStatus: sendResult.status };
   } catch (e) {
@@ -287,23 +294,25 @@ componentLabelsApp.post('/print', async (c) => {
   }
 });
 
-// ============ GET /:code —— 单个编号状态查询 ============
+// ============ GET /:code —— 单个编号状态查询(widgetId 可选，默认 component-code) ============
 componentLabelsApp.get('/:code', async (c) => {
   try {
     const code = normalizeCode(c.req.param('code'));
     const targetId = c.req.query('targetId') ?? DEFAULT_TARGET_ID;
+    const widgetId = (c.req.query('widgetId') as WidgetId) ?? DEFAULT_WIDGET_ID;
     const db = getPostgresDatabase();
     const r = await db.getPool().query(
       `SELECT cl.*, l.png_path, l.status AS label_status
          FROM component_labels cl LEFT JOIN labels l ON l.id = cl.label_id
-        WHERE cl.code = $1 AND cl.target_id = $2`,
-      [code, targetId]
+        WHERE cl.code = $1 AND cl.target_id = $2 AND cl.widget_id = $3`,
+      [code, targetId, widgetId]
     );
     if (r.rows.length === 0) return c.json({ success: false, error: '该编号尚未渲染过' }, 404);
     const row = r.rows[0];
     return c.json({
       success: true,
       code: row.code,
+      widgetId: row.widget_id,
       labelId: row.label_id,
       pngUrl: pngUrlOf(row.png_path),
       labelStatus: row.label_status,
