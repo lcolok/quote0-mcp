@@ -1,27 +1,23 @@
 # 元器件编号标签 API
 
-> 状态：已上线，v1.21.21 实机验证通过（含公网直连鉴权修复）
-> 日期：2026-07-18，2026-07-19 补充 component-value widget + widget_id 安全修复 + 公网直连鉴权
+> 状态：已上线，v1.21.22 实机验证通过（公网直连，无需鉴权）
+> 日期：2026-07-18，2026-07-19 补充 component-value widget + widget_id 安全修复 + 公网直连放行
 > 服务地址：`https://quote0.logic.heiyu.space`（生产 news-api，前缀路径即 API 路径）
 
-## 0.5 鉴权（外部调用必读）
+## 0.5 访问方式（外部调用必读）
 
 **本服务默认挂在懒猫微服平台的 SSO 网关后面**——除了下面这两个路径，其余 `/api/*` 从公网/CLI 直连都会被平台拦截、307 跳转到登录页（这不是本服务的行为，是懒猫平台默认策略）。
 
-`/api/component-labels/*` 和 `/api/component-label-batches/*` 这两个前缀已经在 `lzc-manifest.yml` 里配置成公开路径（`public_path`），跳过 SSO 登录检查，可以直接从外部 CLI/脚本调用。作为代价，这两个路径改用独立的 Bearer token 鉴权：
-
-- **GET 请求**：完全公开，不需要 token。
-- **POST/PUT/DELETE 请求**：必须带 `Authorization: Bearer <token>`，否则返回 `401 Unauthorized`。token 找管理员要（环境变量 `COMPONENT_LABELS_API_TOKEN`），**不要把它当成公开信息在其他地方传播**。
+`/api/component-labels/*` 和 `/api/component-label-batches/*` 这两个前缀已经在 `lzc-manifest.yml` 里配置成公开路径（`public_path`），跳过 SSO 登录检查，可以直接从外部 CLI/脚本调用，**GET/POST/PUT/DELETE 都不需要额外鉴权**（能访问到懒猫域名即视为可信网络内部）。
 
 示例：
 ```bash
 curl -X POST https://quote0.logic.heiyu.space/api/component-labels/render \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
   -d '{"codes":["C25168826"]}'
 ```
 
-这个 token 只对这两个路径生效，跟懒猫 SSO 会话、跟本服务其他 `/api/*` 接口（label-web 前端用的那些）完全无关、互不影响。
+本服务其他 `/api/*` 接口（label-web 前端用的那些）仍然走懒猫 SSO 会话保护，跟这两个路径无关。
 
 ## 0. 设计原则
 
