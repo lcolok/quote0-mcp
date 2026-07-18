@@ -1,12 +1,23 @@
 # 元器件编号标签 API
 
-> 状态：已上线，v1.21.18 实机验证通过
-> 日期：2026-07-18
+> 状态：已上线，v1.21.20 实机验证通过
+> 日期：2026-07-18，2026-07-19 补充 component-value widget + widget_id 安全修复
 > 服务地址：`https://quote0.logic.heiyu.space`（生产 news-api，前缀路径即 API 路径）
 
 ## 0. 设计原则
 
-本 API **只负责"给一个元件编号字符串 → 渲染一张标签图 → 打印到热敏打印机"**，不存储、不管理任何元件元数据（型号、厂商、封装、库存、价格等）。这些信息由调用方（料号管理系统）自行维护；本服务只认字符串本身。
+本 API **只负责"给一段标识 → 渲染一张标签图 → 打印到热敏打印机"**，不存储、不管理任何元件元数据（型号、厂商、封装、库存、价格等）。这些信息由调用方（料号管理系统）自行维护；本服务只认传入的字符串/结构化字段本身。
+
+支持两种内容排版（widget）：
+
+| widgetId | 用途 | 输入 | 示例 |
+|---|---|---|---|
+| `component-code`（默认） | 料号编号（如嘉立创 LCSC） | `codes: string[]` | `C25168826` |
+| `component-value` | 主参数+封装 | `values: [{value, package}]` | `10kΩ` + `0603` → `10kΩ[0603]`，右侧自动嵌入真实 IEC 电阻/电容/电感符号（按 `value` 里的单位 Ω/F/H 自动判断元件类型） |
+
+`/render`、`/print` 两个端点的 body 可以同时带 `codes` 和 `values`，会分别按各自的 widget 渲染，结果合并返回。
+
+**幂等键安全性**：`component_labels` 表用 `(code, target_id, widget_id)` 三元组做幂等索引，`widget_id` 参与主键——即便 `component-code` 和 `component-value` 凑巧算出同一个字符串（比如都是 `"10KΩ[0603]"`），两者也是完全独立的两行，不会互相覆盖或读到对方的渲染结果。
 
 两层接口，按需选用：
 
@@ -28,39 +39,42 @@
 
 ### `POST /api/component-labels/render`
 
-批量渲染编号为标签图。**幂等**：同一编号（同 `targetId`）默认直接复用已渲染结果，不重复生成。
+批量渲染标签图。**幂等**：同一内容（同 `targetId` 同 widget）默认直接复用已渲染结果，不重复生成。
 
 请求：
 ```json
 {
-  "codes": ["C25168826", "C2925077"],
+  "codes": ["C25168826", "C2925077"],                              // component-code widget，可选
+  "values": [{ "value": "10kΩ", "package": "0603" }],               // component-value widget，可选
   "targetId": "label-T20x8-160",   // 可选，默认 label-T20x8-160
   "force": false                    // 可选，true 强制重新渲染(忽略缓存)
 }
 ```
+`codes` 和 `values` 至少填一个，可以同时填（会分别渲染，结果合并在一个数组里返回）。
 
 响应：
 ```json
 {
   "success": true,
   "results": [
-    { "code": "C25168826", "labelId": "uuid", "pngUrl": "/api/minio-proxy/labels/xxx.png", "cached": false },
-    { "code": "C2925077", "labelId": "uuid", "pngUrl": "/api/minio-proxy/labels/yyy.png", "cached": true }
+    { "code": "C25168826", "widgetId": "component-code", "labelId": "uuid", "pngUrl": "/api/minio-proxy/labels/xxx.png", "cached": false },
+    { "code": "10KΩ[0603]", "widgetId": "component-value", "labelId": "uuid", "pngUrl": "/api/minio-proxy/labels/yyy.png", "cached": true }
   ]
 }
 ```
-`pngUrl` 是相对路径，需拼服务域名访问：`https://quote0.logic.heiyu.space` + `pngUrl`。
+`pngUrl` 是相对路径，需拼服务域名访问：`https://quote0.logic.heiyu.space` + `pngUrl`。`values` 条目的 `code` 字段是内部自动拼接的幂等标识（`${value}[${package}]`，会转大写），仅用于对照/去重，不代表实际打印内容的大小写（实际印刷内容保留调用方传入的原始大小写，比如 `220µH` 不会被错误转成希腊字母 `Μ`）。
 
 单条渲染失败不影响其他条目，失败项返回 `{ "code": "...", "error": "..." }`（无 `labelId`/`pngUrl` 字段）。
 
 ### `POST /api/component-labels/print`
 
-批量打印。未渲染过的编号会自动先渲染。
+批量打印。未渲染过的内容会自动先渲染。
 
 请求：
 ```json
 {
-  "codes": ["C25168826", "C2925077"],
+  "codes": ["C25168826", "C2925077"],                 // 可选
+  "values": [{ "value": "100nF", "package": "0805" }], // 可选，至少填一个
   "deviceId": "niimbot-main",       // 必填，打印设备 id（找管理员要，见 §4）
   "targetId": "label-T20x8-160"     // 可选
 }
@@ -83,14 +97,16 @@
 查单个编号的渲染/打印状态。
 
 ```
-GET /api/component-labels/C25168826?targetId=label-T20x8-160
+GET /api/component-labels/C25168826?targetId=label-T20x8-160&widgetId=component-code
 ```
+`widgetId` 可选，默认 `component-code`；查 `component-value` 渲染的内容要传 `widgetId=component-value` 且 `:code` 部分传拼接后的键（如 `10KΩ[0603]`，大写）。
 
 响应：
 ```json
 {
   "success": true,
   "code": "C25168826",
+  "widgetId": "component-code",
   "labelId": "uuid",
   "pngUrl": "/api/minio-proxy/labels/xxx.png",
   "labelStatus": "printed",
@@ -234,3 +250,11 @@ POST /api/component-labels/print { codes: [...], deviceId: "niimbot-main" }
 4. POST /api/component-label-batches/:id/print { deviceId }   → 批量打印
 5. GET  /api/component-label-batches                          → 列表页看 counts.printed 进度
 ```
+
+> 注：`/api/component-label-batches` 目前只支持 `component-code`（编号）批次；`component-value`（数值+封装）暂时只能走 §2 的即时层，还没接进批次管理层，如需要请提出。
+
+## 7. `component-value` 的已知限制
+
+- **图标覆盖**：目前只有电阻（Ω）、电容（F）、电感（H）三种符号，按 `value` 里出现的单位字符自动判断，其他单位（或无法识别时）默认按电阻符号处理。图标来自开源 IEC 标准电路符号库 [ElectricalSymbolLibrary](https://github.com/basverdoes/ElectricalSymbolLibrary)（CC0 授权），该库里其实还有二极管/LED/稳压二极管等符号，但**目前没有接入**（没有三极管/开关/保险丝符号，这个库本身也不提供）。
+- **元件类型判断**：纯粹靠 `value` 字符串里有没有 `Ω`/`F`（或`f`）/`H`（或`h`），没有单独的 `kind` 参数可以显式指定，如果 value 写法特殊（比如省略单位）可能判断错。
+- **字符集**：数字、`.`、`-`、`kKnNpPmMFfHhRr`、`Ω`、`µ`/`μ`（微符号两种写法都支持）、方括号。其他字符会按保守宽度估算，可能排版不够精确。
