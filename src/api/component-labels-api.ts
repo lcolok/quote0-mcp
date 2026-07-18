@@ -294,6 +294,114 @@ componentLabelsApp.post('/print', async (c) => {
   }
 });
 
+// ============ POST /bindings —— 建/改 料号↔数值封装 映射 ============
+componentLabelsApp.post('/bindings', async (c) => {
+  try {
+    const body = await c.req.json<{ code: string; value: string; package: string }>();
+    if (!body.code || !body.value || !body.package) {
+      return c.json({ success: false, error: 'code/value/package 都必填' }, 400);
+    }
+    const code = normalizeCode(body.code);
+    const db = getPostgresDatabase();
+    const r = await db.getPool().query(
+      `INSERT INTO component_bindings (code, value, package)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (code) DO UPDATE SET value = EXCLUDED.value, package = EXCLUDED.package, updated_at = now()
+       RETURNING code, value, package, created_at, updated_at`,
+      [code, body.value, body.package]
+    );
+    return c.json({ success: true, binding: r.rows[0] });
+  } catch (error) {
+    console.error('❌ POST /api/component-labels/bindings 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ GET /bindings/:code —— 查映射 ============
+componentLabelsApp.get('/bindings/:code', async (c) => {
+  try {
+    const code = normalizeCode(c.req.param('code'));
+    const db = getPostgresDatabase();
+    const r = await db.getPool().query(`SELECT * FROM component_bindings WHERE code = $1`, [code]);
+    if (r.rows.length === 0) return c.json({ success: false, error: '该编号未绑定' }, 404);
+    return c.json({ success: true, binding: r.rows[0] });
+  } catch (error) {
+    console.error('❌ GET /api/component-labels/bindings/:code 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ DELETE /bindings/:code —— 删映射 ============
+componentLabelsApp.delete('/bindings/:code', async (c) => {
+  try {
+    const code = normalizeCode(c.req.param('code'));
+    const db = getPostgresDatabase();
+    await db.getPool().query(`DELETE FROM component_bindings WHERE code = $1`, [code]);
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('❌ DELETE /api/component-labels/bindings/:code 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /print-pair —— 按绑定一起打印「料号标签 + 数值封装标签」============
+// 传 code(+ 可选 value/package 顺带建/改绑定)，未传 value/package 时查已有绑定；
+// 都没有则报错，提示先调 /bindings 建立映射。两张标签各自走已有的幂等渲染+打印逻辑。
+componentLabelsApp.post('/print-pair', async (c) => {
+  try {
+    const body = await c.req.json<{
+      code: string;
+      value?: string;
+      package?: string;
+      deviceId: string;
+      targetId?: string;
+    }>();
+    if (!body.code) return c.json({ success: false, error: 'code 必填' }, 400);
+    if (!body.deviceId) return c.json({ success: false, error: 'deviceId 必填' }, 400);
+
+    const code = normalizeCode(body.code);
+    const db = getPostgresDatabase();
+
+    let value = body.value;
+    let pkg = body.package;
+    if (value && pkg) {
+      await db.getPool().query(
+        `INSERT INTO component_bindings (code, value, package)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (code) DO UPDATE SET value = EXCLUDED.value, package = EXCLUDED.package, updated_at = now()`,
+        [code, value, pkg]
+      );
+    } else {
+      const r = await db.getPool().query(`SELECT value, package FROM component_bindings WHERE code = $1`, [code]);
+      if (r.rows.length === 0) {
+        return c.json(
+          { success: false, error: `编号 ${code} 未绑定数值/封装，请先传 value+package 或调用 /bindings 建立映射` },
+          404
+        );
+      }
+      value = r.rows[0].value;
+      pkg = r.rows[0].package;
+    }
+
+    const targetId = body.targetId ?? DEFAULT_TARGET_ID;
+    let resolved: ResolvedDevice;
+    try {
+      resolved = await resolveDeviceAndSink(body.deviceId, targetId);
+    } catch (e) {
+      return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 400);
+    }
+
+    const codeResult = await printOneCode(code, resolved);
+    const valueResult = await printOneValuePackage(value!, pkg!, resolved);
+
+    const printed = [codeResult, valueResult].filter((r) => r.ok).length;
+    return c.json({ success: true, printed, code: codeResult, value: valueResult });
+  } catch (error) {
+    console.error('❌ POST /api/component-labels/print-pair 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
 // ============ GET /:code —— 单个编号状态查询(widgetId 可选，默认 component-code) ============
 componentLabelsApp.get('/:code', async (c) => {
   try {

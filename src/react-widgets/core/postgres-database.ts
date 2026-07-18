@@ -866,6 +866,17 @@ export class PostgresDatabase {
       );
       CREATE INDEX IF NOT EXISTS component_labels_label_id_idx ON component_labels(label_id);
 
+      -- 料号 ↔ 数值+封装 映射绑定(2026-07-19)：只存这一层映射本身，不是元件元数据
+      -- (型号/厂商/库存/价格仍留给外部料号系统)。用于 print-pair 一次性打印料号+
+      -- 数值封装两张标签，方便一起贴在同一个料盒上。
+      CREATE TABLE IF NOT EXISTS component_bindings (
+        code        text PRIMARY KEY,
+        value       text NOT NULL,
+        package     text NOT NULL,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        updated_at  timestamptz NOT NULL DEFAULT now()
+      );
+
       -- 元器件编号「批次管理」层(2026-07-18)：对齐 label_batches 给用户的批量录入/进度/打印体验，
       -- 但生成走确定性 widget 渲染(component-labels-api.ts::renderOne)，不经 LLM/job 队列。
       -- 同样与元件元数据解耦：item 只存 code 字符串本身。
