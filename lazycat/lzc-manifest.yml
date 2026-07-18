@@ -32,9 +32,8 @@ application:
     - /images=http://news-api.me.friday.quote0-mcp.lzcapp:3001/images
 
   # 公开路径(跳过懒猫 SSO 会话登录检查，允许外部系统脚本/CLI 直连)
-  # 2026-07-19：外部料号管理系统需要不登录直接调用元器件标签 API。
-  # 写操作(POST/PUT/DELETE)由 COMPONENT_LABELS_API_TOKEN 独立 Bearer 鉴权
-  # 中间件兜底(news-api-server.ts，仅作用于这两个路径)，GET 保持公开只读——
+  # 2026-07-19：外部料号管理系统需要不登录直接调用元器件标签 API。用户确认
+  # 能访问懒猫域名的都是私有网络内部，完全公开、不加 token 门槛。
   # 不要仅靠这个字段就把整个 /api 全放开，否则等于对公网裸奔。
   public_path:
     - /api/component-labels
@@ -98,12 +97,9 @@ application:
     NEWS_SCHEDULER_ENABLED: "true"
     # 懒猫环境标记
     LZC_APP: "true"
-    # public_path 放开 /api/component-labels* 的 SSO 后，写操作(非GET)靠这个
-    # 独立 token 兜底鉴权(仅作用于这两个路径，不影响 label-web 前端走 SSO
-    # session 的其他 /api/* 写接口——API_AUTH_TOKEN 是全局中间件，不能复用，
-    # 否则会像 2026-06-25 那次一样打挂前端)。外部料号系统调用需带
-    # Authorization: Bearer <此值>
-    COMPONENT_LABELS_API_TOKEN: "AmWyNzm48YqRDCgzi3i8av_Gf2E6HP_nTeN2GeOy1Pk"
+    # 2026-07-19：用户确认能访问懒猫域名的都是私有网络内部，component-labels*
+    # 两个路径不再要求 Bearer token，完全公开（COMPONENT_LABELS_API_TOKEN 中间件
+    # 未设置该变量时自动跳过鉴权，见 news-api-server.ts）。
 
   # 健康检查
   health_check:
@@ -241,8 +237,6 @@ services:
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
       NEWS_SCHEDULER_EXTRA_RENDERERS: 'local-eink'
       AMAP_API_KEY: dae9a4112f54312a2cef32517cc1ecbe
-      # public_path 放开 /api/component-labels* 的 SSO 后，独立 Bearer token 兜底鉴权
-      COMPONENT_LABELS_API_TOKEN: "AmWyNzm48YqRDCgzi3i8av_Gf2E6HP_nTeN2GeOy1Pk"
       # ADR-0002 Phase C: niimbot 热敏标签机 push endpoint（4 级 fallback 链的 env 兜底）
       NIIMBOT_ENDPOINT: http://192.168.31.186/api/print/raw
     depends_on:
