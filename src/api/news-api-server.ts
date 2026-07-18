@@ -296,6 +296,23 @@ app.route('/', devicesApp);
 app.route('/', inventoryApp);
 app.route('/api/labels', labelsApp);
 app.route('/api/label-batches', labelBatchesApp);
+
+// component-labels* 走懒猫 manifest public_path 放行 SSO(外部料号系统需要不登录直连)，
+// 独立 Bearer token 鉴权，只作用于这两个路径——不能复用全局 API_AUTH_TOKEN 中间件，
+// 那个中间件覆盖全站 /api/*，会连带打挂 label-web 前端走 SSO session 的其他写接口
+// (2026-06-25 已有先例踩过这个坑，见 handoff ctx-sun8)。GET 保持公开只读不鉴权。
+const requireComponentLabelsToken = async (c: any, next: () => Promise<void>) => {
+  const token = process.env.COMPONENT_LABELS_API_TOKEN;
+  if (!token) return await next();
+  if (c.req.method === 'GET' || c.req.method === 'OPTIONS') return await next();
+  const header = c.req.header('Authorization');
+  if (!header || !header.startsWith('Bearer ') || header.slice(7) !== token) {
+    return c.json({ success: false, error: 'Unauthorized' }, 401);
+  }
+  await next();
+};
+app.use('/api/component-labels/*', requireComponentLabelsToken);
+app.use('/api/component-label-batches/*', requireComponentLabelsToken);
 app.route('/api/component-labels', componentLabelsApp);
 app.route('/api/component-label-batches', componentLabelBatchesApp);
 app.route('/api/label-sessions', labelSessionsApp);
