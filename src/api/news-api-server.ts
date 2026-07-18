@@ -23,6 +23,7 @@ import inventoryApp from './inventory-api.js';
 import labelsApp from './labels-api.js';
 import labelBatchesApp from './label-batches-api.js';
 import componentLabelsApp from './component-labels-api.js';
+import componentLabelBatchesApp from './component-label-batches-api.js';
 import labelSessionsApp from './label-sessions-api.js';
 import memosApp from './memos-api.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
@@ -296,6 +297,7 @@ app.route('/', inventoryApp);
 app.route('/api/labels', labelsApp);
 app.route('/api/label-batches', labelBatchesApp);
 app.route('/api/component-labels', componentLabelsApp);
+app.route('/api/component-label-batches', componentLabelBatchesApp);
 app.route('/api/label-sessions', labelSessionsApp);
 app.route('/api/memos', memosApp);
 

@@ -851,6 +851,33 @@ export class PostgresDatabase {
       );
       CREATE INDEX IF NOT EXISTS component_labels_label_id_idx ON component_labels(label_id);
 
+      -- 元器件编号「批次管理」层(2026-07-18)：对齐 label_batches 给用户的批量录入/进度/打印体验，
+      -- 但生成走确定性 widget 渲染(component-labels-api.ts::renderOne)，不经 LLM/job 队列。
+      -- 同样与元件元数据解耦：item 只存 code 字符串本身。
+      CREATE TABLE IF NOT EXISTS component_label_batches (
+        id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        name        text NOT NULL,
+        target_id   text NOT NULL DEFAULT 'label-T20x8-160',
+        status      text NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','printing','done','archived')),
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        updated_at  timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS component_label_batch_items (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        batch_id        uuid NOT NULL REFERENCES component_label_batches(id) ON DELETE CASCADE,
+        idx             int  NOT NULL,
+        code            text NOT NULL,
+        label_id        uuid REFERENCES labels(id) ON DELETE SET NULL,
+        print_count     int  NOT NULL DEFAULT 0,
+        last_printed_at timestamptz,
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        updated_at      timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (batch_id, idx)
+      );
+      CREATE INDEX IF NOT EXISTS component_label_batch_items_batch_idx ON component_label_batch_items(batch_id);
+
       -- 标签批量管理（Label Batch）
       CREATE TABLE IF NOT EXISTS label_batches (
         id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
