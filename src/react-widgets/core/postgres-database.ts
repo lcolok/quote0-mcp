@@ -119,6 +119,9 @@ export class PostgresDatabase {
    */
   private getMigrationStatements(): string[] {
     return [
+      // v1.21.16: push_devices 加 dpi（设备静态属性，替代不稳定的 BLE 运行时侦测），
+      // null = 不覆盖，沿用 RenderTarget 自身 dpi（向后兼容旧行为）
+      `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS dpi INTEGER`,
       // Phase F (ADR-0004): BizyAir 图像驱动标签
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'svg'`,
       `ALTER TABLE label_gen_turns ADD COLUMN IF NOT EXISTS deleted_at timestamptz`,
@@ -2168,7 +2171,7 @@ export class PostgresDatabase {
 
   async getEnabledPushDevices(): Promise<Array<{id:string;name:string;base_url:string;token:string;width:number;height:number;kind:string}>> {
     const r = await this.getPool().query(
-      'SELECT id, name, base_url, token, width, height, kind FROM push_devices WHERE enabled = true ORDER BY created_at'
+      'SELECT id, name, base_url, token, width, height, kind, dpi FROM push_devices WHERE enabled = true ORDER BY created_at'
     );
     return r.rows;
   }
@@ -2184,18 +2187,18 @@ export class PostgresDatabase {
     return r.rows[0] ?? null;
   }
 
-  async createPushDevice(d: {id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean;kind?:string;capabilities?:string[]}): Promise<any> {
+  async createPushDevice(d: {id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean;kind?:string;capabilities?:string[];dpi?:number|null}): Promise<any> {
     const r = await this.getPool().query(
-      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled,kind,capabilities)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled,kind,capabilities,dpi)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [d.id, d.name, d.base_url, d.token ?? '', d.width, d.height, d.enabled ?? true,
-       d.kind ?? 'eink-local', JSON.stringify(d.capabilities ?? ['display'])]
+       d.kind ?? 'eink-local', JSON.stringify(d.capabilities ?? ['display']), d.dpi ?? null]
     );
     return r.rows[0];
   }
 
   async updatePushDevice(id: string, patch: Record<string, any>): Promise<any> {
-    const allowed = ['name','base_url','token','width','height','enabled','kind','capabilities'];
+    const allowed = ['name','base_url','token','width','height','enabled','kind','capabilities','dpi'];
     const sets: string[] = [];
     const vals: any[] = [];
     let i = 1;

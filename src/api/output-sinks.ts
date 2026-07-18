@@ -2,6 +2,7 @@
 // 放在 api/ 而非 core/：三个 sink 后端(eink-converter/device-pusher)都在 api/，
 // 放 core 会造成 core→api 层级倒置；放这里全是 api→core 正向依赖。
 import { RenderTarget } from '../react-widgets/core/render-targets.js';
+import { mmToWidthPx, mmToHeightPx } from '../react-widgets/core/device-dpi.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
 import { pushToEinkDevice, pngTo1BitBitmap } from './eink-converter.js';
@@ -19,6 +20,7 @@ export interface PushDeviceRow {
   enabled: boolean;
   kind: DeviceKind;
   capabilities: string[];
+  dpi?: number | null;
 }
 
 export interface SinkResult {
@@ -38,8 +40,19 @@ export interface OutputSink {
 const niimbotSink: OutputSink = {
   kind: 'thermal-printer',
   async send(png, device, target) {
-    const bitmap = await packFromPng(png, target);
-    const r = await niimbotPush.push(bitmap, target, device.base_url, {});
+    // 设备静态 dpi 覆盖 target 基准 dpi（替代不稳定的 BLE 运行时侦测）。
+    // 仅当设备登记了 dpi 且与 target 基准 dpi 不同、且 target 有 physical(mm) 时才重算 px。
+    let printTarget = target;
+    if (device.dpi != null && target.physical && device.dpi !== target.dpi) {
+      printTarget = {
+        ...target,
+        dpi: device.dpi,
+        widthPx: mmToWidthPx(target.physical.widthMm, device.dpi),
+        heightPx: mmToHeightPx(target.physical.heightMm, device.dpi),
+      };
+    }
+    const bitmap = await packFromPng(png, printTarget);
+    const r = await niimbotPush.push(bitmap, printTarget, device.base_url, {});
     return { ok: r.queued, status: r.status, error: r.error };
   },
 };
