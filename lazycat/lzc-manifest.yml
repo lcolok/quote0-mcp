@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.20
+version: 1.21.21
 
 # 应用名称
 name: Quote0 新闻服务
@@ -207,7 +207,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.14-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.20
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.21
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1
@@ -241,6 +241,8 @@ services:
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
       NEWS_SCHEDULER_EXTRA_RENDERERS: 'local-eink'
       AMAP_API_KEY: dae9a4112f54312a2cef32517cc1ecbe
+      # public_path 放开 /api/component-labels* 的 SSO 后，独立 Bearer token 兜底鉴权
+      COMPONENT_LABELS_API_TOKEN: "AmWyNzm48YqRDCgzi3i8av_Gf2E6HP_nTeN2GeOy1Pk"
       # ADR-0002 Phase C: niimbot 热敏标签机 push endpoint（4 级 fallback 链的 env 兜底）
       NIIMBOT_ENDPOINT: http://192.168.31.186/api/print/raw
     depends_on:
