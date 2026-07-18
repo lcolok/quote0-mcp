@@ -181,25 +181,43 @@ GET /api/component-labels/C25168826?targetId=label-T20x8-160&widgetId=component-
 
 ## 3. `/api/component-label-batches`（批次管理层）
 
-> 2026-07-19：这套批次现在也有浏览器界面可以手动管理——`https://labels-quote0.logic.heiyu.space/batches`（label-web「批量标签」页），跟原有的图片批次卡片混在同一个列表里展示（带 🏷️ 图标区分），可以直接在页面上新建批次、渲染、批量打印，不需要写代码调 API。前端界面走懒猫 SSO 登录，跟这里说的"外部 API 公开访问"是两条独立路径，互不影响。
+> 2026-07-19：这套批次现在也有浏览器界面可以手动管理——`https://labels-quote0.logic.heiyu.space/batches`（label-web「批量标签」页），跟原有的图片批次卡片混在同一个列表里展示（带 🏷️ 图标区分），可以直接在页面上新建批次、渲染、批量打印、给条目绑定数值+封装配对，不需要写代码调 API。前端界面走懒猫 SSO 登录，跟这里说的"外部 API 公开访问"是两条独立路径，互不影响。
+
+> 2026-07-19：批次条目支持「料号+数值封装配对」——同一条目可以同时关联一个料号标签和一个数值封装标签，打印时选中其一会自动把配对的另一张也带上一起打印（贴的时候天然是一对）。配对是**每个批次内部的关系**，不是全局的（§2.5 的 `component_bindings` 是给单条 `/print-pair` 用的全局映射，两者是独立机制，互不影响）。
 
 ### `POST /api/component-label-batches`
 
-创建批次并录入编号（不会自动渲染，需要另调 `/render` 或 `/print`）。
+创建批次并录入条目（不会自动渲染，需要另调 `/render` 或 `/print`）。
 
-请求：
+请求（两种写法，可混用）：
 ```json
 {
   "name": "2026-07-18 采购入库批次",
-  "codes": ["C25168826", "C2925077", "C5550344"],
+  "codes": ["C25168826", "C2925077"],           // 简写：纯料号数组，向后兼容
+  "items": [
+    { "code": "C5550344" },                       // 只要料号
+    { "value": "10kΩ", "package": "0603" },       // 只要数值封装
+    { "code": "C25168826", "value": "10kΩ", "package": "0603" } // 料号+数值封装，自动建配对
+  ],
   "targetId": "label-T20x8-160"   // 可选
 }
 ```
+`codes` 和 `items` 可以同时传，最终都会展开成条目插入同一个批次；`count` 按实际插入的条目数计（一个 `{code,value,package}` 会算 2 条）。
 
 响应：
 ```json
 { "success": true, "id": "batch-uuid", "createdAt": "...", "count": 3 }
 ```
+
+### `POST /api/component-label-batches/:id/items/:itemId/pair`
+
+给已存在的条目建立/更新「数值+封装」配对（比如批次已经建好了，之后才想起要给某个料号补配对）。
+
+请求：
+```json
+{ "value": "10kΩ", "package": "0603" }
+```
+响应：`{ "success": true }`。再查 `GET /:id` 时，该条目的 `binding` 字段会带上这次设的值；下次打印这个条目会自动带上配对标签一起打印。
 
 ### `GET /api/component-label-batches`
 
