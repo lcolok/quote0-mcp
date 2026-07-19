@@ -127,20 +127,40 @@ export default function ComponentBatchDetailPage() {
             <div className="text-xs font-medium text-foreground truncate" title={it.code}>
               {it.code}
             </div>
-            <button
-              type="button"
-              onClick={() => openBindingDialog(it)}
-              className="flex items-center gap-1 text-xs w-full text-left"
-            >
-              <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />
-              {it.binding ? (
-                <span className="text-foreground truncate">{it.binding.value}[{it.binding.package}]</span>
-              ) : (
-                <span className="text-muted-foreground underline">绑定数值/封装</span>
-              )}
-            </button>
             {it.printCount > 0 && (
               <div className="text-xs text-muted-foreground">已打印 {it.printCount} 次</div>
+            )}
+
+            {it.binding ? (
+              <div className="pt-2 border-t space-y-1.5">
+                <div className="aspect-[5/2] rounded bg-muted flex items-center justify-center overflow-hidden">
+                  {it.binding.pngUrl ? (
+                    <img src={it.binding.pngUrl} alt={`${it.binding.value}[${it.binding.package}]`} className="max-w-full max-h-full object-contain" />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">配对未渲染</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openBindingDialog(it)}
+                  className="flex items-center gap-1 text-xs w-full text-left"
+                >
+                  <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="text-foreground truncate">{it.binding.value}[{it.binding.package}]</span>
+                </button>
+                {it.binding.printCount > 0 && (
+                  <div className="text-xs text-muted-foreground">配对已打印 {it.binding.printCount} 次</div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => openBindingDialog(it)}
+                className="flex items-center gap-1 text-xs w-full text-left pt-2 border-t"
+              >
+                <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="text-muted-foreground underline">绑定数值/封装</span>
+              </button>
             )}
           </Card>
         ))}

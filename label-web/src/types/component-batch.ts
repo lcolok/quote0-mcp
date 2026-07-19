@@ -17,9 +17,19 @@ export interface ComponentBatchItem {
   labelStatus: string | null;
   printCount: number;
   lastPrintedAt: string | null;
-  /** 该 code 绑定的数值+封装(component_bindings 表)，未绑定则为 null。
-   *  批量打印时若存在绑定，会连数值封装标签一起打印。 */
-  binding: { value: string; package: string } | null;
+  /** 配对的数值+封装标签(批次内独立条目，pair_item_id 关联)，未配对则为 null。
+   *  是完整的独立渲染实体，自己的 pngUrl/labelId/打印状态，不是内容占位。
+   *  批量打印时若存在配对，会连数值封装标签一起打印。 */
+  binding: {
+    value: string;
+    package: string;
+    itemId: string;
+    labelId: string | null;
+    pngUrl: string | null;
+    labelStatus: string | null;
+    printCount: number;
+    lastPrintedAt: string | null;
+  } | null;
 }
 
 export interface ComponentBatchDetail {

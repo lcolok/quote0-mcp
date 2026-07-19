@@ -143,37 +143,52 @@ componentLabelBatchesApp.get('/:id', async (c) => {
     const bRes = await db.getPool().query(`SELECT * FROM component_label_batches WHERE id = $1`, [id]);
     if (bRes.rows.length === 0) return c.json({ success: false, error: '批次不存在' }, 404);
 
+    // 配对条目(pi)本身也是独立实体，有自己的 label_id/渲染产物——之前只 JOIN 了
+    // pi 的 widget_id/props，把配对标签的 pngUrl/打印状态都丢了，导致前端拿不到
+    // 配对标签自己的预览图。这里再 JOIN 一层 pi 关联的 labels(pl)，binding 字段
+    // 带上完整渲染状态，而不是只留 value/package 两个内容字段。
     const iRes = await db.getPool().query(
       `SELECT i.*, l.png_path, l.status AS label_status, l.print_count, l.print_history,
-              pi.widget_id AS pair_widget_id, pi.props AS pair_props
+              pi.id AS pair_id, pi.widget_id AS pair_widget_id, pi.props AS pair_props,
+              pi.label_id AS pair_label_id, pl.png_path AS pair_png_path,
+              pl.status AS pair_label_status, pl.print_count AS pair_print_count,
+              pl.print_history AS pair_print_history
          FROM component_label_batch_items i
          LEFT JOIN labels l ON l.id = i.label_id
          LEFT JOIN component_label_batch_items pi ON pi.id = i.pair_item_id
+         LEFT JOIN labels pl ON pl.id = pi.label_id
         WHERE i.batch_id = $1
         ORDER BY i.idx ASC`,
       [id]
     );
+    function lastPrintedAt(history: any): string | null {
+      return Array.isArray(history) && history.length > 0 ? history[history.length - 1]?.printed_at ?? null : null;
+    }
     const items = iRes.rows
       .filter((row) => !(row.widget_id === 'component-value' && row.pair_item_id))
-      .map((row) => {
-        const lastPrinted = Array.isArray(row.print_history) && row.print_history.length > 0
-          ? row.print_history[row.print_history.length - 1]?.printed_at ?? null
-          : null;
-        return {
-          id: row.id,
-          idx: row.idx,
-          widgetId: row.widget_id,
-          code: row.code_key,
-          labelId: row.label_id,
-          pngUrl: pngUrlOf(row.png_path),
-          labelStatus: row.label_status,
-          printCount: row.print_count ?? 0,
-          lastPrintedAt: lastPrinted,
-          binding: row.pair_widget_id === 'component-value'
-            ? { value: row.pair_props?.value, package: row.pair_props?.package }
-            : null,
-        };
-      });
+      .map((row) => ({
+        id: row.id,
+        idx: row.idx,
+        widgetId: row.widget_id,
+        code: row.code_key,
+        labelId: row.label_id,
+        pngUrl: pngUrlOf(row.png_path),
+        labelStatus: row.label_status,
+        printCount: row.print_count ?? 0,
+        lastPrintedAt: lastPrintedAt(row.print_history),
+        binding: row.pair_widget_id === 'component-value'
+          ? {
+              value: row.pair_props?.value,
+              package: row.pair_props?.package,
+              itemId: row.pair_id,
+              labelId: row.pair_label_id,
+              pngUrl: pngUrlOf(row.pair_png_path),
+              labelStatus: row.pair_label_status,
+              printCount: row.pair_print_count ?? 0,
+              lastPrintedAt: lastPrintedAt(row.pair_print_history),
+            }
+          : null,
+      }));
     const b = bRes.rows[0];
     return c.json({
       success: true,
