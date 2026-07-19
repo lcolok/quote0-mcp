@@ -378,6 +378,7 @@ componentLabelBatchesApp.post('/upsert', async (c) => {
 componentLabelBatchesApp.get('/', async (c) => {
   try {
     const db = getPostgresDatabase();
+    const includeArchived = c.req.query('includeArchived') === '1';
     const r = await db.getPool().query(`
       SELECT b.id, b.name, b.target_id, b.status, b.created_at, b.updated_at,
              count(i.*) AS total,
@@ -386,7 +387,7 @@ componentLabelBatchesApp.get('/', async (c) => {
         FROM component_label_batches b
         LEFT JOIN component_label_batch_items i ON i.batch_id = b.id
         LEFT JOIN labels l ON l.id = i.label_id
-       WHERE b.status != 'archived'
+       ${includeArchived ? '' : 'WHERE b.status != \'archived\''}
        GROUP BY b.id
        ORDER BY b.created_at DESC
     `);
@@ -470,6 +471,125 @@ componentLabelBatchesApp.get('/:id', async (c) => {
     });
   } catch (error) {
     console.error('❌ GET /api/component-label-batches/:id 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /:id/archive —— 置 archived（幂等：重复调用返回当前状态不报错） ============
+componentLabelBatchesApp.post('/:id/archive', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const db = getPostgresDatabase();
+    const res = await db.getPool().query<{ id: string; status: string }>(
+      `UPDATE component_label_batches SET status = 'archived', updated_at = now()
+        WHERE id = $1 RETURNING id, status`,
+      [id]
+    );
+    if (res.rows.length === 0) return c.json({ success: false, error: '批次不存在' }, 404);
+    return c.json({ success: true, id, status: res.rows[0].status });
+  } catch (error) {
+    console.error('❌ POST /api/component-label-batches/:id/archive 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /:id/unarchive —— 回 draft（幂等：重复调用返回当前状态不报错） ============
+componentLabelBatchesApp.post('/:id/unarchive', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const db = getPostgresDatabase();
+    const res = await db.getPool().query<{ id: string; status: string }>(
+      `UPDATE component_label_batches SET status = 'draft', updated_at = now()
+        WHERE id = $1 RETURNING id, status`,
+      [id]
+    );
+    if (res.rows.length === 0) return c.json({ success: false, error: '批次不存在' }, 404);
+    return c.json({ success: true, id, status: res.rows[0].status });
+  } catch (error) {
+    console.error('❌ POST /api/component-label-batches/:id/unarchive 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ DELETE /:id —— 硬删除批次及其条目（防误删有历史价值的批次） ============
+componentLabelBatchesApp.delete('/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const db = getPostgresDatabase();
+    const client = await db.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const bRes = await client.query<{ id: string; name: string; status: string }>(
+        `SELECT id, name, status FROM component_label_batches WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (bRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return c.json({ success: false, error: '批次不存在' }, 404);
+      }
+      const batch = bRes.rows[0];
+
+      const statRes = await client.query<{ printed: string; items: string }>(
+        `SELECT
+            COUNT(*) FILTER (WHERE l.print_count > 0) AS printed,
+            COUNT(*) AS items
+           FROM component_label_batch_items i
+           LEFT JOIN labels l ON l.id = i.label_id
+          WHERE i.batch_id = $1`,
+        [id]
+      );
+      const printed = Number(statRes.rows[0].printed);
+      const itemCount = Number(statRes.rows[0].items);
+      const isTemp = batch.name.startsWith('[TEMP]');
+      const deletable = (printed === 0 && itemCount <= 10) || isTemp;
+      if (!deletable) {
+        await client.query('ROLLBACK');
+        return c.json(
+          {
+            success: false,
+            error: '该批次有打印记录或条目过多，禁止硬删除；请先 archive 归档后再处理',
+            printed,
+            itemCount,
+          },
+          409
+        );
+      }
+
+      // 删批次不动 labels 表（打印统计权威在 labels，只清批次自身条目）
+      await client.query(`DELETE FROM component_label_batch_items WHERE batch_id = $1`, [id]);
+      await client.query(`DELETE FROM component_label_batches WHERE id = $1`, [id]);
+      await client.query('COMMIT');
+      return c.json({ success: true, id, deleted: true });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('❌ DELETE /api/component-label-batches/:id 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ PATCH /:id —— 改名（非空、trim、长度跟随创建端点 200） ============
+componentLabelBatchesApp.patch('/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json<{ name?: string }>();
+    if (!body.name || !body.name.trim()) {
+      return c.json({ success: false, error: 'name 必填且非空' }, 400);
+    }
+    const db = getPostgresDatabase();
+    const res = await db.getPool().query<{ id: string; name: string }>(
+      `UPDATE component_label_batches SET name = $1, updated_at = now()
+        WHERE id = $2 RETURNING id, name`,
+      [body.name.trim().slice(0, 200), id]
+    );
+    if (res.rows.length === 0) return c.json({ success: false, error: '批次不存在' }, 404);
+    return c.json({ success: true, id, name: res.rows[0].name });
+  } catch (error) {
+    console.error('❌ PATCH /api/component-label-batches/:id 失败:', error);
     return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
   }
 });

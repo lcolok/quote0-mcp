@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeft, RefreshCw, Printer, Link2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Printer, Link2, Archive } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -63,6 +63,17 @@ export default function ComponentBatchDetailPage() {
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '绑定失败'),
   });
 
+  const archiveMut = useMutation({
+    mutationFn: () => componentBatchesApi.archive(id!),
+    onSuccess: () => {
+      toast.success('批次已归档');
+      queryClient.invalidateQueries({ queryKey: ['component-batch', id] });
+      queryClient.invalidateQueries({ queryKey: ['component-batches'] });
+      navigate('/batches');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '归档失败'),
+  });
+
   if (isLoading || !data) {
     return (
       <div className="flex justify-center py-16">
@@ -91,6 +102,12 @@ export default function ComponentBatchDetailPage() {
         </Button>
         <h1 className="text-xl font-semibold text-foreground flex-1 truncate">{batch.name}</h1>
         <span className="text-xs text-muted-foreground">{batch.status}</span>
+        {batch.status !== 'archived' && (
+          <Button variant="outline" onClick={() => archiveMut.mutate()} disabled={archiveMut.isPending}>
+            <Archive className="h-4 w-4 mr-2" />
+            {archiveMut.isPending ? '归档中…' : '归档'}
+          </Button>
+        )}
       </div>
 
       <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">

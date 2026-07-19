@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Plus, Layers, Tag } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Layers, Tag, Archive } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { batchesApi } from '@/api/batches';
@@ -22,6 +23,7 @@ interface UnifiedBatchCard {
 
 export default function BatchListPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const { data: imageBatches, isLoading: loadingImage } = useQuery({
     queryKey: ['batches'],
@@ -31,6 +33,15 @@ export default function BatchListPage() {
   const { data: componentBatches, isLoading: loadingComponent } = useQuery({
     queryKey: ['component-batches'],
     queryFn: () => componentBatchesApi.list(),
+  });
+
+  const archiveMut = useMutation({
+    mutationFn: (id: string) => componentBatchesApi.archive(id),
+    onSuccess: () => {
+      toast.success('批次已归档');
+      queryClient.invalidateQueries({ queryKey: ['component-batches'] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '归档失败'),
   });
 
   const isLoading = loadingImage || loadingComponent;
@@ -107,6 +118,19 @@ export default function BatchListPage() {
                   </span>
                   <span>{b.subtitle}</span>
                 </div>
+                {b.kind === 'component' && b.status !== 'archived' && (
+                  <div className="mt-3 flex justify-end" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => archiveMut.mutate(b.id)}
+                      disabled={archiveMut.isPending}
+                    >
+                      <Archive className="h-3.5 w-3.5 mr-1.5" />
+                      归档
+                    </Button>
+                  </div>
+                )}
               </Card>
             );
           })}

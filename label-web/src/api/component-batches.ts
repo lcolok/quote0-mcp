@@ -46,4 +46,24 @@ export const componentBatchesApi = {
     client
       .post<{ success: boolean }>(`/component-label-batches/${batchId}/items/${itemId}/pair`, body)
       .then((r) => r.data),
+
+  archive: (id: string) =>
+    client
+      .post<{ success: boolean; id: string; status: string }>(`/component-label-batches/${id}/archive`)
+      .then((r) => r.data),
+
+  unarchive: (id: string) =>
+    client
+      .post<{ success: boolean; id: string; status: string }>(`/component-label-batches/${id}/unarchive`)
+      .then((r) => r.data),
+
+  remove: (id: string) =>
+    client
+      .delete<{ success: boolean; id: string; deleted: boolean }>(`/component-label-batches/${id}`)
+      .then((r) => r.data),
+
+  rename: (id: string, name: string) =>
+    client
+      .patch<{ success: boolean; id: string; name: string }>(`/component-label-batches/${id}`, { name })
+      .then((r) => r.data),
 };
