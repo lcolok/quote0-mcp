@@ -18,6 +18,8 @@ export default function ComponentBatchDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [printOpen, setPrintOpen] = useState(false);
+  const [itemPrintOpen, setItemPrintOpen] = useState(false);
+  const [printingItem, setPrintingItem] = useState<ComponentBatchItem | null>(null);
   const [bindingItem, setBindingItem] = useState<ComponentBatchItem | null>(null);
   const [bindValue, setBindValue] = useState('');
   const [bindPackage, setBindPackage] = useState('');
@@ -47,6 +49,18 @@ export default function ComponentBatchDetailPage() {
     onSuccess: (res) => {
       toast.success(`打印完成：${res.printed} 张`);
       setPrintOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['component-batch', id] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? '打印失败'),
+  });
+
+  const printItemMut = useMutation({
+    mutationFn: (deviceId: string) =>
+      componentBatchesApi.print(id!, { deviceId, scope: { itemIds: [printingItem!.id] } }),
+    onSuccess: (res) => {
+      toast.success(`打印完成：${res.printed} 张`);
+      setItemPrintOpen(false);
+      setPrintingItem(null);
       queryClient.invalidateQueries({ queryKey: ['component-batch', id] });
     },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? '打印失败'),
@@ -91,6 +105,11 @@ export default function ComponentBatchDetailPage() {
     setBindingItem(item);
     setBindValue(item.binding?.value ?? '');
     setBindPackage(item.binding?.package ?? '');
+  }
+
+  function openItemPrintDialog(item: ComponentBatchItem) {
+    setPrintingItem(item);
+    setItemPrintOpen(true);
   }
 
   return (
@@ -179,6 +198,17 @@ export default function ComponentBatchDetailPage() {
                 <span className="text-muted-foreground underline">绑定数值/封装</span>
               </button>
             )}
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => openItemPrintDialog(it)}
+              disabled={!it.labelId || printItemMut.isPending}
+            >
+              <Printer className="h-3 w-3 mr-1" />
+              打印{it.binding ? '（含配对）' : ''}
+            </Button>
           </Card>
         ))}
       </div>
@@ -191,6 +221,16 @@ export default function ComponentBatchDetailPage() {
         onConfirm={(deviceId) => printMut.mutate(deviceId)}
         title="批量打印元件标签"
         description={`把 ${renderedCount} 个已渲染的编号发送到设备打印${boundCount > 0 ? `，其中 ${boundCount} 个已绑定的会连数值封装标签一起打印` : ''}。`}
+      />
+
+      <PrintDeviceDialog
+        open={itemPrintOpen}
+        onOpenChange={setItemPrintOpen}
+        targetId={batch.targetId}
+        pending={printItemMut.isPending}
+        onConfirm={(deviceId) => printItemMut.mutate(deviceId)}
+        title={`打印编号 ${printingItem?.code ?? ''}`}
+        description={`把该编号${printingItem?.binding ? '及其数值封装配对标签' : ''}发送到设备打印。后端会自动带出配对条目一起打印。`}
       />
 
       <Dialog open={!!bindingItem} onOpenChange={(v) => !v && setBindingItem(null)}>
