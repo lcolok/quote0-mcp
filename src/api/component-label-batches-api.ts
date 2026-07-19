@@ -28,6 +28,49 @@ function pngUrlOf(pngPath: string | null): string | null {
   return pngPath ? `/api/minio-proxy/${pngPath}` : null;
 }
 
+type RawItem = { code?: string; value?: string; package?: string };
+
+// 把 codes/items 混合输入展开成「待插入条目」，复用于创建和追加两条路径，
+// 不另写一套解析逻辑。每个 raw 可能产出 1~2 条：(component-code) 和/或 (component-value, 可选配对)。
+type ExpandedItem = {
+  widgetId: 'component-code' | 'component-value';
+  codeKey: string;
+  props: Record<string, unknown>;
+  isPairOfPrev?: boolean; // 紧跟在上一条 component-code 之后、且与之配对
+};
+
+function expandRawItems(rawItems: RawItem[]): ExpandedItem[] {
+  const out: ExpandedItem[] = [];
+  for (const raw of rawItems) {
+    const hasCode = !!(raw.code && raw.code.trim());
+    const hasValue = !!(raw.value && raw.value.trim() && raw.package && raw.package.trim());
+    if (!hasCode && !hasValue) continue;
+
+    if (hasCode) {
+      const code = normalizeCode(raw.code!);
+      out.push({ widgetId: 'component-code', codeKey: code, props: { code } });
+    }
+    if (hasValue) {
+      out.push({
+        widgetId: 'component-value',
+        codeKey: valuePackageKey(raw.value!, raw.package!),
+        props: { value: raw.value, package: raw.package },
+        isPairOfPrev: hasCode,
+      });
+    }
+  }
+  return out;
+}
+
+function parseBatchInput(body: { codes?: unknown; items?: unknown }): { rawItems: RawItem[]; error?: string } {
+  const rawItems: RawItem[] = [
+    ...(Array.isArray(body.codes) ? (body.codes as string[]).map((code) => ({ code })) : []),
+    ...(Array.isArray(body.items) ? (body.items as RawItem[]) : []),
+  ];
+  if (rawItems.length === 0) return { rawItems, error: 'codes 或 items 不能为空' };
+  return { rawItems };
+}
+
 // ============ POST / —— 创建批次(批量录入编号，可选顺带绑定数值+封装) ============
 componentLabelBatchesApp.post('/', async (c) => {
   try {
@@ -40,11 +83,9 @@ componentLabelBatchesApp.post('/', async (c) => {
     if (!body.name || !body.name.trim()) return c.json({ success: false, error: 'name 必填' }, 400);
 
     const targetId = body.targetId ?? DEFAULT_TARGET_ID;
-    const rawItems: Array<{ code?: string; value?: string; package?: string }> = [
-      ...(Array.isArray(body.codes) ? body.codes.map((code) => ({ code })) : []),
-      ...(Array.isArray(body.items) ? body.items : []),
-    ];
-    if (rawItems.length === 0) return c.json({ success: false, error: 'codes 或 items 不能为空' }, 400);
+    const { rawItems, error } = parseBatchInput(body);
+    if (error) return c.json({ success: false, error }, 400);
+    const expanded = expandRawItems(rawItems);
 
     const db = getPostgresDatabase();
     const client = await db.getPool().connect();
@@ -58,33 +99,27 @@ componentLabelBatchesApp.post('/', async (c) => {
 
       let idx = 0;
       let count = 0;
-      for (const raw of rawItems) {
-        const hasCode = !!(raw.code && raw.code.trim());
-        const hasValue = !!(raw.value && raw.value.trim() && raw.package && raw.package.trim());
-        if (!hasCode && !hasValue) continue;
-
-        let codeItemId: string | null = null;
-        if (hasCode) {
-          const code = normalizeCode(raw.code!);
+      let prevCodeItemId: string | null = null;
+      for (const item of expanded) {
+        if (item.widgetId === 'component-code') {
           const r = await client.query<{ id: string }>(
             `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props)
              VALUES ($1, $2, 'component-code', $3, $4::jsonb) RETURNING id`,
-            [batchId, idx++, code, JSON.stringify({ code })]
+            [batchId, idx++, item.codeKey, JSON.stringify(item.props)]
           );
-          codeItemId = r.rows[0].id;
+          prevCodeItemId = r.rows[0].id;
           count++;
-        }
-        if (hasValue) {
-          const codeKey = valuePackageKey(raw.value!, raw.package!);
+        } else {
           const vRes = await client.query<{ id: string }>(
             `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props, pair_item_id)
              VALUES ($1, $2, 'component-value', $3, $4::jsonb, $5) RETURNING id`,
-            [batchId, idx++, codeKey, JSON.stringify({ value: raw.value, package: raw.package }), codeItemId]
+            [batchId, idx++, item.codeKey, JSON.stringify(item.props), item.isPairOfPrev ? prevCodeItemId : null]
           );
           count++;
-          if (codeItemId) {
-            await client.query(`UPDATE component_label_batch_items SET pair_item_id = $1 WHERE id = $2`, [vRes.rows[0].id, codeItemId]);
+          if (item.isPairOfPrev && prevCodeItemId) {
+            await client.query(`UPDATE component_label_batch_items SET pair_item_id = $1 WHERE id = $2`, [vRes.rows[0].id, prevCodeItemId]);
           }
+          prevCodeItemId = null;
         }
       }
       await client.query('COMMIT');
@@ -97,6 +132,244 @@ componentLabelBatchesApp.post('/', async (c) => {
     }
   } catch (error) {
     console.error('❌ POST /api/component-label-batches 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /:id/items —— 幂等追加条目(批次内已存在同 widget_id+code_key 跳过) ============
+componentLabelBatchesApp.post('/:id/items', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json<{
+      codes?: string[];
+      items?: Array<{ code?: string; value?: string; package?: string }>;
+    }>();
+    const { rawItems, error } = parseBatchInput(body);
+    if (error) return c.json({ success: false, error }, 400);
+    const expanded = expandRawItems(rawItems);
+
+    const db = getPostgresDatabase();
+    const client = await db.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const bRes = await client.query<{ id: string; status: string }>(
+        `SELECT id, status FROM component_label_batches WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (bRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return c.json({ success: false, error: '批次不存在' }, 404);
+      }
+      if (bRes.rows[0].status === 'archived') {
+        await client.query('ROLLBACK');
+        return c.json({ success: false, error: '批次已归档，拒绝追加' }, 400);
+      }
+
+      // 现有条目去重键集合
+      const existRes = await client.query<{ widget_id: string; code_key: string }>(
+        `SELECT widget_id, code_key FROM component_label_batch_items WHERE batch_id = $1`,
+        [id]
+      );
+      const existKeys = new Set(existRes.rows.map((r) => `${r.widget_id} ${r.code_key}`));
+      const idxRes = await client.query<{ next_idx: number }>(
+        `SELECT COALESCE(MAX(idx), -1) + 1 AS next_idx FROM component_label_batch_items WHERE batch_id = $1`,
+        [id]
+      );
+      let nextIdx = idxRes.rows[0].next_idx;
+
+      let added = 0;
+      let skipped = 0;
+      const results: Array<{ code: string; widgetId: string; status: 'added' | 'skipped' }> = [];
+      let prevCodeItemId: string | null = null;
+      for (const item of expanded) {
+        const dupKey = `${item.widgetId} ${item.codeKey}`;
+        if (existKeys.has(dupKey)) {
+          skipped++;
+          results.push({ code: item.codeKey, widgetId: item.widgetId, status: 'skipped' });
+          prevCodeItemId = null;
+          continue;
+        }
+        if (item.widgetId === 'component-code') {
+          const r = await client.query<{ id: string }>(
+            `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props)
+             VALUES ($1, $2, 'component-code', $3, $4::jsonb) RETURNING id`,
+            [id, nextIdx++, item.codeKey, JSON.stringify(item.props)]
+          );
+          prevCodeItemId = r.rows[0].id;
+          added++;
+        } else {
+          const vRes = await client.query<{ id: string }>(
+            `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props, pair_item_id)
+             VALUES ($1, $2, 'component-value', $3, $4::jsonb, $5) RETURNING id`,
+            [id, nextIdx++, item.codeKey, JSON.stringify(item.props), item.isPairOfPrev ? prevCodeItemId : null]
+          );
+          added++;
+          if (item.isPairOfPrev && prevCodeItemId) {
+            await client.query(`UPDATE component_label_batch_items SET pair_item_id = $1 WHERE id = $2`, [vRes.rows[0].id, prevCodeItemId]);
+          }
+          prevCodeItemId = null;
+        }
+        existKeys.add(dupKey);
+        results.push({ code: item.codeKey, widgetId: item.widgetId, status: 'added' });
+      }
+
+      const totalRes = await client.query<{ total: string }>(
+        `SELECT COUNT(*) AS total FROM component_label_batch_items WHERE batch_id = $1`,
+        [id]
+      );
+      await client.query('COMMIT');
+      return c.json({ success: true, id, added, skipped, total: Number(totalRes.rows[0].total), results }, 200);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('❌ POST /api/component-label-batches/:id/items 失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
+  }
+});
+
+// ============ POST /upsert —— 按 name 精确匹配未归档批次：命中则幂等追加，未命中则新建 ============
+componentLabelBatchesApp.post('/upsert', async (c) => {
+  try {
+    const body = await c.req.json<{
+      name: string;
+      targetId?: string;
+      codes?: string[];
+      items?: Array<{ code?: string; value?: string; package?: string }>;
+    }>();
+    if (!body.name || !body.name.trim()) return c.json({ success: false, error: 'name 必填' }, 400);
+    const { rawItems, error } = parseBatchInput(body);
+    if (error) return c.json({ success: false, error }, 400);
+    const expanded = expandRawItems(rawItems);
+    const targetId = body.targetId ?? DEFAULT_TARGET_ID;
+
+    const db = getPostgresDatabase();
+    const client = await db.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const matchRes = await client.query<{ id: string; created_at: Date }>(
+        `SELECT id, created_at FROM component_label_batches
+          WHERE name = $1 AND status != 'archived' ORDER BY created_at ASC LIMIT 1`,
+        [body.name.trim().slice(0, 200)]
+      );
+      const dupRes = await client.query<{ cnt: string }>(
+        `SELECT COUNT(*) AS cnt FROM component_label_batches WHERE name = $1 AND status != 'archived'`,
+        [body.name.trim().slice(0, 200)]
+      );
+      const multiple = Number(dupRes.rows[0].cnt) > 1;
+
+      if (matchRes.rows.length > 0) {
+        const batchId = matchRes.rows[0].id;
+        const existRes = await client.query<{ widget_id: string; code_key: string }>(
+          `SELECT widget_id, code_key FROM component_label_batch_items WHERE batch_id = $1`,
+          [batchId]
+        );
+        const existKeys = new Set(existRes.rows.map((r) => `${r.widget_id} ${r.code_key}`));
+        const idxRes = await client.query<{ next_idx: number }>(
+          `SELECT COALESCE(MAX(idx), -1) + 1 AS next_idx FROM component_label_batch_items WHERE batch_id = $1`,
+          [batchId]
+        );
+        let nextIdx = idxRes.rows[0].next_idx;
+
+        let added = 0;
+        let skipped = 0;
+        const results: Array<{ code: string; widgetId: string; status: 'added' | 'skipped' }> = [];
+        let prevCodeItemId: string | null = null;
+        for (const item of expanded) {
+          const dupKey = `${item.widgetId} ${item.codeKey}`;
+          if (existKeys.has(dupKey)) {
+            skipped++;
+            results.push({ code: item.codeKey, widgetId: item.widgetId, status: 'skipped' });
+            prevCodeItemId = null;
+            continue;
+          }
+          if (item.widgetId === 'component-code') {
+            const r = await client.query<{ id: string }>(
+              `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props)
+               VALUES ($1, $2, 'component-code', $3, $4::jsonb) RETURNING id`,
+              [batchId, nextIdx++, item.codeKey, JSON.stringify(item.props)]
+            );
+            prevCodeItemId = r.rows[0].id;
+            added++;
+          } else {
+            const vRes = await client.query<{ id: string }>(
+              `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props, pair_item_id)
+               VALUES ($1, $2, 'component-value', $3, $4::jsonb, $5) RETURNING id`,
+              [batchId, nextIdx++, item.codeKey, JSON.stringify(item.props), item.isPairOfPrev ? prevCodeItemId : null]
+            );
+            added++;
+            if (item.isPairOfPrev && prevCodeItemId) {
+              await client.query(`UPDATE component_label_batch_items SET pair_item_id = $1 WHERE id = $2`, [vRes.rows[0].id, prevCodeItemId]);
+            }
+            prevCodeItemId = null;
+          }
+          existKeys.add(dupKey);
+          results.push({ code: item.codeKey, widgetId: item.widgetId, status: 'added' });
+        }
+        const totalRes = await client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM component_label_batch_items WHERE batch_id = $1`,
+          [batchId]
+        );
+        await client.query('COMMIT');
+        const resp: any = {
+          success: true,
+          id: batchId,
+          created: false,
+          added,
+          skipped,
+          total: Number(totalRes.rows[0].total),
+          results,
+        };
+        if (multiple) {
+          resp.warning = '同名未归档批次有多个，已追加到最早创建的那一个';
+        }
+        return c.json(resp, 200);
+      }
+
+      // 未命中：新建批次
+      const bRes = await client.query<{ id: string; created_at: Date }>(
+        `INSERT INTO component_label_batches (name, target_id) VALUES ($1, $2) RETURNING id, created_at`,
+        [body.name.trim().slice(0, 200), targetId]
+      );
+      const batchId = bRes.rows[0].id;
+      let idx = 0;
+      let count = 0;
+      let prevCodeItemId: string | null = null;
+      for (const item of expanded) {
+        if (item.widgetId === 'component-code') {
+          const r = await client.query<{ id: string }>(
+            `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props)
+             VALUES ($1, $2, 'component-code', $3, $4::jsonb) RETURNING id`,
+            [batchId, idx++, item.codeKey, JSON.stringify(item.props)]
+          );
+          prevCodeItemId = r.rows[0].id;
+          count++;
+        } else {
+          const vRes = await client.query<{ id: string }>(
+            `INSERT INTO component_label_batch_items (batch_id, idx, widget_id, code_key, props, pair_item_id)
+             VALUES ($1, $2, 'component-value', $3, $4::jsonb, $5) RETURNING id`,
+            [batchId, idx++, item.codeKey, JSON.stringify(item.props), item.isPairOfPrev ? prevCodeItemId : null]
+          );
+          count++;
+          if (item.isPairOfPrev && prevCodeItemId) {
+            await client.query(`UPDATE component_label_batch_items SET pair_item_id = $1 WHERE id = $2`, [vRes.rows[0].id, prevCodeItemId]);
+          }
+          prevCodeItemId = null;
+        }
+      }
+      await client.query('COMMIT');
+      return c.json({ success: true, id: batchId, created: true, added: count, skipped: 0, total: count }, 201);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('❌ POST /api/component-label-batches/upsert 失败:', error);
     return c.json({ success: false, error: error instanceof Error ? error.message : '未知错误' }, 500);
   }
 });
