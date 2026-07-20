@@ -142,3 +142,8 @@ lazycat/*.lpk
 # Kimi CLI working directory (not committed)
 .kimi/
 lazycat/.lzc-cli-build*
+
+# 工作区治理 2026-07-21（考古判定：作废/本地禁区，排除版本记录）
+CLAUDE.md
+.lcctl/
+scripts/trmnl-poc/
