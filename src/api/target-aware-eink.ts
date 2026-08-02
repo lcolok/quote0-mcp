@@ -45,6 +45,49 @@ interface ResolvedDeviceEntry {
   target: Awaited<ReturnType<typeof resolveEinkRenderTarget>>['target'];
 }
 
+/** 单 target 渲染的产物。与 local-eink 渲染器原返回值同形，不做任何加工。 */
+export interface SingleTargetRenderResult {
+  targetId: string;
+  width: number;
+  height: number;
+  imageUrl?: string;
+  localImagePath?: string;
+  /** 可直接交给 devicePusher / 下载转 bitmap 的输入（优先本地路径）。 */
+  pusherInput: string;
+}
+
+/**
+ * 单 target 渲染：content + RenderTarget → PNG（本地路径 / MinIO URL）。
+ *
+ * 从 renderAndPushLocalEinkByTarget 中原样抽出，供 Phase 1 delivery worker 与
+ * 现有同步路径共用。抽取是纯结构性的：调用的还是同一个 registry 里的
+ * local-eink 渲染器、同一组 render config（border/target/width/height），
+ * 所以行为与抽取前逐字节等价。
+ */
+export async function renderSingleEinkTarget(
+  data: RenderableDataItem,
+  target: { id: string; widthPx: number; heightPx: number; [k: string]: any },
+): Promise<SingleTargetRenderResult> {
+  const localEinkRenderer = renderingRegistry.get('local-eink');
+  if (!localEinkRenderer) throw new Error('渲染器 local-eink 不存在');
+
+  const renderResult: any = await localEinkRenderer.render(data, {
+    border: '0',
+    target,
+    width: target.widthPx,
+    height: target.heightPx,
+  });
+
+  return {
+    targetId: target.id,
+    width: target.widthPx,
+    height: target.heightPx,
+    imageUrl: renderResult.imageUrl,
+    localImagePath: renderResult.localImagePath,
+    pusherInput: renderResult.localImagePath || renderResult.imageUrl,
+  };
+}
+
 /**
  * 按设备运行时 target 分组，分别排版 PNG，再定向推送。
  *
@@ -116,21 +159,16 @@ export async function renderAndPushLocalEinkByTarget(
   for (const group of groups.values()) {
     const groupDeviceIds = group.entries.map((entry) => entry.device.id);
     try {
-      const renderResult: any = await localEinkRenderer.render(data, {
-        border: '0',
-        target: group.target,
-        width: group.target.widthPx,
-        height: group.target.heightPx,
-      });
+      const rendered = await renderSingleEinkTarget(data, group.target);
       renderedImages.push({
-        targetId: group.target.id,
-        width: group.target.widthPx,
-        height: group.target.heightPx,
-        imageUrl: renderResult.imageUrl,
-        localImagePath: renderResult.localImagePath,
+        targetId: rendered.targetId,
+        width: rendered.width,
+        height: rendered.height,
+        imageUrl: rendered.imageUrl,
+        localImagePath: rendered.localImagePath,
         deviceIds: [...groupDeviceIds],
       });
-      const pusherInput = renderResult.localImagePath || renderResult.imageUrl;
+      const pusherInput = rendered.pusherInput;
       for (const entry of group.entries) sendTasks.push({ entry, pusherInput });
     } catch (error) {
       // 渲染失败是整组共有的失败（同规格共享 PNG），逐台记账，不牵连其他组。

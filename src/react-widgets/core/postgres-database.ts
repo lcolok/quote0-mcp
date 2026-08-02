@@ -391,6 +391,47 @@ export class PostgresDatabase {
             FOREIGN KEY (current_turn_id) REFERENCES label_gen_turns(id) ON DELETE SET NULL;
         END IF;
       END $$`,
+
+      // ─── Phase 1 持久化投递隔离 ───────────────────────────────────────────
+      // 每台设备一条独立、幂等、可重试的 delivery。Phase 0 的“当轮推完即忘”
+      // （离线设备错过的内容永不补）升级为“晚到但不重”。
+      // 队列就是 PostgreSQL：认领走 FOR UPDATE SKIP LOCKED + lease，
+      // 幂等靠 UNIQUE (content_id, device_id, payload_version)。
+      `CREATE TABLE IF NOT EXISTS device_deliveries (
+        id BIGSERIAL PRIMARY KEY,
+        content_id INTEGER NOT NULL,
+        device_id TEXT NOT NULL,
+        render_target TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'queued',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        last_error_code TEXT,
+        last_error TEXT,
+        payload_version INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (content_id, device_id, payload_version)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_due ON device_deliveries(state, next_attempt_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_device ON device_deliveries(device_id, state)`,
+
+      // 登记配置（push_devices）是期望值，runtime_state 是观察值。两者语义不同，
+      // 不合并：期望值由人写、观察值由 worker 写，混在一张表里改一个会误伤另一个。
+      `CREATE TABLE IF NOT EXISTS device_runtime_state (
+        device_id TEXT PRIMARY KEY,
+        health TEXT NOT NULL DEFAULT 'unknown',
+        last_success_at TIMESTAMPTZ,
+        last_failure_at TIMESTAMPTZ,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        circuit_open_until TIMESTAMPTZ,
+        last_error_code TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
     ];
   }
 

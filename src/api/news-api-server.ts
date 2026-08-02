@@ -1804,6 +1804,71 @@ app.post('/api/rss-sources/:sourceId/metadata', async (c) => {
   }
 });
 
+// ─── Phase 1 投递可观测（只读）─────────────────────────────────────────
+
+// 投递任务列表。state / device_id 可选过滤，默认最近 50 条。
+app.get('/api/deliveries', async (c) => {
+  try {
+    const state = c.req.query('state');
+    const deviceId = c.req.query('device_id');
+    const limitRaw = parseInt(c.req.query('limit') || '50', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 50;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (state) {
+      params.push(state);
+      conditions.push(`state = $${params.length}`);
+    }
+    if (deviceId) {
+      params.push(deviceId);
+      conditions.push(`device_id = $${params.length}`);
+    }
+    params.push(limit);
+
+    const result = await postgres.query(
+      `SELECT * FROM device_deliveries
+       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+       ORDER BY id DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    return c.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+      filters: { state: state || null, deviceId: deviceId || null, limit }
+    });
+  } catch (error) {
+    console.error('获取投递任务列表失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取投递任务列表失败'
+    }, 500);
+  }
+});
+
+// 设备运行时观察值全表。注意：这是观察值，与 push_devices（登记期望值）是两回事。
+app.get('/api/devices/runtime', async (c) => {
+  try {
+    const result = await postgres.query(
+      `SELECT * FROM device_runtime_state ORDER BY device_id`
+    );
+    return c.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length
+    });
+  } catch (error) {
+    console.error('获取设备运行时状态失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取设备运行时状态失败'
+    }, 500);
+  }
+});
+
 // 错误处理
 app.onError((error, c) => {
   console.error('API服务器错误:', error);

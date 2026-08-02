@@ -1,6 +1,6 @@
 import { processNews, computeNewsFingerprint } from './news-processing-service.js';
 import { devicePusher } from './device-pusher.js';
-import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
+import { enqueueDeliveriesForContent } from './delivery-enqueue.js';
 import type {
   FullNewsProcessingResult,
   NewsProcessRequest,
@@ -1958,36 +1958,31 @@ export class NewsScheduler {
       // RenderTarget. Reusing the producer PNG here makes a 296x152 inventory
       // asset get resized to 296x128 and destroys point-to-point pixel layout.
       if (job.config.renderer === 'local-eink') {
-        const raw = inventoryItem.raw_content || {};
-        const processed = inventoryItem.processed_content || {};
-        const pushResult = await renderAndPushLocalEinkByTarget({
-          id: String(inventoryItem.id),
-          title: processed.title || inventoryItem.title || raw.title || '未知标题',
-          message: processed.message || processed.summary || raw.description || raw.content || '',
-          signature: processed.signature || 'RSS智能',
-          source: processed.source || inventoryItem.source || raw.source || 'unknown',
-          publishTime: processed.publishTime || raw.publishTime || new Date().toISOString(),
-          category: processed.category || inventoryItem.category || raw.category || '新闻',
-          link: processed.link || inventoryItem.link || raw.link,
-        } as any);
+        // Phase 1：consumer 不再物理推送，只为每台目标设备创建一条持久化 delivery。
+        // 真正的发送由 device-delivery-worker 异步完成：在线设备几秒内收到，
+        // 离线设备按 15s→1m→5m→15m→1h 退避补投。
+        // 于是 Phase 0 的“宁漏勿重”升级为“晚到但不重”：
+        //   不重 ← UNIQUE(content_id, device_id, payload_version)
+        //   不漏 ← delivery 持久化 + worker 退避重试
+        // consumer 本身只要“登记成功”就算本轮完成，不再被单台离线设备阻塞。
+        const enqueued = await enqueueDeliveriesForContent({
+          contentId: inventoryItem.id,
+          replayCount: inventoryItem.replay_count || 0,
+        });
 
-        // Phase 0 止血④：多设备批次不再“一台挂全批挂”。
-        // 至少一台成功 → inventory 照常推进 pushed（否则已刷新的设备下一轮会重复收到同一条）；
-        // 宁可离线设备漏一条新闻，不可在线设备重复刷同一条。全部失败才 throw。
-        for (const deviceResult of pushResult.pushResults || []) {
-          if (deviceResult.ok) continue;
-          console.warn(
-            `⚠️ Consumer ${job.config.id} 设备推送失败: deviceId=${deviceResult.deviceId ?? deviceResult.device}` +
-            ` errorCode=${deviceResult.errorCode ?? 'unknown'} error=${deviceResult.error ?? '-'}`
-          );
+        if (enqueued.targeted === 0) {
+          throw new Error('未配置 E-Ink 设备，无法创建投递任务');
         }
-        if (pushResult.status === 'failure' || !pushResult.ok) {
-          throw new Error(pushResult.deviceResult);
-        }
-        if (pushResult.status === 'partial_success') {
+        console.log(
+          `📮 Consumer ${job.config.id} 已登记投递: content=${inventoryItem.id} ` +
+          `payloadVersion=${enqueued.payloadVersion} created=${enqueued.created}/${enqueued.targeted} ` +
+          `devices=[${enqueued.deviceIds.join(', ')}]`
+        );
+        if (enqueued.created === 0) {
+          // 全部命中幂等：本轮此前已登记过（重复触发）。不是错误，但值得告警。
           console.warn(
-            `⚠️ Consumer ${job.config.id} 部分推送成功: ${pushResult.succeeded} 成功 / ${pushResult.failed} 失败，` +
-            `inventory 照常推进以避免在线设备重复刷屏`
+            `⚠️ Consumer ${job.config.id} 本轮 delivery 全部已存在（payloadVersion=${enqueued.payloadVersion}），` +
+            `幂等跳过——通常意味着同一轮次被重复触发`
           );
         }
       } else {
