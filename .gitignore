@@ -147,3 +147,6 @@ lazycat/.lzc-cli-build*
 CLAUDE.md
 .lcctl/
 scripts/trmnl-poc/
+
+# 工作区治理 2026-08-02：本地考古报告落盘目录（正式版本发布至 skldr /logic_dev/archaeology/）
+reports/
