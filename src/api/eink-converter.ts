@@ -104,12 +104,25 @@ export async function getEinkDevices(options: EinkDeviceQuery = {}): Promise<Ein
   }
 }
 
+export interface PushToEinkOptions {
+  /**
+   * 已在本次推送链路中取得的 /status 快照。
+   *
+   * Phase 0 止血①：单次推送链路中每台设备最多探测一次 /status。
+   * resolveEinkDeviceSpec 已经打过 /status 的话，把快照顺着传下来，
+   * epd1-v1 的规格校验就用它做纯比对，不再发第二次请求。
+   * 未提供时（老调用方 / 直接调用）退回自己探一次，行为与改动前一致。
+   */
+  statusSnapshot?: EinkStatus;
+}
+
 /**
  * 推送 bitmap 到 E-Ink 设备
  */
 export async function pushToEinkDevice(
   device: EinkDevice,
-  bitmap: Buffer
+  bitmap: Buffer,
+  options: PushToEinkOptions = {}
 ): Promise<{ ok: boolean; ts?: number; error?: string }> {
   const url = `${device.baseUrl}/display/bitmap`;
   const protocol = device.wireProtocol ?? 'legacy-raw-v0';
@@ -119,7 +132,8 @@ export async function pushToEinkDevice(
 
   try {
     if (protocol === 'epd1-v1') {
-      await verifyEinkStatus(device);
+      const status = options.statusSnapshot ?? await getEinkStatus(device);
+      assertEinkStatusMatches(device, status);
     }
 
     const body = protocol === 'epd1-v1'
@@ -182,7 +196,19 @@ export async function getEinkStatus(device: EinkDevice): Promise<EinkStatus> {
  * 和 EPD1 头仍然使用同一组真实尺寸。
  */
 export async function resolveEinkDeviceSpec(device: EinkDevice): Promise<EinkDevice> {
-  if ((device.wireProtocol ?? 'legacy-raw-v0') !== 'epd1-v1') return device;
+  return (await resolveEinkDeviceSpecWithStatus(device)).device;
+}
+
+/**
+ * 与 resolveEinkDeviceSpec 相同，但额外交还本次探测到的 /status 快照，
+ * 让调用方把它传给 pushToEinkDevice，避免同一链路二次探测（Phase 0 止血①）。
+ * legacy 设备没有 /status，快照为 undefined。
+ */
+export async function resolveEinkDeviceSpecWithStatus(device: EinkDevice): Promise<{
+  device: EinkDevice;
+  status?: EinkStatus;
+}> {
+  if ((device.wireProtocol ?? 'legacy-raw-v0') !== 'epd1-v1') return { device };
 
   const status = await getEinkStatus(device);
   const width = Number.isInteger(status.width) && status.width! > 0 ? status.width! : device.width;
@@ -192,10 +218,13 @@ export async function resolveEinkDeviceSpec(device: EinkDevice): Promise<EinkDev
     : device.planeCount;
 
   return {
-    ...device,
-    width,
-    height,
-    planeCount,
+    device: {
+      ...device,
+      width,
+      height,
+      planeCount,
+    },
+    status,
   };
 }
 
@@ -203,16 +232,18 @@ export async function resolveEinkDeviceSpec(device: EinkDevice): Promise<EinkDev
 export async function resolveEinkRenderTarget(device: EinkDevice): Promise<{
   device: EinkDevice;
   target: RenderTarget;
+  status?: EinkStatus;
 }> {
-  const resolvedDevice = await resolveEinkDeviceSpec(device);
+  const { device: resolvedDevice, status } = await resolveEinkDeviceSpecWithStatus(device);
   return {
     device: resolvedDevice,
     target: createEinkTarget(resolvedDevice.width, resolvedDevice.height),
+    status,
   };
 }
 
-async function verifyEinkStatus(device: EinkDevice): Promise<void> {
-  const status = await getEinkStatus(device);
+/** 纯比对：拿已有的 /status 快照校验设备规格，自身不发任何请求。 */
+export function assertEinkStatusMatches(device: EinkDevice, status: EinkStatus): void {
   const width = device.width || EINK_WIDTH;
   const height = device.height || EINK_HEIGHT;
   const planeCount = device.planeCount ?? 1;

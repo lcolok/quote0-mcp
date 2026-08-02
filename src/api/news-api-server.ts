@@ -31,6 +31,7 @@ import { labelPrintOrchestrator } from '../react-widgets/core/label-print-orches
 import { thermalLabelRenderer } from '../react-widgets/core/thermal-label-rendering-module.js';
 import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
 import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
+import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -1181,9 +1182,15 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     const renderers = targetRenderer === 'both' ? ['device', 'local-eink'] : [targetRenderer];
     const results: Array<{
       renderer: string;
+      /** 向后兼容：语义为“至少一台设备成功”（= status !== 'failure'）。 */
       success: boolean;
+      /** success 全成功 / partial_success 部分成功 / failure 全失败。 */
+      status?: PushBatchStatus;
+      succeeded?: number;
+      failed?: number;
       error?: string;
-      devices?: Array<{ device: string; ok: boolean; error?: string }>;
+      /** 逐设备结果；旧字段 device/ok/error 保留，新增 deviceId/errorCode/durationMs。 */
+      devices?: DevicePushResult[];
     }> = [];
 
     const raw = record.raw_content || {};
@@ -1222,9 +1229,17 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
       if (rendererName === 'local-eink') {
         try {
           const pushResult = await renderAndPushLocalEinkByTarget(renderableData as any, targetDeviceIds);
-          results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.ok ? undefined : pushResult.deviceResult, devices: pushResult.pushResults });
+          results.push({
+            renderer: rendererName,
+            success: pushResult.ok,
+            status: pushResult.status,
+            succeeded: pushResult.succeeded,
+            failed: pushResult.failed,
+            error: pushResult.status === 'success' ? undefined : pushResult.deviceResult,
+            devices: pushResult.pushResults,
+          });
         } catch (error) {
-          results.push({ renderer: rendererName, success: false, error: error instanceof Error ? error.message : String(error) });
+          results.push({ renderer: rendererName, success: false, status: 'failure', succeeded: 0, failed: 0, error: error instanceof Error ? error.message : String(error) });
         }
         continue;
       }
@@ -1239,9 +1254,17 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
             rendererName as 'device' | 'local-eink',
             rendererName === 'local-eink' && targetDeviceIds ? { deviceIds: targetDeviceIds } : undefined
           );
-          results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error, devices: pushResult.pushResults });
+          results.push({
+            renderer: rendererName,
+            success: pushResult.ok,
+            status: pushResult.status,
+            succeeded: pushResult.succeeded,
+            failed: pushResult.failed,
+            error: pushResult.error,
+            devices: pushResult.pushResults,
+          });
         } catch (err) {
-          results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
+          results.push({ renderer: rendererName, success: false, status: 'failure', succeeded: 0, failed: 0, error: err instanceof Error ? err.message : String(err) });
         } finally {
           if (tempFilePath) {
             try {
@@ -1275,17 +1298,47 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
           rendererName as 'device' | 'local-eink',
           rendererName === 'local-eink' && targetDeviceIds ? { deviceIds: targetDeviceIds } : undefined
         );
-        results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error, devices: pushResult.pushResults });
+        results.push({
+          renderer: rendererName,
+          success: pushResult.ok,
+          status: pushResult.status,
+          succeeded: pushResult.succeeded,
+          failed: pushResult.failed,
+          error: pushResult.error,
+          devices: pushResult.pushResults,
+        });
       } catch (err) {
-        results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
+        results.push({ renderer: rendererName, success: false, status: 'failure', succeeded: 0, failed: 0, error: err instanceof Error ? err.message : String(err) });
       }
     }
 
+    // 逐设备展平，方便前端直接展示“哪台失败、为什么失败”。
+    const deviceResults = results.flatMap((r) => (r.devices ?? []).map((d) => ({ renderer: r.renderer, ...d })));
+    const succeededDevices = deviceResults.filter((d) => d.ok).length;
+    const failedDevices = deviceResults.length - succeededDevices;
+
+    // 汇总语义：全部 renderer 都 success → success；全部失败 → failure；其余 partial_success。
+    const rendererStatuses = results.map((r) => r.status ?? (r.success ? 'success' : 'failure'));
+    const overallStatus: PushBatchStatus =
+      rendererStatuses.length > 0 && rendererStatuses.every((s) => s === 'success') ? 'success'
+      : rendererStatuses.every((s) => s === 'failure') ? 'failure'
+      : 'partial_success';
     const allOk = results.every(r => r.success);
+
+    // HTTP 状态码保持 200，部分成功靠 body 表达。
     return c.json({
       success: allOk,
-      message: allOk ? '重新推送成功' : '部分推送失败',
-      data: { results }
+      status: overallStatus,
+      message: overallStatus === 'success' ? '重新推送成功'
+        : overallStatus === 'partial_success' ? '部分设备推送成功'
+        : '推送失败',
+      data: {
+        results,
+        status: overallStatus,
+        deviceResults,
+        succeeded: succeededDevices,
+        failed: failedDevices,
+      }
     });
   } catch (error) {
     console.error('重新推送失败:', error);

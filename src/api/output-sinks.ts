@@ -5,7 +5,7 @@ import { RenderTarget } from '../react-widgets/core/render-targets.js';
 import { mmToWidthPx, mmToHeightPx } from '../react-widgets/core/device-dpi.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
-import { pushToEinkDevice, pngTo1BitBitmap, resolveEinkDeviceSpec, type EinkColorMode, type EinkWireProtocol } from './eink-converter.js';
+import { pushToEinkDevice, pngTo1BitBitmap, resolveEinkDeviceSpecWithStatus, type EinkColorMode, type EinkWireProtocol } from './eink-converter.js';
 import { devicePusher } from './device-pusher.js';
 
 export type DeviceKind = 'thermal-printer' | 'eink-local' | 'eink-cloud';
@@ -64,7 +64,8 @@ const niimbotSink: OutputSink = {
 const einkSink: OutputSink = {
   kind: 'eink-local',
   async send(png, device, target) {
-    const resolvedDevice = await resolveEinkDeviceSpec({
+    // 止血①：解析时取得的 /status 快照直接传给推送，单次链路只探一次。
+    const { device: resolvedDevice, status } = await resolveEinkDeviceSpecWithStatus({
       id: device.id,
       name: device.name,
       baseUrl: device.base_url,
@@ -78,7 +79,7 @@ const einkSink: OutputSink = {
     const width = resolvedDevice.width;
     const height = resolvedDevice.height;
     const bitmap = await pngTo1BitBitmap(png, width, height);
-    const r = await pushToEinkDevice(resolvedDevice, bitmap);
+    const r = await pushToEinkDevice(resolvedDevice, bitmap, { statusSnapshot: status });
     return { ok: r.ok, error: r.error };
   },
 };

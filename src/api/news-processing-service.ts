@@ -348,7 +348,11 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         // 统一推送：无论 cache hit 还是 cache miss，推送只在这里发生一次。
         // local-eink 例外：必须根据每台设备的运行时 RenderTarget 重新排版。
         let pushResult: {
+          /** 向后兼容：语义为“至少一台设备成功”（= status !== 'failure'）。 */
           ok: boolean;
+          status?: 'success' | 'partial_success' | 'failure';
+          succeeded?: number;
+          failed?: number;
           deviceResult?: string;
           pushResults?: any[];
           renderedImages?: Array<{ targetId: string; width: number; height: number; imageUrl?: string; localImagePath?: string; deviceIds: string[] }>;
@@ -382,6 +386,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           imageUrl,
           localImagePath: dbImagePath,
           deviceResult: pushResult?.deviceResult || pushResult?.error || '未推送',
+          pushStatus: pushResult?.status,
+          pushSucceeded: pushResult?.succeeded,
+          pushFailed: pushResult?.failed,
           pushResults: pushResult?.pushResults,
           renderedImages: pushResult?.renderedImages,
           title: mergedTextData.title,
@@ -450,6 +457,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             }
           : {}),
         deviceResult: pushResult.deviceResult || ('error' in pushResult ? pushResult.error : undefined),
+        pushStatus: pushResult.status,
+        pushSucceeded: pushResult.succeeded,
+        pushFailed: pushResult.failed,
         pushResults: pushResult.pushResults,
         renderedImages: pushResult.renderedImages
       };

@@ -15,6 +15,7 @@ const getEinkDevicesMock = mock(async (options?: { deviceIds?: string[] }) => {
 });
 const pushToEinkDeviceMock = mock(async () => ({ ok: true }));
 const resolveEinkDeviceSpecMock = mock(async (device: any) => device);
+const resolveEinkDeviceSpecWithStatusMock = mock(async (device: any) => ({ device, status: undefined }));
 
 mock.module("child_process", () => ({
   execFile: (cmd: string, args: string[], optionsOrCb: any, maybeCb?: any) => {
@@ -28,6 +29,7 @@ mock.module("./eink-converter.js", () => ({
   pngTo1BitBitmap: mock(async () => Buffer.from("bitmap")),
   getEinkDevices: getEinkDevicesMock,
   resolveEinkDeviceSpec: resolveEinkDeviceSpecMock,
+  resolveEinkDeviceSpecWithStatus: resolveEinkDeviceSpecWithStatusMock,
   pushToEinkDevice: pushToEinkDeviceMock,
 }));
 
@@ -46,6 +48,7 @@ describe("DevicePusher", () => {
     getEinkDevicesMock.mockClear();
     pushToEinkDeviceMock.mockClear();
     resolveEinkDeviceSpecMock.mockClear();
+    resolveEinkDeviceSpecWithStatusMock.mockClear();
   });
 
   afterEach(async () => {
@@ -96,7 +99,9 @@ describe("DevicePusher", () => {
       const result = await pusher.push(TEMP_PNG, "local-eink", { deviceIds: ["eink-2"] });
 
       expect(result.ok).toBe(true);
-      expect(result.pushResults).toEqual([{ device: "eink-2", ok: true, error: undefined }]);
+      expect(result.status).toBe("success");
+      expect(result.pushResults).toHaveLength(1);
+      expect(result.pushResults![0]).toMatchObject({ device: "eink-2", deviceId: "eink-2", ok: true, error: undefined });
       expect(getEinkDevicesMock).toHaveBeenCalledWith({ deviceIds: ["eink-2"] });
       expect(pushToEinkDeviceMock).toHaveBeenCalledTimes(1);
     });

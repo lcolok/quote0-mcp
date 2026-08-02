@@ -1970,8 +1970,25 @@ export class NewsScheduler {
           category: processed.category || inventoryItem.category || raw.category || '新闻',
           link: processed.link || inventoryItem.link || raw.link,
         } as any);
-        if (!pushResult.ok) {
+
+        // Phase 0 止血④：多设备批次不再“一台挂全批挂”。
+        // 至少一台成功 → inventory 照常推进 pushed（否则已刷新的设备下一轮会重复收到同一条）；
+        // 宁可离线设备漏一条新闻，不可在线设备重复刷同一条。全部失败才 throw。
+        for (const deviceResult of pushResult.pushResults || []) {
+          if (deviceResult.ok) continue;
+          console.warn(
+            `⚠️ Consumer ${job.config.id} 设备推送失败: deviceId=${deviceResult.deviceId ?? deviceResult.device}` +
+            ` errorCode=${deviceResult.errorCode ?? 'unknown'} error=${deviceResult.error ?? '-'}`
+          );
+        }
+        if (pushResult.status === 'failure' || !pushResult.ok) {
           throw new Error(pushResult.deviceResult);
+        }
+        if (pushResult.status === 'partial_success') {
+          console.warn(
+            `⚠️ Consumer ${job.config.id} 部分推送成功: ${pushResult.succeeded} 成功 / ${pushResult.failed} 失败，` +
+            `inventory 照常推进以避免在线设备重复刷屏`
+          );
         }
       } else {
         await this.pushImageFromMinIO(inventoryItem.image_path, job);
