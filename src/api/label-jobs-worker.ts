@@ -27,7 +27,25 @@ export function startLabelJobWorker(): void {
   loop().catch((e) => console.error('label-job worker loop crash:', e));
 }
 
+/**
+ * 首个 tick 前等数据库就绪。与 device-delivery-worker 同一竞态：startLabelJobWorker()
+ * 的首 tick 可能早于建表完成，查 label_jobs 报 42P01。initialize() 同时建
+ * label_jobs（getCreateTablesSQL 含之）且有进程级 once guard，幂等便宜。
+ * 失败不阻断，照旧靠 tick 循环的 catch 兑底。
+ */
+async function waitForDatabaseReady(): Promise<void> {
+  try {
+    await getPostgresDatabase().initialize();
+  } catch (e) {
+    console.warn(
+      'label-job worker 数据库就绪等待失败，照旧进入 tick 循环（靠退避自愈）:',
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
+
 async function loop(): Promise<void> {
+  await waitForDatabaseReady();
   while (running) {
     try {
       const job = await claimJob();

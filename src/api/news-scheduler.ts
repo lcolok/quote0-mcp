@@ -169,6 +169,12 @@ const DEFAULT_MIN_FETCH_COUNT = 8;
 // env INVENTORY_REPLAY_WINDOW_HOURS 可覆盖，默认 24h。
 const REPLAY_WINDOW_HOURS = Number(process.env.INVENTORY_REPLAY_WINDOW_HOURS) || 24;
 
+// 依赖外部 LLM 的 processor。这类 processor 失败（402 欠费/超时/连接错）属于
+// 「外部供给中断」而非「内容本身不可用」，producer 应降级续产而不是停产。
+const PRODUCER_LLM_PROCESSORS = new Set(['ax-optimized', 'basic-llm']);
+// 降级目标：不调用任何 LLM，直接透传 RSS 原文。
+const PRODUCER_FALLBACK_PROCESSOR = 'passthrough';
+
 export class NewsScheduler {
   private jobs: Map<string, SchedulerJobInstance> = new Map();
   private started = false;
@@ -588,21 +594,54 @@ export class NewsScheduler {
       const processStart = Date.now();
       let result: FullNewsProcessingResult;
       let producerRenderableData: RenderableDataItem | undefined;
+      // producer 降级标记：LLM 处理失败后改用 passthrough 产出时置位，
+      // 随 processed_content 一同落库，让下游能分辨「这条是降级产物」。
+      let producerDegraded = false;
+      let producerDegradeReason: string | undefined;
+      let producerEffectiveProcessor = request.processor;
       try {
         if (isProducer) {
           // Keep the LLM-processed structure as the inventory SSoT. The old
           // `processNews(renderer=news)` path returned only a MinIO URL, so
           // processed_content was silently stored as NULL and consumers had
           // to fall back to raw RSS text.
-          producerRenderableData = await modularNewsPlugin.getRenderableData({
-            category: request.category,
-            dataSource: request.dataSource,
-            rssSource: request.rssSource,
-            processor: request.processor,
-            renderer: 'news',
-            index: request.index,
-            border: request.options?.border,
-          });
+          const buildRenderableData = (processor: string | undefined) =>
+            modularNewsPlugin.getRenderableData({
+              category: request.category,
+              dataSource: request.dataSource,
+              rssSource: request.rssSource,
+              processor,
+              renderer: 'news',
+              index: request.index,
+              border: request.options?.border,
+            });
+
+          try {
+            producerRenderableData = await buildRenderableData(request.processor);
+          } catch (llmError) {
+            // LLM 类 processor 失败（402 欠费 / 超时 / 连接错）时确定性降级为
+            // passthrough：产物质量下降，但产线不停。若 passthrough 也失败，
+            // 说明坏的是 RSS/数据源本身而非 LLM，抛原始错误交由上层失败路径处理。
+            // 一次降级即定局：不做 LLM 重试/退避/provider 熔断（Phase 2 议题）。
+            if (PRODUCER_LLM_PROCESSORS.has(request.processor || '')) {
+              const llmMessage = llmError instanceof Error ? llmError.message : String(llmError);
+              console.warn(
+                `⚠️ producer LLM 处理失败，降级为 passthrough 继续产出: ` +
+                `job=${job.config.id} processor=${request.processor} 原始错误=${llmMessage}`,
+              );
+              try {
+                producerRenderableData = await buildRenderableData(PRODUCER_FALLBACK_PROCESSOR);
+              } catch {
+                // passthrough 同样失败 → 数据源问题，保持现状抛原始错误
+                throw llmError;
+              }
+              producerDegraded = true;
+              producerDegradeReason = llmMessage;
+              producerEffectiveProcessor = PRODUCER_FALLBACK_PROCESSOR;
+            } else {
+              throw llmError;
+            }
+          }
           const newsRenderer = renderingRegistry.get('news');
           if (!newsRenderer) throw new Error('渲染器 news 不存在');
           const imageUrl = await newsRenderer.render(producerRenderableData, {
@@ -620,7 +659,7 @@ export class NewsScheduler {
             params: {
               category: request.category || 'news',
               dataSource: request.dataSource || 'rss',
-              processor: request.processor || 'passthrough',
+              processor: producerEffectiveProcessor || 'passthrough',
               renderer: 'news',
               index: request.index || 0,
               rssSource: request.rssSource || currentRssSource,
@@ -737,6 +776,14 @@ export class NewsScheduler {
           publishTime: producerRenderableData.publishTime || candidate.context.publishTime,
           metadata: producerRenderableData.metadata,
         };
+        if (producerDegraded) {
+          // 降级痕迹随内容落库（不改列结构）：下游/排障可据此区分
+          // 「LLM 精加工产物」与「LLM 不可用时的透传产物」。
+          processedContent.degraded = true;
+          processedContent.degradedReason = producerDegradeReason;
+          processedContent.degradedFrom = request.processor;
+          processedContent.processor = producerEffectiveProcessor;
+        }
       } else if (result.result && typeof result.result === 'object' && !Buffer.isBuffer(result.result)) {
         processedContent = {
           title: (result.result as any).title || candidate.context.title,

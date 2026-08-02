@@ -55,11 +55,38 @@ export function startDeviceDeliveryWorker(): void {
   loop().catch((e) => console.error('device-delivery worker loop crash:', e));
 }
 
+/**
+ * 首个 tick 前等数据库就绪。
+ *
+ * 不等的后果实测过：v1.21.40 上线时出现 `relation "device_deliveries"
+ * does not exist`(42P01)——worker 的首 tick 赶在了建表之前。旧行为靠 loop 的
+ * catch 自愈（下一 tick 就好），但那是不应存在的启动噪音。
+ *
+ * 用 initialize() 而非轮询 to_regclass：它本身就是建表者（getCreateTablesSQL 含
+ * device_deliveries / device_runtime_state），且已有进程级 once/promise guard，
+ * 幂等且便宜。轮询只能等不能建，若 API 进程是第一个起来的反而会空等。
+ *
+ * 失败不阻断：初始化异常时照旧进入 tick 循环，交给既有 catch 兑底，
+ * 避免把「启动噪音修复」变成「启动硬依赖」。
+ */
+async function waitForDatabaseReady(): Promise<void> {
+  try {
+    await getPostgresDatabase().initialize();
+  } catch (e) {
+    console.warn(
+      'device-delivery worker 数据库就绪等待失败，照旧进入 tick 循环（靠退避自愈）:',
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
+
 export function stopDeviceDeliveryWorker(): void {
   running = false;
 }
 
 async function loop(): Promise<void> {
+  // 先等建表完成，再认领——消除启动竞态导致的 42P01 噪音。
+  await waitForDatabaseReady();
   while (running) {
     try {
       const claimed = await claimDeliveries();
