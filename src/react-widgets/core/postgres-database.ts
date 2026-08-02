@@ -68,6 +68,8 @@ export interface ImageCacheEntry {
 
 export class PostgresDatabase {
   private pool: Pool;
+  private initialized = false;
+  private initializePromise: Promise<void> | null = null;
 
   /** Public passthrough to pool.query for external modules that need raw SQL */
   async query(text: string, params?: any[]): Promise<any> {
@@ -114,7 +116,7 @@ export class PostgresDatabase {
 
   /**
    * 显式 schema migration 语句列表
-   * 每次 initialize() 都会幂等执行（依赖 IF NOT EXISTS / IF EXISTS 子句）
+   * 每个进程首次 initialize() 时幂等执行（依赖 IF NOT EXISTS / IF EXISTS 子句）
    * extractRequiredTableNames 仅扫 CREATE TABLE 不感知 ALTER，故 ALTER 放这里独立管理
    */
   private getMigrationStatements(): string[] {
@@ -289,6 +291,9 @@ export class PostgresDatabase {
         token       TEXT NOT NULL DEFAULT '',
         width       INTEGER NOT NULL,
         height      INTEGER NOT NULL,
+        wire_protocol TEXT NOT NULL DEFAULT 'legacy-raw-v0',
+        color_mode  TEXT NOT NULL DEFAULT 'mono-1bit',
+        plane_count INTEGER NOT NULL DEFAULT 1,
         enabled     BOOLEAN NOT NULL DEFAULT true,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -303,6 +308,25 @@ export class PostgresDatabase {
         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'push_devices_kind_check') THEN
           ALTER TABLE push_devices ADD CONSTRAINT push_devices_kind_check
             CHECK (kind IN ('thermal-printer','eink-local','eink-cloud'));
+        END IF;
+      END $$`,
+      // v1.21.31: 设备级墨水屏线协议。旧 C3 保持裸位图，新统一内核使用 EPD1 v1。
+      `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS wire_protocol TEXT NOT NULL DEFAULT 'legacy-raw-v0'`,
+      `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS color_mode TEXT NOT NULL DEFAULT 'mono-1bit'`,
+      `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS plane_count INTEGER NOT NULL DEFAULT 1`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'push_devices_wire_protocol_check') THEN
+          ALTER TABLE push_devices ADD CONSTRAINT push_devices_wire_protocol_check
+            CHECK (wire_protocol IN ('legacy-raw-v0','epd1-v1'));
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'push_devices_color_mode_check') THEN
+          ALTER TABLE push_devices ADD CONSTRAINT push_devices_color_mode_check
+            CHECK (color_mode IN ('mono-1bit','3-color'));
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'push_devices_plane_count_check') THEN
+          ALTER TABLE push_devices ADD CONSTRAINT push_devices_plane_count_check
+            CHECK (plane_count IN (1,2));
         END IF;
       END $$`,
       // Phase 2.5: per-memo target_renderer (device | local-eink | both)
@@ -374,8 +398,23 @@ export class PostgresDatabase {
    * 初始化数据库连接
    */
   async initialize(): Promise<void> {
+    if (this.initialized) return;
+    if (this.initializePromise) return this.initializePromise;
+
+    this.initializePromise = this.initializeOnce();
     try {
-      const client = await this.pool.connect();
+      await this.initializePromise;
+      this.initialized = true;
+    } finally {
+      // A failed initialization may be retried by the next request. A
+      // successful one is short-circuited by `initialized` above.
+      this.initializePromise = null;
+    }
+  }
+
+  private async initializeOnce(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
 
       // 测试连接
       const result = await client.query('SELECT NOW() as current_time');
@@ -418,11 +457,11 @@ export class PostgresDatabase {
         }
       }
       console.log(`✅ schema migrations 执行完成`);
-
-      client.release();
     } catch (error) {
       console.error('❌ PostgreSQL初始化失败:', error);
       throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -709,6 +748,7 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_push_stats_count ON news_push_stats(push_count, last_pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_log_job ON news_push_log(job_id, pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_log_fingerprint ON news_push_log(fingerprint, pushed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_push_log_fingerprint_latest ON news_push_log(fingerprint, pushed_at DESC) INCLUDE (id);
       CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_job ON scheduler_run_history(job_id, run_started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_qa_news_id_latest ON quality_annotations(news_id) WHERE is_latest = true;
       CREATE INDEX IF NOT EXISTS idx_qa_score_latest ON quality_annotations(overall_score) WHERE is_latest = true;
@@ -863,6 +903,7 @@ export class PostgresDatabase {
       INSERT INTO render_targets (id, kind, width_px, height_px, dpi, color_mode, default_font_stack, physical_w_mm, physical_h_mm)
       VALUES
         ('eink-296x152', 'eink', 296, 152, 250, 'mono-1bit', '["fusion-pixel-12"]'::jsonb, NULL, NULL),
+        ('eink-296x128', 'eink', 296, 128, 250, 'mono-1bit', '["fusion-pixel-12"]'::jsonb, NULL, NULL),
         ('label-T40x20-320', 'thermal-label', 320, 160, 203, 'mono-1bit', '["source-han-sans","inter"]'::jsonb, 40, 20)
       ON CONFLICT (id) DO NOTHING;
 
@@ -2277,9 +2318,12 @@ export class PostgresDatabase {
 
   // ==================== Push Devices CRUD ====================
 
-  async getEnabledPushDevices(): Promise<Array<{id:string;name:string;base_url:string;token:string;width:number;height:number;kind:string}>> {
+  async getEnabledPushDevices(): Promise<Array<{
+    id:string;name:string;base_url:string;token:string;width:number;height:number;kind:string;
+    wire_protocol:string;color_mode:string;plane_count:number;dpi?:number|null
+  }>> {
     const r = await this.getPool().query(
-      'SELECT id, name, base_url, token, width, height, kind, dpi FROM push_devices WHERE enabled = true ORDER BY created_at'
+      'SELECT id, name, base_url, token, width, height, kind, wire_protocol, color_mode, plane_count, dpi FROM push_devices WHERE enabled = true ORDER BY created_at'
     );
     return r.rows;
   }
@@ -2295,18 +2339,22 @@ export class PostgresDatabase {
     return r.rows[0] ?? null;
   }
 
-  async createPushDevice(d: {id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean;kind?:string;capabilities?:string[];dpi?:number|null}): Promise<any> {
+  async createPushDevice(d: {
+    id:string;name:string;base_url:string;token?:string;width:number;height:number;enabled?:boolean;
+    kind?:string;capabilities?:string[];dpi?:number|null;wire_protocol?:string;color_mode?:string;plane_count?:number
+  }): Promise<any> {
     const r = await this.getPool().query(
-      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled,kind,capabilities,dpi)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO push_devices (id,name,base_url,token,width,height,enabled,kind,capabilities,dpi,wire_protocol,color_mode,plane_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [d.id, d.name, d.base_url, d.token ?? '', d.width, d.height, d.enabled ?? true,
-       d.kind ?? 'eink-local', JSON.stringify(d.capabilities ?? ['display']), d.dpi ?? null]
+       d.kind ?? 'eink-local', JSON.stringify(d.capabilities ?? ['display']), d.dpi ?? null,
+       d.wire_protocol ?? 'legacy-raw-v0', d.color_mode ?? 'mono-1bit', d.plane_count ?? 1]
     );
     return r.rows[0];
   }
 
   async updatePushDevice(id: string, patch: Record<string, any>): Promise<any> {
-    const allowed = ['name','base_url','token','width','height','enabled','kind','capabilities','dpi'];
+    const allowed = ['name','base_url','token','width','height','enabled','kind','capabilities','dpi','wire_protocol','color_mode','plane_count'];
     const sets: string[] = [];
     const vals: any[] = [];
     let i = 1;

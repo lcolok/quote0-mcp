@@ -1,5 +1,6 @@
 import { processNews, computeNewsFingerprint } from './news-processing-service.js';
 import { devicePusher } from './device-pusher.js';
+import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type {
   FullNewsProcessingResult,
   NewsProcessRequest,
@@ -10,7 +11,9 @@ import type {
 } from './news-types.js';
 import { dataSourceRegistry } from '../react-widgets/core/data-source-modules.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
-import type { RawDataItem } from '../react-widgets/core/modular-architecture.js';
+import type { RawDataItem, RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
+import { renderingRegistry } from '../react-widgets/core/rendering-modules.js';
+import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
 import React from 'react';
 import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
@@ -584,8 +587,56 @@ export class NewsScheduler {
 
       const processStart = Date.now();
       let result: FullNewsProcessingResult;
+      let producerRenderableData: RenderableDataItem | undefined;
       try {
-        result = await processNews(request);
+        if (isProducer) {
+          // Keep the LLM-processed structure as the inventory SSoT. The old
+          // `processNews(renderer=news)` path returned only a MinIO URL, so
+          // processed_content was silently stored as NULL and consumers had
+          // to fall back to raw RSS text.
+          producerRenderableData = await modularNewsPlugin.getRenderableData({
+            category: request.category,
+            dataSource: request.dataSource,
+            rssSource: request.rssSource,
+            processor: request.processor,
+            renderer: 'news',
+            index: request.index,
+            border: request.options?.border,
+          });
+          const newsRenderer = renderingRegistry.get('news');
+          if (!newsRenderer) throw new Error('渲染器 news 不存在');
+          const imageUrl = await newsRenderer.render(producerRenderableData, {
+            border: request.options?.border || '0',
+            width: request.options?.width || EINK_DEVICE_WIDTH,
+            height: request.options?.height || EINK_DEVICE_HEIGHT,
+          });
+          result = {
+            result: imageUrl,
+            cacheHit: false,
+            cacheSource: 'producer-render',
+            cacheKey: candidate.fingerprint,
+            processingTime: Date.now() - processStart,
+            workflow: 'producer-process-then-render',
+            params: {
+              category: request.category || 'news',
+              dataSource: request.dataSource || 'rss',
+              processor: request.processor || 'passthrough',
+              renderer: 'news',
+              index: request.index || 0,
+              rssSource: request.rssSource || currentRssSource,
+              force: false,
+            },
+            config: {
+              border: request.options?.border || '0',
+              width: request.options?.width || EINK_DEVICE_WIDTH,
+              height: request.options?.height || EINK_DEVICE_HEIGHT,
+            },
+            context: request.context,
+            cacheKeyObject: {},
+          };
+        } else {
+          result = await processNews(request);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`❌ 首次新闻处理失败: ${message}`);
@@ -674,7 +725,19 @@ export class NewsScheduler {
       };
 
       let processedContent: Record<string, any> | undefined;
-      if (result.result && typeof result.result === 'object' && !Buffer.isBuffer(result.result)) {
+      if (producerRenderableData) {
+        processedContent = {
+          title: producerRenderableData.title,
+          message: producerRenderableData.message,
+          summary: producerRenderableData.message,
+          source: producerRenderableData.source || candidate.context.source,
+          signature: producerRenderableData.signature,
+          link: producerRenderableData.link || candidate.context.link,
+          category: producerRenderableData.category || candidate.context.category || job.config.category,
+          publishTime: producerRenderableData.publishTime || candidate.context.publishTime,
+          metadata: producerRenderableData.metadata,
+        };
+      } else if (result.result && typeof result.result === 'object' && !Buffer.isBuffer(result.result)) {
         processedContent = {
           title: (result.result as any).title || candidate.context.title,
           message: (result.result as any).message,
@@ -1891,8 +1954,28 @@ export class NewsScheduler {
       const inventoryItem = item.rows[0];
       console.log(`📤 Consumer ${job.config.id} 推送素材: ${inventoryItem.fingerprint} (replay ${inventoryItem.replay_count}/${inventoryItem.max_replays})`);
 
-      // 4. Push image from MinIO to device
-      await this.pushImageFromMinIO(inventoryItem.image_path, job);
+      // 4. local-eink must re-render from structured content for each runtime
+      // RenderTarget. Reusing the producer PNG here makes a 296x152 inventory
+      // asset get resized to 296x128 and destroys point-to-point pixel layout.
+      if (job.config.renderer === 'local-eink') {
+        const raw = inventoryItem.raw_content || {};
+        const processed = inventoryItem.processed_content || {};
+        const pushResult = await renderAndPushLocalEinkByTarget({
+          id: String(inventoryItem.id),
+          title: processed.title || inventoryItem.title || raw.title || '未知标题',
+          message: processed.message || processed.summary || raw.description || raw.content || '',
+          signature: processed.signature || 'RSS智能',
+          source: processed.source || inventoryItem.source || raw.source || 'unknown',
+          publishTime: processed.publishTime || raw.publishTime || new Date().toISOString(),
+          category: processed.category || inventoryItem.category || raw.category || '新闻',
+          link: processed.link || inventoryItem.link || raw.link,
+        } as any);
+        if (!pushResult.ok) {
+          throw new Error(pushResult.deviceResult);
+        }
+      } else {
+        await this.pushImageFromMinIO(inventoryItem.image_path, job);
+      }
 
       // 5. Update inventory state
       const updatedReplayCount = (inventoryItem.replay_count || 0) + 1;

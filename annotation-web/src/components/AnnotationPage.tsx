@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
+import { devicesApi, type Device } from '../api/devices';
+import { useSearchParams, Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Send, Search, GripVertical } from 'lucide-react';
 
 interface NewsRecord {
@@ -21,7 +23,11 @@ interface NewsRecord {
 function AnnotationPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [pushTarget, setPushTarget] = useState<{cloud: boolean, esp32: boolean}>({cloud: true, esp32: true});
+  const [pushTarget, setPushTarget] = useState<{cloud: boolean, esp32: boolean}>({cloud: false, esp32: true});
+  // null 表示全部启用的本地墨水屏；从设备管理页跳转时会自动锁定到指定设备。
+  const [selectedEinkDeviceIds, setSelectedEinkDeviceIds] = useState<string[] | null>(null);
+  const [searchParams] = useSearchParams();
+  const requestedDeviceId = searchParams.get('device');
 
   // 从localStorage读取列宽配置，默认值：25%, 50%, 25%
   const [leftWidth, setLeftWidth] = useState(() => {
@@ -88,7 +94,36 @@ function AnnotationPage() {
     refetchInterval: 30000,
   });
 
-  const PAGE_SIZE = 2000;
+  const {
+    data: devicesData,
+    isLoading: devicesLoading,
+    error: devicesError,
+  } = useQuery({
+    queryKey: ['devices'],
+    queryFn: () => devicesApi.getDevices(),
+    refetchInterval: 30000,
+  });
+
+  const einkDevices = useMemo(
+    () => ((devicesData?.data || []) as Device[]).filter(
+      (device) => device.enabled && device.kind === 'eink-local'
+    ),
+    [devicesData?.data]
+  );
+
+  // 设备管理页的“去推送”按钮通过 ?device=eink-2 直接带入目标设备。
+  useEffect(() => {
+    if (!requestedDeviceId || !einkDevices.some((device) => device.id === requestedDeviceId)) {
+      return;
+    }
+    setPushTarget((target) => ({ ...target, esp32: true }));
+    setSelectedEinkDeviceIds((current) =>
+      current?.length === 1 && current[0] === requestedDeviceId ? current : [requestedDeviceId]
+    );
+  }, [einkDevices, requestedDeviceId]);
+
+  // 首屏只取一页，避免把多年推送记录的完整 JSON 一次性传到浏览器。
+  const PAGE_SIZE = 100;
 
   const {
     data: newsData,
@@ -253,10 +288,19 @@ function AnnotationPage() {
 
   // 推送mutation
   const pushMutation = useMutation({
-    mutationFn: ({id, renderer}: {id: number, renderer: 'device' | 'local-eink' | 'both'}) =>
-      apiClient.resendPush(id, renderer),
-    onSuccess: () => {
-      toast.success('📤 推送已发送');
+    mutationFn: ({id, renderer, deviceIds}: {
+      id: number;
+      renderer: 'device' | 'local-eink' | 'both';
+      deviceIds?: string[];
+    }) => apiClient.resendPush(id, renderer, deviceIds),
+    onSuccess: (response) => {
+      const results = response.data?.results || [];
+      const failures = results.filter((result: any) => !result.success);
+      if (failures.length > 0) {
+        toast.error(`推送未完全成功：${failures.map((result: any) => result.error || result.renderer).join('；')}`);
+      } else {
+        toast.success('📤 已推送到选中设备');
+      }
       queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
     },
     onError: (error: Error) => {
@@ -305,7 +349,17 @@ function AnnotationPage() {
     else if (pushTarget.cloud) renderer = 'device';
     else if (pushTarget.esp32) renderer = 'local-eink';
     else return;
-    pushMutation.mutate({ id: currentRecord.id, renderer });
+
+    if (pushTarget.esp32 && selectedEinkDeviceIds && selectedEinkDeviceIds.length === 0) {
+      toast.error('请至少选择一台本地墨水屏');
+      return;
+    }
+
+    pushMutation.mutate({
+      id: currentRecord.id,
+      renderer,
+      deviceIds: pushTarget.esp32 && selectedEinkDeviceIds ? selectedEinkDeviceIds : undefined,
+    });
   };
 
   // 搜索时重置选中
@@ -758,30 +812,107 @@ function AnnotationPage() {
               </>
             )}
 
-            {/* 重新推送按钮（所有记录都可推送） */}
-            <div className="space-y-2">
-              <div className="flex gap-4 px-2">
-                <label className="flex items-center text-sm">
-                  <input type="checkbox" checked={pushTarget.cloud}
-                         onChange={e => setPushTarget(t => ({...t, cloud: e.target.checked}))}
-                         className="mr-2" />
-                  ☁️ MindReset 云端
+            {/* 推送工作台：把“登记设备 → 选内容 → 推送”放在同一条路径上 */}
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+              <p className="font-semibold">怎么开始推送</p>
+              <p className="mt-1 text-xs leading-5 text-blue-800">
+                左侧选一条新闻 → 选择目标设备 → 点击下方“立即推送”。设备管理页登记的墨水屏会自动出现在这里。
+              </p>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3">
+              <p className="text-sm font-semibold text-gray-800">推送目标</p>
+
+              <label className="flex items-center text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={pushTarget.cloud}
+                  onChange={e => setPushTarget(t => ({...t, cloud: e.target.checked}))}
+                  className="mr-2"
+                />
+                ☁️ MindReset 云端
+              </label>
+
+              <div>
+                <label className="flex items-center text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={pushTarget.esp32}
+                    onChange={e => setPushTarget(t => ({...t, esp32: e.target.checked}))}
+                    className="mr-2"
+                  />
+                  📟 本地墨水屏
+                  {einkDevices.length > 0 && (
+                    <span className="ml-1 text-xs text-gray-500">（{einkDevices.length} 台已启用）</span>
+                  )}
                 </label>
-                <label className="flex items-center text-sm">
-                  <input type="checkbox" checked={pushTarget.esp32}
-                         onChange={e => setPushTarget(t => ({...t, esp32: e.target.checked}))}
-                         className="mr-2" />
-                  📟 ESP32-C3 本地
-                </label>
+
+                {pushTarget.esp32 && (
+                  <div className="ml-6 mt-2 space-y-2">
+                    {devicesLoading && (
+                      <p className="text-xs text-gray-500">正在读取已登记设备...</p>
+                    )}
+                    {devicesError && (
+                      <p className="text-xs text-red-600">设备列表读取失败，请刷新页面重试。</p>
+                    )}
+                    {!devicesLoading && !devicesError && einkDevices.length === 0 && (
+                      <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-800">
+                        <p>还没有可推送的本地墨水屏。</p>
+                        <Link to="/devices" className="mt-1 inline-block font-medium text-amber-900 underline">
+                          去设备管理登记设备 →
+                        </Link>
+                      </div>
+                    )}
+                    {einkDevices.map((device) => {
+                      const checked = selectedEinkDeviceIds === null || selectedEinkDeviceIds.includes(device.id);
+                      return (
+                        <label key={device.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-50">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const allIds = einkDevices.map((item) => item.id);
+                              const currentIds = selectedEinkDeviceIds === null ? allIds : selectedEinkDeviceIds;
+                              const nextIds = currentIds.includes(device.id)
+                                ? currentIds.filter((id) => id !== device.id)
+                                : [...currentIds, device.id];
+                              setSelectedEinkDeviceIds(nextIds.length === allIds.length ? null : nextIds);
+                            }}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium text-gray-800">{device.name}</span>
+                            <span className="block truncate text-xs text-gray-500">{device.id} · {device.width}×{device.height}px</span>
+                          </span>
+                          {requestedDeviceId === device.id && (
+                            <span className="text-xs font-medium text-primary-600">当前设备</span>
+                          )}
+                        </label>
+                      );
+                    })}
+                    {einkDevices.length > 0 && (
+                      <p className="text-xs text-gray-500">
+                        {selectedEinkDeviceIds === null
+                          ? '当前将推送到全部已勾选的本地墨水屏。'
+                          : `当前已选择 ${selectedEinkDeviceIds.length} 台本地墨水屏。`}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
+
               <button
                 onClick={handlePush}
-                disabled={pushMutation.isPending || (!pushTarget.cloud && !pushTarget.esp32)}
+                disabled={
+                  pushMutation.isPending ||
+                  (!pushTarget.cloud && !pushTarget.esp32) ||
+                  (pushTarget.esp32 && einkDevices.length === 0 && !pushTarget.cloud) ||
+                  (pushTarget.esp32 && selectedEinkDeviceIds !== null && selectedEinkDeviceIds.length === 0)
+                }
                 className="w-full flex items-center justify-center px-6 py-4 text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="w-6 h-6 mr-3" />
                 <span className="font-medium text-lg">
-                  {pushMutation.isPending ? '推送中...' : '重新推送到选中设备'}
+                  {pushMutation.isPending ? '推送中...' : '立即推送这条新闻'}
                 </span>
               </button>
             </div>
