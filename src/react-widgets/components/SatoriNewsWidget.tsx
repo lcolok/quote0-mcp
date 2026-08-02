@@ -14,7 +14,8 @@
 import React from 'react';
 import { WidgetProps } from '../core/widget-plugin.js';
 import { HighlightedWord } from '../services/llm-workflow-engine.js';
-import { EINK_TARGET, RenderTarget } from '../core/render-targets.js';
+import { EINK_TARGET, RenderTarget, deriveNewsLayout } from '../core/render-targets.js';
+import { selectOptimalFont } from '../smart-font-selector.js';
 
 export interface NewsData {
   title: string;
@@ -31,8 +32,31 @@ interface SatoriNewsWidgetProps extends WidgetProps<NewsData> {
   target?: RenderTarget;
 }
 
+/**
+ * Keep the Satori path aligned with the historical smartFont() path.
+ *
+ * Satori registers the native 8/10/12px pixel fonts under size-specific
+ * families. Using the generic FusionPixelFont family silently falls back to
+ * the 12px font for every CSS size, which breaks the old pixel-font mapping
+ * for 10px/20px/24px text.
+ */
+function pixelFontStyle(targetSize: number): {
+  fontFamily: string;
+  fontSize: string;
+} {
+  const selection = selectOptimalFont(targetSize);
+  return {
+    fontFamily: `FusionPixelFont-${selection.baseFontSize}px`,
+    fontSize: `${selection.actualSize}px`,
+  };
+}
+
 export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target = EINK_TARGET }) => {
   const { title, message, source, highlights } = data;
+  const layout = target.newsLayout ?? deriveNewsLayout(target.widthPx, target.heightPx);
+  const bodyFont = pixelFontStyle(layout.bodyFontPx);
+  const titleFont = pixelFontStyle(layout.titleFontPx);
+  const footerFont = pixelFontStyle(layout.footerFontPx);
   
   // 渲染带高亮的文本
   const renderHighlightedText = (text: string, highlights: HighlightedWord[] = []) => {
@@ -90,8 +114,7 @@ export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target
       width: `${target.widthPx}px`,
       height: `${target.heightPx}px`,
       backgroundColor: '#FFFFFF',
-      fontFamily: 'FusionPixelFont',
-      fontSize: '12px',
+      ...bodyFont,
       lineHeight: '14px',
       padding: '0px',
       boxSizing: 'border-box',
@@ -103,18 +126,17 @@ export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target
       <div style={{
         display: 'flex',
         alignItems: 'flex-start',
-        paddingLeft: '6px',
-        paddingRight: '6px',
-        paddingTop: '4px',
-        paddingBottom: '4px',
+        paddingLeft: `${layout.titlePaddingXPx}px`,
+        paddingRight: `${layout.titlePaddingXPx}px`,
+        paddingTop: `${layout.titlePaddingTopPx}px`,
+        paddingBottom: `${layout.titlePaddingBottomPx}px`,
         backgroundColor: 'black',
         color: 'white',
         flexShrink: 0
       }}>
         <div style={{
-          fontFamily: 'FusionPixelFont',
-          fontSize: '24px',
-          lineHeight: '26px',
+          ...titleFont,
+          lineHeight: `${layout.titleLineHeightPx}px`,
           fontWeight: 'normal',
           wordWrap: 'break-word',
           wordBreak: 'normal',
@@ -130,17 +152,16 @@ export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target
         flex: 1,
         display: 'flex',
         flexDirection: 'column',
-        paddingLeft: '4px',
-        paddingRight: '4px',
-        paddingTop: '2px',
+        paddingLeft: `${layout.bodyPaddingXPx}px`,
+        paddingRight: `${layout.bodyPaddingXPx}px`,
+        paddingTop: `${layout.bodyPaddingTopPx}px`,
         overflow: 'hidden'
       }}>
         <div style={{
           flex: 1,
           display: 'flex',
-          fontFamily: 'FusionPixelFont',
-          fontSize: '12px',
-          lineHeight: '14px',
+          ...bodyFont,
+          lineHeight: `${layout.bodyLineHeightPx}px`,
           color: '#333333',
           overflow: 'hidden'
         }}>
@@ -153,13 +174,12 @@ export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        height: '16px',
+        height: `${layout.footerHeightPx}px`,
         paddingLeft: '4px',
         paddingRight: '4px',
         borderTop: '1px solid rgba(0,0,0,0.1)',
-        fontFamily: 'FusionPixelFont',
-        fontSize: '12px',
-        lineHeight: '14px',
+        ...footerFont,
+        lineHeight: `${layout.footerLineHeightPx}px`,
         color: '#333',
         fontWeight: 'normal',
         textAlign: 'center'
