@@ -5,7 +5,7 @@ import { RenderTarget } from '../react-widgets/core/render-targets.js';
 import { mmToWidthPx, mmToHeightPx } from '../react-widgets/core/device-dpi.js';
 import { niimbotPush } from '../react-widgets/core/niimbot-push-module.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
-import { pushToEinkDevice, pngTo1BitBitmap } from './eink-converter.js';
+import { pushToEinkDevice, pngTo1BitBitmap, resolveEinkDeviceSpec, type EinkColorMode, type EinkWireProtocol } from './eink-converter.js';
 import { devicePusher } from './device-pusher.js';
 
 export type DeviceKind = 'thermal-printer' | 'eink-local' | 'eink-cloud';
@@ -21,6 +21,9 @@ export interface PushDeviceRow {
   kind: DeviceKind;
   capabilities: string[];
   dpi?: number | null;
+  wire_protocol?: EinkWireProtocol;
+  color_mode?: EinkColorMode;
+  plane_count?: number;
 }
 
 export interface SinkResult {
@@ -61,18 +64,21 @@ const niimbotSink: OutputSink = {
 const einkSink: OutputSink = {
   kind: 'eink-local',
   async send(png, device, target) {
-    const bitmap = await pngTo1BitBitmap(png, target.widthPx, target.heightPx);
-    const r = await pushToEinkDevice(
-      {
-        id: device.id,
-        name: device.name,
-        baseUrl: device.base_url,
-        token: device.token,
-        width: device.width,
-        height: device.height,
-      },
-      bitmap
-    );
+    const resolvedDevice = await resolveEinkDeviceSpec({
+      id: device.id,
+      name: device.name,
+      baseUrl: device.base_url,
+      token: device.token,
+      width: device.width || target.widthPx,
+      height: device.height || target.heightPx,
+      wireProtocol: device.wire_protocol,
+      colorMode: device.color_mode,
+      planeCount: device.plane_count,
+    });
+    const width = resolvedDevice.width;
+    const height = resolvedDevice.height;
+    const bitmap = await pngTo1BitBitmap(png, width, height);
+    const r = await pushToEinkDevice(resolvedDevice, bitmap);
     return { ok: r.ok, error: r.error };
   },
 };

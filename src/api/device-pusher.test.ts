@@ -8,6 +8,13 @@ import { writeFile, unlink } from "fs/promises";
 
 const TEMP_PNG = "/tmp/device-pusher-test.png";
 let lastExecCommand = "";
+let mockEinkDevices: Array<{ id: string; name: string; baseUrl: string; token: string; width: number; height: number }> = [];
+const getEinkDevicesMock = mock(async (options?: { deviceIds?: string[] }) => {
+  if (!options?.deviceIds) return mockEinkDevices;
+  return mockEinkDevices.filter((device) => options.deviceIds!.includes(device.id));
+});
+const pushToEinkDeviceMock = mock(async () => ({ ok: true }));
+const resolveEinkDeviceSpecMock = mock(async (device: any) => device);
 
 mock.module("child_process", () => ({
   execFile: (cmd: string, args: string[], optionsOrCb: any, maybeCb?: any) => {
@@ -19,8 +26,9 @@ mock.module("child_process", () => ({
 
 mock.module("./eink-converter.js", () => ({
   pngTo1BitBitmap: mock(async () => Buffer.from("bitmap")),
-  getEinkDevices: mock(async () => []),
-  pushToEinkDevice: mock(async () => ({ ok: true })),
+  getEinkDevices: getEinkDevicesMock,
+  resolveEinkDeviceSpec: resolveEinkDeviceSpecMock,
+  pushToEinkDevice: pushToEinkDeviceMock,
 }));
 
 // Use cache-busting dynamic import so mock.module takes effect even when
@@ -34,6 +42,10 @@ describe("DevicePusher", () => {
   beforeEach(async () => {
     await writeFile(TEMP_PNG, Buffer.from("fake-png-data"));
     lastExecCommand = "";
+    mockEinkDevices = [];
+    getEinkDevicesMock.mockClear();
+    pushToEinkDeviceMock.mockClear();
+    resolveEinkDeviceSpecMock.mockClear();
   });
 
   afterEach(async () => {
@@ -73,6 +85,20 @@ describe("DevicePusher", () => {
       const result = await pusher.push(TEMP_PNG, "local-eink");
       expect(result).toHaveProperty("ok");
       expect(result.error).toContain("未配置");
+    });
+
+    it("should forward selected device ids and push only to that device", async () => {
+      mockEinkDevices = [
+        { id: "eink-1", name: "客厅墨水屏", baseUrl: "http://192.168.31.37", token: "token-1", width: 296, height: 152 },
+        { id: "eink-2", name: "S3自制板墨水屏", baseUrl: "http://192.168.31.38", token: "token-2", width: 296, height: 152 },
+      ];
+
+      const result = await pusher.push(TEMP_PNG, "local-eink", { deviceIds: ["eink-2"] });
+
+      expect(result.ok).toBe(true);
+      expect(result.pushResults).toEqual([{ device: "eink-2", ok: true, error: undefined }]);
+      expect(getEinkDevicesMock).toHaveBeenCalledWith({ deviceIds: ["eink-2"] });
+      expect(pushToEinkDeviceMock).toHaveBeenCalledTimes(1);
     });
   });
 });

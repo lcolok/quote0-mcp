@@ -30,6 +30,7 @@ import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/dev
 import { labelPrintOrchestrator } from '../react-widgets/core/label-print-orchestrator.js';
 import { thermalLabelRenderer } from '../react-widgets/core/thermal-label-rendering-module.js';
 import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
+import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -967,8 +968,27 @@ app.get('/api/scheduler/push-history', async (c) => {
     const offsetParam = paramCount + 2;
 
     const query = `
-      WITH deduped AS (
-        SELECT DISTINCT ON (COALESCE(fingerprint, 'id:' || id))
+      WITH latest_ids AS MATERIALIZED (
+        SELECT DISTINCT ON (fingerprint) id
+        FROM news_push_log
+        WHERE fingerprint IS NOT NULL
+        ${searchCondition}
+        ORDER BY fingerprint, pushed_at DESC
+      ), deduped AS (
+        SELECT DISTINCT ON (fingerprint)
+          log.id,
+          log.raw_content,
+          log.processed_content,
+          log.image_path,
+          log.pushed_at,
+          log.pushed_at AT TIME ZONE 'UTC' AS pushed_at_utc,
+          log.job_id,
+          log.annotation_status
+        FROM news_push_log AS log
+        INNER JOIN latest_ids ON latest_ids.id = log.id
+        ORDER BY fingerprint, pushed_at DESC
+      ), without_fingerprint AS (
+        SELECT
           id,
           raw_content,
           processed_content,
@@ -978,11 +998,14 @@ app.get('/api/scheduler/push-history', async (c) => {
           job_id,
           annotation_status
         FROM news_push_log
-        WHERE 1=1
+        WHERE fingerprint IS NULL
         ${searchCondition}
-        ORDER BY COALESCE(fingerprint, 'id:' || id), pushed_at DESC
+      ), combined AS (
+        SELECT * FROM deduped
+        UNION ALL
+        SELECT * FROM without_fingerprint
       )
-      SELECT * FROM deduped
+      SELECT * FROM combined
       ORDER BY pushed_at DESC
       LIMIT $${limitParam} OFFSET $${offsetParam}
     `;
@@ -991,11 +1014,17 @@ app.get('/api/scheduler/push-history', async (c) => {
     const result = await client.query(query, queryParams);
 
     // 获取总数（去重后）
-    let countQuery = `
+    const countQuery = `
       SELECT COUNT(*) FROM (
-        SELECT DISTINCT COALESCE(fingerprint, 'id:' || id) AS k
+        SELECT fingerprint AS k
         FROM news_push_log
-        WHERE 1=1
+        WHERE fingerprint IS NOT NULL
+        ${searchCondition}
+        GROUP BY fingerprint
+        UNION ALL
+        SELECT NULL AS k
+        FROM news_push_log
+        WHERE fingerprint IS NULL
         ${searchCondition}
       ) t
     `;
@@ -1085,8 +1114,22 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     const client = await postgres.getClient();
     const id = parseInt(c.req.param('id'));
 
-    const body = await c.req.json().catch(() => ({})) as { renderer?: 'device' | 'local-eink' | 'both' };
+    const body = await c.req.json().catch(() => ({})) as {
+      renderer?: 'device' | 'local-eink' | 'both';
+      /** 仅对 local-eink 生效；省略时推送到全部启用的墨水屏。 */
+      deviceIds?: unknown;
+    };
     const targetRenderer = body.renderer || 'device';
+    const targetDeviceIds = Array.isArray(body.deviceIds)
+      ? [...new Set(body.deviceIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
+      : undefined;
+
+    if (!['device', 'local-eink', 'both'].includes(targetRenderer)) {
+      return c.json({ success: false, error: `不支持的推送目标: ${targetRenderer}` }, 400);
+    }
+    if (['local-eink', 'both'].includes(targetRenderer) && Array.isArray(body.deviceIds) && targetDeviceIds?.length === 0) {
+      return c.json({ success: false, error: '请至少选择一台本地墨水屏' }, 400);
+    }
 
     const result = await client.query(
       'SELECT * FROM news_push_log WHERE id = $1',
@@ -1136,7 +1179,25 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     const { renderingRegistry } = await import('../react-widgets/core/rendering-modules.js');
 
     const renderers = targetRenderer === 'both' ? ['device', 'local-eink'] : [targetRenderer];
-    const results: Array<{renderer: string, success: boolean, error?: string}> = [];
+    const results: Array<{
+      renderer: string;
+      success: boolean;
+      error?: string;
+      devices?: Array<{ device: string; ok: boolean; error?: string }>;
+    }> = [];
+
+    const raw = record.raw_content || {};
+    const processed = record.processed_content || {};
+    const renderableData = {
+      id: String(record.id),
+      title: processed.title || raw.title || '未知标题',
+      message: processed.message || processed.summary || raw.description || raw.content || '',
+      signature: processed.signature || 'RSS智能',
+      source: processed.source || raw.source || 'unknown',
+      publishTime: processed.publishTime || raw.publishTime || record.pushed_at?.toISOString?.() || new Date().toISOString(),
+      category: processed.category || raw.category || '新闻',
+      link: raw.link,
+    };
 
     // 优先解析原图 URL，避免重渲染导致英文 fallback
     let originalImageUrl: string | null = null;
@@ -1157,13 +1218,28 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
     }
 
     for (const rendererName of renderers) {
+      // local-eink 路径按设备运行时真值重新排版；不复用历史 296x152 PNG。
+      if (rendererName === 'local-eink') {
+        try {
+          const pushResult = await renderAndPushLocalEinkByTarget(renderableData as any, targetDeviceIds);
+          results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.ok ? undefined : pushResult.deviceResult, devices: pushResult.pushResults });
+        } catch (error) {
+          results.push({ renderer: rendererName, success: false, error: error instanceof Error ? error.message : String(error) });
+        }
+        continue;
+      }
+
       // 路径 A：有原图 → 下载 temp 再推（不重渲染，杜绝英文 fallback）
       if (originalImageUrl) {
         let tempFilePath: string | null = null;
         try {
           tempFilePath = await downloadMinioToTemp(originalImageUrl);
-          const pushResult = await devicePusher.push(tempFilePath, rendererName as 'device' | 'local-eink');
-          results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error });
+          const pushResult = await devicePusher.push(
+            tempFilePath,
+            rendererName as 'device' | 'local-eink',
+            rendererName === 'local-eink' && targetDeviceIds ? { deviceIds: targetDeviceIds } : undefined
+          );
+          results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error, devices: pushResult.pushResults });
         } catch (err) {
           results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
         } finally {
@@ -1187,20 +1263,6 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
       }
 
       try {
-        const raw = record.raw_content || {};
-        const processed = record.processed_content || {};
-
-        const renderableData = {
-          id: String(record.id),
-          title: processed.title || raw.title || '未知标题',
-          message: processed.message || processed.summary || raw.description || raw.content || '',
-          signature: processed.signature || 'RSS智能',
-          source: processed.source || raw.source || 'unknown',
-          publishTime: processed.publishTime || raw.publishTime || record.pushed_at?.toISOString?.() || new Date().toISOString(),
-          category: processed.category || raw.category || '新闻',
-          link: raw.link,
-        };
-
         const renderConfig = { border: '0', width: EINK_DEVICE_WIDTH, height: EINK_DEVICE_HEIGHT };
 
         console.log(`🔄 重新推送 #${id} → ${rendererName}: "${renderableData.title}"`);
@@ -1208,8 +1270,12 @@ app.post('/api/scheduler/push-history/:id/resend', async (c) => {
 
         // 渲染器只生成图片，推送由 DevicePusher 统一处理
         const pusherInput = renderResult.localImagePath || renderResult.imageUrl;
-        const pushResult = await devicePusher.push(pusherInput, rendererName as 'device' | 'local-eink');
-        results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error });
+        const pushResult = await devicePusher.push(
+          pusherInput,
+          rendererName as 'device' | 'local-eink',
+          rendererName === 'local-eink' && targetDeviceIds ? { deviceIds: targetDeviceIds } : undefined
+        );
+        results.push({ renderer: rendererName, success: pushResult.ok, error: pushResult.error, devices: pushResult.pushResults });
       } catch (err) {
         results.push({ renderer: rendererName, success: false, error: err instanceof Error ? err.message : String(err) });
       }

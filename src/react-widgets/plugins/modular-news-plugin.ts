@@ -14,6 +14,7 @@ import { workflowEngine } from '../core/workflow-engine.js';
 import { dataSourceRegistry } from '../core/data-source-modules.js';
 import { processingRegistry } from '../core/processing-modules.js';
 import { renderingRegistry } from '../core/rendering-modules.js';
+import type { ProcessedDataItem, RenderableDataItem } from '../core/modular-architecture.js';
 import { EnvLoader } from '../../image-sender/adapters/environments/env-loader.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../core/device-constants.js';
 
@@ -74,42 +75,8 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
   async getData(params: ModularNewsParams): Promise<string> {
     console.log('🚀 启动模块化新闻处理工作流...');
     
-    // 解析参数
-    const dataSource = params.dataSource || 'mock';
-    const processor = params.processor || 'passthrough';
-    const renderer = params.renderer || 'news';
-    const category = params.category || 'technology';
-    const index = params.index || 0;
-    
-    console.log(`📋 工作流配置: ${dataSource} -> ${processor} -> ${renderer}`);
-    
     try {
-      // 创建工作流
-      const workflow = workflowEngine.createNewsWorkflow({
-        dataSource: dataSource,
-        dataSourceParams: {
-          category: category,
-          startIndex: index,
-          count: 1,
-          source: params.rssSource || 'solidot' // 使用RSS源选择参数
-        },
-        processor: processor,
-        processingParams: {
-          maxTitleLength: 20,
-          maxContentLength: 150,
-          temperature: 0.3
-        },
-        renderer: renderer,
-        renderingParams: {
-          signatureStyle: 'auto'
-        },
-        renderingConfig: {
-          border: params.border || '0',
-          // 设备真实分辨率 296×152（v1.0.22 起 widget 统一按此渲染）
-          width: EINK_DEVICE_WIDTH,
-          height: EINK_DEVICE_HEIGHT
-        }
-      });
+      const workflow = this.createWorkflow(params);
       
       // 执行工作流
       const result = await workflowEngine.executeWorkflow(workflow);
@@ -127,6 +94,63 @@ export class ModularNewsPlugin implements WidgetPlugin<string, ModularNewsConfig
       console.error('❌ 模块化新闻处理失败:', error);
       throw new Error(`模块化新闻处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
+  }
+
+  /**
+   * 获取处理后的可排版数据，不执行任何图片渲染。
+   *
+   * 目标设备（C3/S3/未来其它屏幕）共享这份数据，但各自调用渲染器时
+   * 使用自己的 RenderTarget，从而保证排版阶段就是目标像素尺寸。
+   */
+  async getRenderableData(params: ModularNewsParams): Promise<RenderableDataItem> {
+    const workflow = this.createWorkflow(params);
+    const processedData = await workflowEngine.executeUntilProcessing(workflow) as ProcessedDataItem;
+    const rendererName = params.renderer || 'local-eink';
+    const renderingModule = renderingRegistry.get(rendererName);
+    if (!renderingModule) {
+      throw new Error(`渲染模块未找到: ${rendererName}`);
+    }
+
+    return renderingModule.transformToRenderable(processedData, {
+      signatureStyle: 'auto'
+    });
+  }
+
+  private createWorkflow(params: ModularNewsParams) {
+    const dataSource = params.dataSource || 'mock';
+    const processor = params.processor || 'passthrough';
+    const renderer = params.renderer || 'news';
+    const category = params.category || 'technology';
+    const index = params.index || 0;
+
+    console.log(`📋 工作流配置: ${dataSource} -> ${processor} -> ${renderer}`);
+
+    return workflowEngine.createNewsWorkflow({
+      dataSource,
+      dataSourceParams: {
+        category,
+        startIndex: index,
+        count: 1,
+        source: params.rssSource || 'solidot'
+      },
+      processor,
+      processingParams: {
+        maxTitleLength: 20,
+        maxContentLength: 150,
+        temperature: 0.3
+      },
+      renderer,
+      renderingParams: {
+        signatureStyle: 'auto'
+      },
+      renderingConfig: {
+        border: params.border || '0',
+        // 仅作为普通 news/device 渲染器的默认值；local-eink 目标渲染
+        // 不读取这里的尺寸，而是在 target-aware-eink 中注入真实 target。
+        width: EINK_DEVICE_WIDTH,
+        height: EINK_DEVICE_HEIGHT
+      }
+    });
   }
 
   /**

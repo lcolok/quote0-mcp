@@ -3,6 +3,7 @@ import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/dev
 import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
 import { stagedCacheManager } from '../react-widgets/core/staged-cache-manager.js';
 import { devicePusher } from './device-pusher.js';
+import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type { NewsData } from '../react-widgets/components/NewsWidget.js';
 import type {
   FullNewsProcessingResult,
@@ -179,7 +180,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
         let dbImagePath: string | undefined = undefined;
         let localCacheHit = false;
 
-        if (!params.force) {
+        // local-eink 不复用默认尺寸图片缓存：它必须从处理后的文本数据
+        // 按运行时 RenderTarget 重新排版。
+        if (!params.force && params.renderer !== 'local-eink') {
           try {
             debugLog('🔍 检查MinIO中的缓存图片...');
 
@@ -234,9 +237,11 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             debugLog('📱 缓存未命中，执行完整渲染...');
           }
 
-          renderResult = (await modularNewsPlugin.getData(params)) as unknown as Record<string, any> | null;
+          renderResult = params.renderer === 'local-eink'
+            ? await modularNewsPlugin.getRenderableData(params)
+            : (await modularNewsPlugin.getData(params)) as unknown as Record<string, any> | null;
 
-          if (renderResult && typeof renderResult === 'object' && renderResult.imageUrl) {
+          if (params.renderer !== 'local-eink' && renderResult && typeof renderResult === 'object' && renderResult.imageUrl) {
             imageUrl = renderResult.imageUrl;
             // 解析 objectKey 用于数据库记录
             if (imageUrl.includes('/quote0-images/')) {
@@ -321,17 +326,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
             } catch (cacheError) {
               console.warn('⚠️ 保存缓存失败:', cacheError);
             }
-          } else {
+          } else if (params.renderer !== 'local-eink') {
             throw new Error('渲染未返回有效结果');
           }
-        }
-
-        // 统一推送：无论 cache hit 还是 cache miss，推送只在这里发生一次
-        let pushResult: { ok: boolean; deviceResult?: string; pushResults?: any[]; error?: string } | null = null;
-        if (imageUrl) {
-          const pusherInput = localCacheHit ? imageUrl : (renderResult?.localImagePath || imageUrl);
-          console.log(`📤 统一推送到设备 (${params.renderer})...`);
-          pushResult = await devicePusher.push(pusherInput, params.renderer);
         }
 
         const mergedTextData = {
@@ -348,11 +345,45 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           link: cachedTextData?.link ?? renderResult?.link ?? context.link
         };
 
+        // 统一推送：无论 cache hit 还是 cache miss，推送只在这里发生一次。
+        // local-eink 例外：必须根据每台设备的运行时 RenderTarget 重新排版。
+        let pushResult: {
+          ok: boolean;
+          deviceResult?: string;
+          pushResults?: any[];
+          renderedImages?: Array<{ targetId: string; width: number; height: number; imageUrl?: string; localImagePath?: string; deviceIds: string[] }>;
+          error?: string;
+        } | null = null;
+        if (imageUrl || params.renderer === 'local-eink') {
+          console.log(`📤 统一推送到设备 (${params.renderer})...`);
+          if (params.renderer === 'local-eink') {
+            pushResult = await renderAndPushLocalEinkByTarget({
+              id: newsFingerprint,
+              title: mergedTextData.title || context.title || '未知标题',
+              message: mergedTextData.message || mergedTextData.summary || context.description || '',
+              signature: mergedTextData.signature || 'RSS智能',
+              source: mergedTextData.source || context.source || 'unknown',
+              publishTime: context.publishTime || new Date().toISOString(),
+              category: context.category || params.category,
+              link: mergedTextData.link,
+            } as any);
+          } else {
+            const pusherInput = localCacheHit ? imageUrl : (renderResult?.localImagePath || imageUrl);
+            pushResult = await devicePusher.push(pusherInput, params.renderer);
+          }
+        }
+
+        if (params.renderer === 'local-eink' && pushResult?.renderedImages?.[0]) {
+          imageUrl = pushResult.renderedImages[0].imageUrl || '';
+          dbImagePath = pushResult.renderedImages[0].localImagePath;
+        }
+
         result = {
           imageUrl,
           localImagePath: dbImagePath,
           deviceResult: pushResult?.deviceResult || pushResult?.error || '未推送',
           pushResults: pushResult?.pushResults,
+          renderedImages: pushResult?.renderedImages,
           title: mergedTextData.title,
           message: mergedTextData.message,
           summary: mergedTextData.summary,
@@ -361,7 +392,7 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
           link: mergedTextData.link,
           cacheInfo: {
             hit: localCacheHit,
-            source: localCacheHit ? 'minio_cache' : 'original',
+            source: localCacheHit ? 'minio_cache' : (params.renderer === 'local-eink' ? 'target_render' : 'original'),
             cacheKey: cacheKeyString
           }
         };
@@ -377,7 +408,9 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
       }
     } catch (cacheError) {
       console.warn('⚠️ 分阶段缓存处理失败，回退到直接处理:', cacheError);
-      result = await modularNewsPlugin.getData(params);
+      result = params.renderer === 'local-eink'
+        ? await modularNewsPlugin.getRenderableData(params)
+        : await modularNewsPlugin.getData(params);
       cacheHit = false;
       cacheSource = 'fallback';
     }
@@ -388,18 +421,37 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
       console.log('📊 其他渲染器，跳过缓存检查');
     }
 
-    result = await modularNewsPlugin.getData(params);
+    result = params.renderer === 'local-eink'
+      ? await modularNewsPlugin.getRenderableData(params)
+      : await modularNewsPlugin.getData(params);
     cacheHit = false;
     cacheSource = params.force ? 'forced' : 'no_cache';
 
     // 对于 device / local-eink，即使 skip cache 也要执行统一推送
-    if ((params.renderer === 'device' || params.renderer === 'local-eink') && result && typeof result === 'object' && result.imageUrl) {
-      const pusherInput = result.localImagePath || result.imageUrl;
-      const pushResult = await devicePusher.push(pusherInput, params.renderer);
+    if ((params.renderer === 'device' || params.renderer === 'local-eink') && result && typeof result === 'object' && (params.renderer === 'local-eink' || result.imageUrl)) {
+      const pushResult: any = params.renderer === 'local-eink'
+        ? await renderAndPushLocalEinkByTarget({
+            id: String(result.id || params.index),
+            title: result.title || '未知标题',
+            message: result.message || result.summary || '',
+            signature: result.signature || 'RSS智能',
+            source: result.source || params.rssSource,
+            publishTime: result.publishTime || new Date().toISOString(),
+            category: result.category || params.category,
+            link: result.link,
+          } as any)
+        : await devicePusher.push(result.localImagePath || result.imageUrl, params.renderer);
       result = {
         ...result,
-        deviceResult: pushResult.deviceResult || pushResult.error,
-        pushResults: pushResult.pushResults
+        ...(params.renderer === 'local-eink' && pushResult.renderedImages?.[0]
+          ? {
+              imageUrl: pushResult.renderedImages[0].imageUrl,
+              localImagePath: pushResult.renderedImages[0].localImagePath
+            }
+          : {}),
+        deviceResult: pushResult.deviceResult || ('error' in pushResult ? pushResult.error : undefined),
+        pushResults: pushResult.pushResults,
+        renderedImages: pushResult.renderedImages
       };
     }
 

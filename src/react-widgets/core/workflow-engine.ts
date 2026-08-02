@@ -121,6 +121,39 @@ export class WorkflowEngine {
       return this.buildErrorResult(workflow, context, errorMsg);
     }
   }
+
+  /**
+   * 只执行数据源和处理器节点，返回可供多个目标尺寸复用的处理结果。
+   *
+   * 本地 E-Ink 不能先渲染一个默认尺寸再缩放；它需要把同一份处理结果
+   * 交给每个 RenderTarget 独立排版。因此这里明确提供一个不经过渲染节点
+   * 的工作流入口。
+   */
+  async executeUntilProcessing(workflow: WorkflowDefinition): Promise<any> {
+    const context: WorkflowExecutionContext = {
+      executionId: this.generateExecutionId(),
+      startTime: new Date().toISOString(),
+      nodeResults: {},
+      nodesDuration: {}
+    };
+
+    this.validateWorkflow(workflow);
+    const executionOrder = this.buildExecutionOrder(workflow);
+    const processingIndex = executionOrder.findIndex((node) => node.type === 'processing');
+    if (processingIndex < 0) {
+      throw new Error('工作流未包含处理节点');
+    }
+
+    for (const node of executionOrder.slice(0, processingIndex + 1)) {
+      context.currentNode = node.id;
+      const nodeStartTime = Date.now();
+      const result = await this.executeNode(node, context);
+      context.nodeResults[node.id] = result;
+      context.nodesDuration[node.id] = Date.now() - nodeStartTime;
+    }
+
+    return context.nodeResults[executionOrder[processingIndex].id];
+  }
   
   /**
    * 验证工作流定义

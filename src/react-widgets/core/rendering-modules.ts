@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { EINK_TARGET } from './render-targets.js';
+import { EINK_TARGET, targetFromRenderConfig } from './render-targets.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from './device-constants.js';
 import { 
   RenderingModule, 
@@ -160,6 +160,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       
       // 初始化渲染器
       await satoriRenderer.initialize();
+      const target = targetFromRenderConfig(config);
       
       // 创建新闻数据对象
       const newsData = {
@@ -178,11 +179,12 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriNewsWidget, { 
-          data: newsData 
+          data: newsData,
+          target,
         }),
         {
-          width: config.width || EINK_TARGET.widthPx,
-          height: config.height || EINK_TARGET.heightPx,
+          width: target.widthPx,
+          height: target.heightPx,
           backgroundColor: config.backgroundColor || '#ffffff'
         }
       );
@@ -407,6 +409,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
       
       // 初始化渲染器
       await satoriRenderer.initialize();
+      const target = targetFromRenderConfig(config);
       
       // 创建新闻数据对象，使用传入的处理后数据
       const newsData = {
@@ -432,11 +435,14 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
       
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriNewsWidget, { 
-          data: newsData 
+          data: newsData,
+          target,
         }),
         {
           format: 'png',
           quality: 100,
+          width: target.widthPx,
+          height: target.heightPx,
           backgroundColor: config.backgroundColor || '#ffffff'
         }
       );
@@ -462,8 +468,9 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
         cacheKey: `modular_${data.id}_${timestamp}`,
         renderConfig: {
           border: config.border,
-          width: config.width || EINK_DEVICE_WIDTH,
-          height: config.height || EINK_DEVICE_HEIGHT
+          width: target.widthPx,
+          height: target.heightPx,
+          targetId: target.id,
         }
       };
       
@@ -579,6 +586,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
       const fs = await import('fs/promises');
 
       await satoriRenderer.initialize();
+      const target = targetFromRenderConfig(config);
 
       const newsData = {
         title: data.title,
@@ -594,11 +602,14 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriNewsWidget, {
-          data: newsData
+          data: newsData,
+          target,
         }),
         {
           format: 'png',
           quality: 100,
+          width: target.widthPx,
+          height: target.heightPx,
           backgroundColor: config.backgroundColor || '#ffffff'
         }
       );
@@ -615,7 +626,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
       const metadata = {
         widgetType: 'news',
         cacheKey: `modular_${data.id}_${timestamp}`,
-        renderConfig: { border: config.border, width: config.width || EINK_TARGET.widthPx, height: config.height || EINK_TARGET.heightPx }
+        renderConfig: { border: config.border, width: target.widthPx, height: target.heightPx, targetId: target.id }
       };
       const uploadResult = await imageStorage.uploadImage(localImagePath, metadata);
       const imageUrl = uploadResult.url;

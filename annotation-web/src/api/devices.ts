@@ -17,6 +17,11 @@ export interface Device {
   width: number;
   height: number;
   enabled: boolean;
+  kind: 'thermal-printer' | 'eink-local' | 'eink-cloud';
+  capabilities?: string[];
+  wire_protocol?: 'legacy-raw-v0' | 'epd1-v1';
+  color_mode?: 'mono-1bit' | '3-color';
+  plane_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -29,6 +34,11 @@ export interface CreateDeviceBody {
   width: number;
   height: number;
   enabled?: boolean;
+  kind?: Device['kind'];
+  capabilities?: string[];
+  wire_protocol?: Device['wire_protocol'];
+  color_mode?: Device['color_mode'];
+  plane_count?: number;
 }
 
 export interface UpdateDeviceBody {
@@ -38,6 +48,11 @@ export interface UpdateDeviceBody {
   width?: number;
   height?: number;
   enabled?: boolean;
+  kind?: Device['kind'];
+  capabilities?: string[];
+  wire_protocol?: Device['wire_protocol'];
+  color_mode?: Device['color_mode'];
+  plane_count?: number;
 }
 
 class DevicesApiClient {

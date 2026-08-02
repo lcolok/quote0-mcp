@@ -22,6 +22,11 @@ export interface PushResult {
   error?: string;
 }
 
+export interface DevicePushOptions {
+  /** local-eink 渲染器的目标设备；未提供时推送到全部启用的墨水屏。 */
+  deviceIds?: string[];
+}
+
 export class DevicePusher {
   private retryDelayMs: number;
 
@@ -34,7 +39,11 @@ export class DevicePusher {
    * @param imageInput 本地文件路径或 MinIO URL
    * @param renderer   'device' | 'local-eink'
    */
-  async push(imageInput: string, renderer: 'device' | 'local-eink'): Promise<PushResult> {
+  async push(
+    imageInput: string,
+    renderer: 'device' | 'local-eink',
+    options: DevicePushOptions = {}
+  ): Promise<PushResult> {
     let localFilePath: string;
     let isTempFile = false;
 
@@ -47,7 +56,7 @@ export class DevicePusher {
 
     try {
       if (renderer === 'local-eink') {
-        return await this.pushToLocalEink(localFilePath);
+        return await this.pushToLocalEink(localFilePath, options);
       }
       return await this.pushToMindReset(localFilePath);
     } finally {
@@ -136,24 +145,31 @@ export class DevicePusher {
     return { ok: false, error: '超过最大重试次数' };
   }
 
-  private async pushToLocalEink(localFilePath: string): Promise<PushResult> {
-    const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice } = await import('./eink-converter.js');
+  private async pushToLocalEink(localFilePath: string, options: DevicePushOptions = {}): Promise<PushResult> {
+    const { pngTo1BitBitmap, getEinkDevices, pushToEinkDevice, resolveEinkDeviceSpec } = await import('./eink-converter.js');
     const pngBuffer = await fs.readFile(localFilePath);
 
-    const devices = await getEinkDevices();
+    const devices = await getEinkDevices(options);
     if (devices.length === 0) {
       console.warn('⚠️ 未配置 E-Ink 设备，跳过推送');
-      return { ok: false, error: '未配置 E-Ink 设备' };
+      return {
+        ok: false,
+        error: options.deviceIds?.length
+          ? `未找到已启用的目标墨水屏: ${options.deviceIds.join(', ')}`
+          : '未配置 E-Ink 设备',
+      };
     }
 
     const pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
     for (const device of devices) {
       try {
-        const bitmap = await pngTo1BitBitmap(pngBuffer, device.width, device.height);
-        const result = await pushToEinkDevice(device, bitmap);
+        // EPD1 设备的 /status 是运行时 SSoT；旧 C3 没有该端点，沿用登记尺寸。
+        const resolvedDevice = await resolveEinkDeviceSpec(device);
+        const bitmap = await pngTo1BitBitmap(pngBuffer, resolvedDevice.width, resolvedDevice.height);
+        const result = await pushToEinkDevice(resolvedDevice, bitmap);
         pushResults.push({ device: device.id, ok: result.ok, error: result.error });
-        if (result.ok) console.log(`✅ ${device.name} (${device.width ?? 'default'}x${device.height ?? 'default'}) 推送成功`);
-        else console.error(`❌ ${device.name} 推送失败: ${result.error}`);
+        if (result.ok) console.log(`✅ ${resolvedDevice.name} (${resolvedDevice.width}x${resolvedDevice.height}) 推送成功`);
+        else console.error(`❌ ${resolvedDevice.name} 推送失败: ${result.error}`);
       } catch (e: any) {
         const msg = e?.message || String(e);
         pushResults.push({ device: device.id, ok: false, error: msg });
