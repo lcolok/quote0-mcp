@@ -33,6 +33,10 @@ export interface ProcessedDataItem {
   processingMetadata: {
     processor: string;
     model: string;
+    /** fallback 链实际命中并成功的 provider slug（active 解析为真实 slug）；供观测哪一跳在干活 */
+    llm_provider?: string;
+    /** fallback 链实际命中并成功的 model id */
+    llm_model?: string;
     processedAt: string;
     processingTime: number;
     confidence?: number;

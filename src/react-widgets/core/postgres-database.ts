@@ -896,6 +896,18 @@ export class PostgresDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_llm_models_provider ON llm_models(provider_id);
 
+      -- LLM 多端点 fallback 链（priority 升序即尝试顺序；active 失败后才按此链重试）
+      CREATE TABLE IF NOT EXISTS llm_fallback_chain (
+        priority INTEGER PRIMARY KEY,
+        provider_id INTEGER NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
+        model_id INTEGER NOT NULL REFERENCES llm_models(id) ON DELETE CASCADE,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(provider_id, model_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_llm_fallback_chain_priority ON llm_fallback_chain(priority);
+
       -- 内容素材库
       CREATE TABLE IF NOT EXISTS content_inventory (
         id SERIAL PRIMARY KEY,
@@ -1103,6 +1115,44 @@ export class PostgresDatabase {
         SELECT p.id, 'kimi-for-coding', 'Kimi For Coding', 128000, 8192
         FROM llm_providers p WHERE p.slug='kimi-for-coding'
         AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='kimi-for-coding')` },
+      // === v1.21.42: 多端点 fallback 链供端点（codebuddy/longcat/deepseek）===
+      // 命名以考古报告 §2.5 为准，禁止改动：hy3 / LongCat-2.0 / deepseek-v4-flash
+      { name: 'codebuddy provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+        SELECT 'codebuddy', 'CodeBuddy / Hunyuan (via copilot)', 'https://copilot.logic.heiyu.space/providers/codebuddy/v1', 'dummy', 'openai-completions'
+        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='codebuddy')` },
+      { name: 'longcat provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+        SELECT 'longcat', 'LongCat (via copilot longchat_official)', 'https://copilot.logic.heiyu.space/providers/longchat_official/v1', 'dummy', 'openai-completions'
+        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='longcat')` },
+      { name: 'deepseek provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
+        SELECT 'deepseek', 'DeepSeek (via copilot deepseek)', 'https://copilot.logic.heiyu.space/providers/deepseek/v1', 'dummy', 'openai-completions'
+        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='deepseek')` },
+      // hy3：腾讯混元，网关实测 200；context_window/max_tokens 给通用文本模型合理值。
+      { name: 'hy3 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+        SELECT p.id, 'hy3', 'Hunyuan hy3', 64000, 8192, false
+        FROM llm_providers p WHERE p.slug='codebuddy'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='hy3')` },
+      // LongCat-2.0：网关实测仅映射 2.0（LongCat/longcat 被拒）；reasoning 关（非推理模型）。
+      { name: 'LongCat-2.0 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+        SELECT p.id, 'LongCat-2.0', 'LongCat 2.0', 64000, 8192, false
+        FROM llm_providers p WHERE p.slug='longcat'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='LongCat-2.0')` },
+      // deepseek-v4-flash：与 siliconflow 命名空间版 deepseek-ai/DeepSeek-V4-Flash 不同；推理模型，reasoning 开。
+      { name: 'deepseek-v4-flash model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
+        SELECT p.id, 'deepseek-v4-flash', 'DeepSeek V4 Flash', 64000, 8192, true
+        FROM llm_providers p WHERE p.slug='deepseek'
+        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-v4-flash')` },
+      // fallback 链 seed：priority 1 → longcat/LongCat-2.0，priority 2 → deepseek/deepseek-v4-flash
+      // 注意：链仅含「备跳」，不含 active；active 由 llm_active_setting 管理，这里绝不触碰后者。
+      { name: 'fallback chain p1 longcat', sql: `INSERT INTO llm_fallback_chain (priority, provider_id, model_id)
+        SELECT 1, p.id, m.id
+        FROM llm_providers p JOIN llm_models m ON m.provider_id=p.id
+        WHERE p.slug='longcat' AND m.model_id='LongCat-2.0'
+        AND NOT EXISTS (SELECT 1 FROM llm_fallback_chain WHERE priority=1)` },
+      { name: 'fallback chain p2 deepseek', sql: `INSERT INTO llm_fallback_chain (priority, provider_id, model_id)
+        SELECT 2, p.id, m.id
+        FROM llm_providers p JOIN llm_models m ON m.provider_id=p.id
+        WHERE p.slug='deepseek' AND m.model_id='deepseek-v4-flash'
+        AND NOT EXISTS (SELECT 1 FROM llm_fallback_chain WHERE priority=2)` },
       { name: 'active setting', sql: `INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
         SELECT 1,
           (SELECT id FROM llm_providers WHERE slug='siliconflow'),

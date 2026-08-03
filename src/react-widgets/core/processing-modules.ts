@@ -5,7 +5,7 @@
 import fs from 'fs';
 import { Pool } from 'pg';
 import { LLMCallCache } from './llm-call-cache.js';
-import { getFallbackLLMConfig, getActiveLLMConfig } from './llm-config.js';
+import { getFallbackLLMConfig, getActiveLLMConfig, getLLMConfigCandidates, runWithLLMFallbackChain } from './llm-config.js';
 import { getPostgresDatabase } from './postgres-database.js';
 import { 
   ProcessingModule, 
@@ -281,33 +281,27 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
     const startTime = Date.now();
     console.log(`🤖 基础LLM处理: ${rawData.title}`);
     
-    // 动态读取最新 LLM 配置
-    let activeApiKey = this.apiKey;
-    let activeBaseURL = this.baseURL;
-    let activeModel = this.model;
+    // 多端点 fallback 链：active 优先，失败后按 llm_fallback_chain 顺序重试同一条新闻。
+    const candidates = await getLLMConfigCandidates(getPostgresDatabase());
+
+    let out: { optimizedTitle: string; processedContent: string; model: string };
+    let usedProvider = 'unknown';
+    let usedModel = 'unknown';
     try {
-      const cfg = await getActiveLLMConfig(getPostgresDatabase());
-      activeApiKey = cfg.apiKey;
-      activeBaseURL = cfg.baseUrl;
-      activeModel = cfg.model;
-    } catch (e) {
-      // 使用构造时的 fallback
-    }
-    
-    try {
-      const { OpenAI } = await import('openai');
-      const client = new OpenAI({
-        apiKey: activeApiKey,
-        baseURL: activeBaseURL
-      });
-      
-      const maxTitleLength = params.maxTitleLength || 20;
-      const maxContentLength = params.maxContentLength || 150;
-      const temperature = params.temperature || 0.3;
-      
-      // 优化标题
-      const titlePrompt = `请将以下新闻标题优化为简洁明了的版本，严格控制在${maxTitleLength}个字符以内：
-      
+      const r = await runWithLLMFallbackChain(candidates, async (cfg) => {
+        const { OpenAI } = await import('openai');
+        const client = new OpenAI({
+          apiKey: cfg.apiKey,
+          baseURL: cfg.baseUrl
+        });
+        
+        const maxTitleLength = params.maxTitleLength || 20;
+        const maxContentLength = params.maxContentLength || 150;
+        const temperature = params.temperature || 0.3;
+        
+        // 优化标题
+        const titlePrompt = `请将以下新闻标题优化为简洁明了的版本，严格控制在${maxTitleLength}个字符以内：
+        
 原标题: ${rawData.title}
 
 要求:
@@ -318,27 +312,27 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 
 优化标题:`;
 
-      let optimizedTitle: string;
-      const titleCacheKey = { prompt: titlePrompt, model: activeModel, temperature };
-      const titleCached = this.llmCache ? await this.llmCache.get(titleCacheKey) : null;
-      if (titleCached) {
-        console.log(`💾 标题缓存命中: "${rawData.title}"`);
-        optimizedTitle = titleCached.response;
-      } else {
-        const titleResponse = await client.chat.completions.create({
-          model: activeModel,
-          messages: [{ role: 'user', content: titlePrompt }],
-          temperature,
-          max_tokens: 100
-        });
-        optimizedTitle = titleResponse.choices[0]?.message?.content?.trim() || rawData.title;
-        if (this.llmCache) {
-          await this.llmCache.set(titleCacheKey, optimizedTitle);
+        let optimizedTitle: string;
+        const titleCacheKey = { prompt: titlePrompt, model: cfg.model, temperature };
+        const titleCached = this.llmCache ? await this.llmCache.get(titleCacheKey) : null;
+        if (titleCached) {
+          console.log(`💾 标题缓存命中: "${rawData.title}"`);
+          optimizedTitle = titleCached.response;
+        } else {
+          const titleResponse = await client.chat.completions.create({
+            model: cfg.model,
+            messages: [{ role: 'user', content: titlePrompt }],
+            temperature,
+            max_tokens: 100
+          });
+          optimizedTitle = titleResponse.choices[0]?.message?.content?.trim() || rawData.title;
+          if (this.llmCache) {
+            await this.llmCache.set(titleCacheKey, optimizedTitle);
+          }
         }
-      }
-      
-      // 优化内容摘要
-      const contentPrompt = `请将以下新闻内容提炼为精炼摘要，严格控制在${maxContentLength}个字符以内：
+        
+        // 优化内容摘要
+        const contentPrompt = `请将以下新闻内容提炼为精炼摘要，严格控制在${maxContentLength}个字符以内：
 
 原内容: ${rawData.content}
 
@@ -350,50 +344,57 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 
 摘要:`;
 
-      let processedContent: string;
-      const contentCacheKey = { prompt: contentPrompt, model: activeModel, temperature };
-      const contentCached = this.llmCache ? await this.llmCache.get(contentCacheKey) : null;
-      if (contentCached) {
-        console.log(`💾 摘要缓存命中: "${rawData.title}"`);
-        processedContent = contentCached.response;
-      } else {
-        const contentResponse = await client.chat.completions.create({
-          model: activeModel,
-          messages: [{ role: 'user', content: contentPrompt }],
-          temperature,
-          max_tokens: 300
-        });
-        processedContent = contentResponse.choices[0]?.message?.content?.trim() || rawData.content;
-        if (this.llmCache) {
-          await this.llmCache.set(contentCacheKey, processedContent);
+        let processedContent: string;
+        const contentCacheKey = { prompt: contentPrompt, model: cfg.model, temperature };
+        const contentCached = this.llmCache ? await this.llmCache.get(contentCacheKey) : null;
+        if (contentCached) {
+          console.log(`💾 摘要缓存命中: "${rawData.title}"`);
+          processedContent = contentCached.response;
+        } else {
+          const contentResponse = await client.chat.completions.create({
+            model: cfg.model,
+            messages: [{ role: 'user', content: contentPrompt }],
+            temperature,
+            max_tokens: 300
+          });
+          processedContent = contentResponse.choices[0]?.message?.content?.trim() || rawData.content;
+          if (this.llmCache) {
+            await this.llmCache.set(contentCacheKey, processedContent);
+          }
         }
-      }
-      const processingTime = Date.now() - startTime;
-      
-      console.log(`✅ 基础LLM处理完成: "${optimizedTitle}" (耗时${processingTime}ms)`);
-      
-      return {
-        id: rawData.id,
-        originalTitle: rawData.title,
-        optimizedTitle,
-        originalContent: rawData.content,
-        processedContent,
-        summary: processedContent,
-        qualityScore: 0.85, // 基础处理质量分数
-        processingMetadata: {
-          processor: this.name,
-          model: activeModel,
-          processedAt: new Date().toISOString(),
-          processingTime,
-          confidence: 0.85
-        },
-        rawData
-      };
-      
+        return { optimizedTitle, processedContent, model: cfg.model };
+      });
+      out = r.result;
+      usedProvider = r.used.providerSlug;
+      usedModel = r.used.model;
     } catch (error) {
       console.error('基础LLM处理失败:', error);
       throw new Error(`基础LLM处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
+
+    const processingTime = Date.now() - startTime;
+    
+    console.log(`✅ 基础LLM处理完成: "${out.optimizedTitle}" (耗时${processingTime}ms)`);
+    
+    return {
+      id: rawData.id,
+      originalTitle: rawData.title,
+      optimizedTitle: out.optimizedTitle,
+      originalContent: rawData.content,
+      processedContent: out.processedContent,
+      summary: out.processedContent,
+      qualityScore: 0.85, // 基础处理质量分数
+      processingMetadata: {
+        processor: this.name,
+        model: out.model,
+        llm_provider: usedProvider,
+        llm_model: usedModel,
+        processedAt: new Date().toISOString(),
+        processingTime,
+        confidence: 0.85
+      },
+      rawData
+    };
   }
 
   async getHealthStatus(): Promise<ProcessingHealthStatus> {
@@ -507,14 +508,15 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
     this.pool = pool;
   }
   
-  private async initializeProcessor() {
-    if (this.processorInstance) {
+  private async initializeProcessor(configOverride?: { apiKey: string; baseURL: string; model: string }) {
+    const eff = configOverride ?? this.config;
+    if (this.processorInstance && !configOverride) {
       return this.processorInstance;
     }
     
     // 详细配置检查
     console.log('🔍 AX处理器配置检查...');
-    const configReport = this.validateConfiguration();
+    const configReport = this.validateConfigurationWith(eff);
     if (!configReport.isValid) {
       const errorMsg = `AX处理器配置错误: ${configReport.errors.join(', ')}`;
       console.error(`❌ ${errorMsg}`);
@@ -527,16 +529,16 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       console.log('📦 检查AX处理器依赖...');
       const { AxOptimizedNewsProcessorSimplified } = await import('../services/ax-optimized-news-processor-simplified.js');
       
-      this.processorInstance = new AxOptimizedNewsProcessorSimplified({
-        apiKey: this.config.apiKey,
-        baseURL: this.config.baseURL,
-        model: this.config.model,
+      const proc = new AxOptimizedNewsProcessorSimplified({
+        apiKey: eff.apiKey,
+        baseURL: eff.baseURL,
+        model: eff.model,
         pool: this.pool
       });
       
       // 尝试加载预训练模型
       console.log('📚 尝试加载AX预训练模型...');
-      const loadSuccess = await this.processorInstance.loadOptimizationArtifacts('ax-framework/models/production/latest.json');
+      const loadSuccess = await proc.loadOptimizationArtifacts('ax-framework/models/production/latest.json');
 
       if (!loadSuccess) {
         console.log('⚡ 预训练模型未找到，使用基础数据进行快速训练...');
@@ -552,7 +554,7 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
           const sampleData = trainingData.slice(0, 3);
           console.log(`📊 使用 ${sampleData.length} 条样本数据进行快速训练...`);
 
-          await this.processorInstance.quickTrain(sampleData);
+          await proc.quickTrain(sampleData);
           console.log('✅ 快速训练完成');
         } catch (trainingError) {
           throw new Error(`快速训练失败: ${trainingError instanceof Error ? trainingError.message : '训练数据加载错误'}`);
@@ -560,11 +562,13 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       } else {
         console.log('✅ 预训练模型加载成功');
 
-        // 启动热重载监控
-        await this.startHotReload();
+        // 启动热重载监控（仅 active 实例）
+        if (!configOverride) await this.startHotReload();
       }
 
-      return this.processorInstance;
+      // 仅 active 路径缓存单例，fallback 每跳重建不缓存（避免串配置）
+      if (!configOverride) this.processorInstance = proc;
+      return proc;
       
     } catch (error) {
       console.error('❌ AX处理器初始化失败:', error);
@@ -587,25 +591,28 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
   }
   
   private validateConfiguration(): { isValid: boolean; errors: string[] } {
+    return this.validateConfigurationWith(this.config);
+  }
+  
+  private validateConfigurationWith(eff: { apiKey: string; baseURL: string; model: string }): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
     
     // API密钥检查：只拒绝未配置/默认占位符；不再用长度判断真伪
-    // （某些代理端点透传 dummy key，长度可以 < 10）
-    if (!this.config.apiKey) {
+    if (!eff.apiKey) {
       errors.push('LLM_API_KEY 未配置');
-    } else if (this.config.apiKey === 'your_api_key_here') {
+    } else if (eff.apiKey === 'your_api_key_here') {
       errors.push('LLM_API_KEY 仍为占位符，请设置真实API密钥');
     }
     
     // 端点URL检查
-    if (!this.config.baseURL) {
+    if (!eff.baseURL) {
       errors.push('LLM_BASE_URL 未配置');
-    } else if (!this.config.baseURL.startsWith('http')) {
+    } else if (!eff.baseURL.startsWith('http')) {
       errors.push('LLM_BASE_URL 格式不正确 (必须以http开头)');
     }
     
     // 模型配置检查
-    if (!this.config.model) {
+    if (!eff.model) {
       errors.push('LLM_MODEL 未配置');
     }
     
@@ -630,40 +637,53 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       // use fallback
     }
     
+    // 多端点 fallback 链：active 优先，失败后按 llm_fallback_chain 顺序重试同一条新闻。
+    const candidates = await getLLMConfigCandidates(getPostgresDatabase());
+    const originalContent2 = `标题: ${rawData.title}\n内容: ${rawData.content}`;
+
+    let result: any;
+    let usedProvider = 'unknown';
+    let usedModel = 'unknown';
     try {
-      const processor = await this.initializeProcessor();
-      
-      // 准备输入内容
-      const originalContent = `标题: ${rawData.title}\\n内容: ${rawData.content}`;
-      
-      // 使用AX优化处理器
-      const result = await processor.processNewsWithOptimizedProgram(originalContent);
-      const processingTime = Date.now() - startTime;
-      
-      console.log(`✅ AX优化处理完成: "${result.title}" (耗时${processingTime}ms)`);
-      
-      return {
-        id: rawData.id,
-        originalTitle: rawData.title,
-        optimizedTitle: result.title,
-        originalContent: rawData.content,
-        processedContent: result.body,
-        summary: result.body,
-        qualityScore: 0.95, // AX优化的高质量分数
-        processingMetadata: {
-          processor: this.name,
-          model: this.config.model,
-          processedAt: new Date().toISOString(),
-          processingTime,
-          confidence: 0.95
-        },
-        rawData
-      };
-      
+      const r = await runWithLLMFallbackChain(candidates, async (cfg) => {
+        const processor = await this.initializeProcessor({
+          apiKey: cfg.apiKey,
+          baseURL: cfg.baseUrl,
+          model: cfg.model,
+        });
+        return await processor.processNewsWithOptimizedProgram(originalContent2);
+      });
+      result = r.result;
+      usedProvider = r.used.providerSlug;
+      usedModel = r.used.model;
     } catch (error) {
       console.error('AX优化处理失败:', error);
       throw new Error(`AX优化处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
+
+    const processingTime = Date.now() - startTime;
+    
+    console.log(`✅ AX优化处理完成: "${result.title}" (耗时${processingTime}ms)`);
+    
+    return {
+      id: rawData.id,
+      originalTitle: rawData.title,
+      optimizedTitle: result.title,
+      originalContent: rawData.content,
+      processedContent: result.body,
+      summary: result.body,
+      qualityScore: 0.95, // AX优化的高质量分数
+      processingMetadata: {
+        processor: this.name,
+        model: usedModel,
+        llm_provider: usedProvider,
+        llm_model: usedModel,
+        processedAt: new Date().toISOString(),
+        processingTime,
+        confidence: 0.95
+      },
+      rawData
+    };
   }
 
   async getHealthStatus(): Promise<ProcessingHealthStatus> {
