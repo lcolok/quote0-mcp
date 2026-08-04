@@ -506,4 +506,107 @@ describe('Phase 1 · device_deliveries 集成测试（真实 PostgreSQL）', () 
       await cleanup();
     }
   });
+
+  // ─── 显示类投递合并（supersede）───
+
+  maybe('⑧a display 设备新投递作废旧 pending：同设备 queued/retry_wait → superseded', async () => {
+    await cleanup();
+    // 模拟离线积压：同一设备 3 条旧 pending
+    const old1 = await insertDelivery({ device_id: 'pgtest-eink-1', content_id: 900801, payload_version: 1 });
+    const old2 = await insertDelivery({ device_id: 'pgtest-eink-1', content_id: 900802, payload_version: 1 });
+    const old3 = await insertDelivery({
+      device_id: 'pgtest-eink-1', content_id: 900803, payload_version: 1,
+      state: 'retry_wait', next_attempt_at: new Date(Date.now() + 60000).toISOString(),
+    });
+    // 新投递
+    const newDel = await insertDelivery({ device_id: 'pgtest-eink-1', content_id: 900804, payload_version: 1 });
+
+    // 执行 supersede（与 delivery-enqueue.ts 中 supersedeOldDeliveries 同逻辑）
+    const r = await pool!.query(
+      `UPDATE device_deliveries
+          SET state = 'superseded',
+              finished_at = now(),
+              updated_at = now(),
+              last_error_code = 'superseded',
+              last_error = '被更新的投递取代'
+        WHERE device_id = $1
+          AND state IN ('queued', 'retry_wait')
+          AND lease_owner IS NULL
+          AND id != (SELECT COALESCE(MAX(id), 0) FROM device_deliveries WHERE device_id = $1)`,
+      ['pgtest-eink-1'],
+    );
+    expect(r.rowCount).toBe(3); // 旧 3 条被作废
+
+    // 验证：旧 3 条 state=superseded，新 1 条 state=queued
+    const after = await pool!.query(
+      `SELECT id, state FROM device_deliveries WHERE device_id='pgtest-eink-1' ORDER BY id`,
+    );
+    const states = after.rows.map((r2: any) => ({ id: String(r2.id), state: r2.state }));
+    expect(states).toEqual([
+      { id: String(old1.id), state: 'superseded' },
+      { id: String(old2.id), state: 'superseded' },
+      { id: String(old3.id), state: 'superseded' },
+      { id: String(newDel.id), state: 'queued' },
+    ]);
+
+    // superseded 不被认领
+    const c1 = await pool!.connect();
+    try {
+      const claimed = await claimWith(c1, 'workerA', 10);
+      await c1.query('COMMIT');
+      // 只有 newDel（queued）被认领，superseded 的 3 条不会出现
+      expect(claimed).toHaveLength(1);
+      expect(String(claimed[0].id)).toBe(String(newDel.id));
+    } finally {
+      await c1.query('ROLLBACK').catch(() => {});
+      c1.release();
+      await cleanup();
+    }
+  });
+
+  maybe('⑧b 在途 delivery（leased）不被作废', async () => {
+    await cleanup();
+    // 旧 pending + 一条在途（已 leased）
+    const oldPending = await insertDelivery({ device_id: 'pgtest-eink-1', content_id: 900901, payload_version: 1 });
+    const inFlight = await insertDelivery({ device_id: 'pgtest-eink-1', content_id: 900902, payload_version: 1 });
+    await pool!.query(
+      `UPDATE device_deliveries SET state='leased', lease_owner='workerA',
+              lease_expires_at = now() + interval '2 minutes' WHERE id=$1`,
+      [inFlight.id],
+    );
+    // 新投递
+    const newDel = await insertDelivery({ device_id: 'pgtest-eink-1', content_id: 900903, payload_version: 1 });
+
+    // supersede：在途不被碰
+    const r = await pool!.query(
+      `UPDATE device_deliveries
+          SET state = 'superseded', finished_at = now(), updated_at = now(),
+              last_error_code = 'superseded', last_error = '被更新的投递取代'
+        WHERE device_id = $1
+          AND state IN ('queued', 'retry_wait')
+          AND lease_owner IS NULL
+          AND id != (SELECT COALESCE(MAX(id), 0) FROM device_deliveries WHERE device_id = $1)`,
+      ['pgtest-eink-1'],
+    );
+    expect(r.rowCount).toBe(1); // 只作废了 oldPending
+
+    const after = await pool!.query(
+      `SELECT id, state, lease_owner FROM device_deliveries WHERE device_id='pgtest-eink-1' ORDER BY id`,
+    );
+    expect(after.rows.map((r2: any) => ({ id: String(r2.id), state: r2.state }))).toEqual([
+      { id: String(oldPending.id), state: 'superseded' },
+      { id: String(inFlight.id), state: 'leased' },
+      { id: String(newDel.id), state: 'queued' },
+    ]);
+
+    await cleanup();
+  });
+
+  maybe('⑧c isDisplayDeviceKind: eink-local/eink-cloud 是 display，thermal-printer 不是', async () => {
+    const { isDisplayDeviceKind } = await import('./delivery-enqueue.js');
+    expect(isDisplayDeviceKind('eink-local')).toBe(true);
+    expect(isDisplayDeviceKind('eink-cloud')).toBe(true);
+    expect(isDisplayDeviceKind('thermal-printer')).toBe(false);
+  });
+
 });

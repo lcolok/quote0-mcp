@@ -9,7 +9,7 @@
 import type { PushErrorCode } from './push-results.js';
 
 /** delivery 生命周期。queued/leased/retry_wait 是在途，succeeded/dead/cancelled 是终态。 */
-export type DeliveryState = 'queued' | 'leased' | 'retry_wait' | 'succeeded' | 'dead' | 'cancelled';
+export type DeliveryState = 'queued' | 'leased' | 'retry_wait' | 'succeeded' | 'dead' | 'cancelled' | 'superseded';
 
 /** 设备健康观察值（device_runtime_state.health）。 */
 export type DeviceHealth = 'unknown' | 'healthy' | 'degraded' | 'offline' | 'misconfigured';

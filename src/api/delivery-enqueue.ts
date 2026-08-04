@@ -8,6 +8,11 @@
  *  ② payload_version = replay_count + 1
  *     → 复播是「新的一轮」，拿到新的 payload_version，因此会生成新的 delivery，
  *       而不是被①误判成重复。
+ *
+ * 显示类设备（display）投递合并：登记新 delivery 时作废同设备旧的 pending 投递。
+ * 这样断线数小时后重连的设备不会逐条排空历史积压（曾在 eink-2 上产生 259 条、
+ * 连续闪屏 ~1h 的事故），只收到最新一帧。
+ * 打印类设备（print）保持逐条投递——每条都必须送达。
  */
 
 import { getEinkDevices } from './eink-converter.js';
@@ -41,6 +46,44 @@ export function renderTargetIdForDevice(device: { width: number; height: number 
   return `eink-${device.width}x${device.height}`;
 }
 
+/**
+ * 显示类设备判定：kind 映射。
+ * eink-local / eink-cloud → display, thermal-printer → print。
+ * 选用 kind 而非 capabilities 的原因：getEnabledPushDevices 返回的字段不含 capabilities，
+ * 增加查询会增加复杂度，而 kind 已能准确区分设备类型。
+ */
+export function isDisplayDeviceKind(kind: string): boolean {
+  return kind === 'eink-local' || kind === 'eink-cloud';
+}
+
+/**
+ * 作废同设备旧的 pending delivery（显示类投递合并）。
+ * 只碰 state IN ('queued','retry_wait') AND lease_owner IS NULL 的条目：
+ *  - 在途（已认领、持有租约）不动——worker 正在处理
+ *  - 已终态（succeeded/dead/superseded）不动
+ *  - 保留最新一条（id 最大），不作废自己刚插的行
+ */
+async function supersedeOldDeliveries(deviceId: string): Promise<number> {
+  const db = getPostgresDatabase();
+  const r = await db.getPool().query(
+    `UPDATE device_deliveries
+        SET state = 'superseded',
+            finished_at = now(),
+            updated_at = now(),
+            last_error_code = 'superseded',
+            last_error = '被更新的投递取代'
+      WHERE device_id = $1
+        AND state IN ('queued', 'retry_wait')
+        AND lease_owner IS NULL
+        AND id != (
+          SELECT COALESCE(MAX(id), 0) FROM device_deliveries
+           WHERE device_id = $1
+        )`,
+    [deviceId],
+  );
+  return r.rowCount ?? 0;
+}
+
 export async function enqueueDeliveriesForContent(
   input: EnqueueDeliveriesInput,
 ): Promise<EnqueueDeliveriesResult> {
@@ -55,6 +98,8 @@ export async function enqueueDeliveriesForContent(
 
   const db = getPostgresDatabase();
   let created = 0;
+  /** 本批实际新增 delivery 的设备（ON CONFLICT 命中的不算）。 */
+  const supersededDevices = new Set<string>();
   for (const device of devices) {
     const r = await db.getPool().query(
       `INSERT INTO device_deliveries (content_id, device_id, render_target, payload_version)
@@ -63,7 +108,22 @@ export async function enqueueDeliveriesForContent(
        RETURNING id`,
       [input.contentId, device.id, renderTargetIdForDevice(device), payloadVersion],
     );
-    if (r.rows.length > 0) created += 1;
+    if (r.rows.length > 0) {
+      created += 1;
+      supersededDevices.add(device.id);
+    }
+  }
+
+  // 显示类设备投递合并：新 delivery 落库后作废旧 pending
+  let superseded = 0;
+  for (const deviceId of supersededDevices) {
+    superseded += await supersedeOldDeliveries(deviceId);
+  }
+  if (superseded > 0) {
+    console.log(
+      `🧹 投递合并: ${superseded} 条旧 pending 被作废，` +
+      `设备=[${[...supersededDevices].join(', ')}]`
+    );
   }
 
   return {
