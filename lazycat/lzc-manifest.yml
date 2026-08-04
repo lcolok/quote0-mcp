@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.45
+version: 1.21.47
 
 # 应用名称
 name: Quote0 新闻服务
@@ -38,6 +38,10 @@ application:
   public_path:
     - /api/component-labels
     - /api/component-label-batches
+    # 2026-08-05：拉模式墨水屏板端（ESP32-S3 deep sleep 醒-拉-刷-睡）经域名直拉帧。
+    # 端点自身有 push_devices token 的 Bearer 鉴权（无 token 401），非裸奔；
+    # 只放行此单一路径，禁止扩大到 /api 全放开。
+    - /api/eink/frame
 
   # 多入口配置
   entries:
