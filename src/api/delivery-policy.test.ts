@@ -66,9 +66,10 @@ describe('jitter ±20%', () => {
 });
 
 describe('永久性失败判定', () => {
-  it('http_4xx / spec_mismatch 是永久错；其余可重试', () => {
+  it('http_4xx / spec_mismatch 是永久错；busy / 其余可重试', () => {
     expect(isPermanentFailure('http_4xx')).toBe(true);
     expect(isPermanentFailure('spec_mismatch')).toBe(true);
+    expect(isPermanentFailure('busy')).toBe(false);
     expect(isPermanentFailure('timeout')).toBe(false);
     expect(isPermanentFailure('connection')).toBe(false);
     expect(isPermanentFailure('http_5xx')).toBe(false);
@@ -83,6 +84,8 @@ describe('永久性失败判定', () => {
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 500: internal error')))).toBe(false);
     expect(isPermanentFailure(classifyPushError(new Error('The operation timed out.')))).toBe(false);
     expect(isPermanentFailure(classifyPushError(new Error('fetch failed ECONNREFUSED')))).toBe(false);
+    // 409 → busy 不是永久错
+    expect(isPermanentFailure(classifyPushError(new Error('HTTP 409: {"error":"busy, refreshing"}')))).toBe(false);
   });
 });
 
@@ -150,6 +153,49 @@ describe('decideFailure — 错误分类 → 状态转移映射', () => {
     expect([1, 2].map(health)).toEqual(['unknown', 'unknown']);
     expect([3, 4].map(health)).toEqual(['degraded', 'degraded']);
     expect([5, 6, 20].map(health)).toEqual(['offline', 'offline', 'offline']);
+  });
+
+  // ---------- 409 busy ----------
+
+  it('busy 不是永久错→retry_wait，首退避 ≥30s', () => {
+    const d = decideFailure({ errorCode: 'busy', attempts: 1, maxAttempts: 5, consecutiveFailures: 1 }, () => 0.5);
+    expect(d.nextState).toBe('retry_wait');
+    expect(d.reason).toBe('retry');
+    // jitter=0.5 → 基准；标准退避第一档 15s，busy 兜底 ≥30s
+    expect(d.retryDelayMs).toBe(30_000);
+  });
+
+  it('busy 退避随 attempts 走标准档位（≥30s 仅兜底首档）', () => {
+    const delays = [1, 2, 3].map(
+      (attempts) => decideFailure({ errorCode: 'busy', attempts, maxAttempts: 99, consecutiveFailures: 1 }, () => 0.5).retryDelayMs
+    );
+    // attempts=1: max(15k, 30k)=30k; attempts=2: max(60k, 30k)=60k; attempts=3: max(300k, 30k)=300k
+    expect(delays).toEqual([30_000, 60_000, 300_000]);
+  });
+
+  it('busy 从不进 misconfigured；health 最多 degraded', () => {
+    // 即使连续失败很多，busy 也绝不判 misconfigured
+    const health = (n: number) =>
+      decideFailure({ errorCode: 'busy', attempts: 1, maxAttempts: 9, consecutiveFailures: n }).health;
+    expect([1, 2].map(health)).toEqual(['unknown', 'unknown']);
+    expect([3, 4].map(health)).toEqual(['degraded', 'degraded']);
+    expect([5, 6, 20].map(health)).toEqual(['degraded', 'degraded', 'degraded']);
+  });
+
+  it('busy 不打开熔断（即使连续失败 ≥3）', () => {
+    for (const n of [3, 4, 10]) {
+      const d = decideFailure({ errorCode: 'busy', attempts: 1, maxAttempts: 5, consecutiveFailures: n });
+      expect(d.circuitOpenMs).toBeNull();
+    }
+  });
+
+  it('busy + 耗尽 → dead + degraded（非 offline）', () => {
+    const d = decideFailure({ errorCode: 'busy', attempts: 5, maxAttempts: 5, consecutiveFailures: 5 });
+    expect(d.nextState).toBe('dead');
+    expect(d.retryDelayMs).toBeNull();
+    expect(d.health).toBe('degraded');
+    expect(d.circuitOpenMs).toBeNull();
+    expect(d.reason).toBe('exhausted');
   });
 });
 

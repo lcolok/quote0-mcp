@@ -113,32 +113,45 @@ export function decideFailure(
     };
   }
 
+  // 409 busy：设备活着只是正在刷新，不熔断、不判 offline（最多 degraded）。
+  // 退避首档 ≥30s（覆盖 ~20s 全刷周期 + 余量），后续按标准档位。
+  const isBusy = input.errorCode === 'busy';
+
   const exhausted = input.attempts >= input.maxAttempts;
   const health: DeviceHealth = exhausted
-    ? 'offline'
+    ? (isBusy ? 'degraded' : 'offline')
     : input.consecutiveFailures >= OFFLINE_FAILURE_THRESHOLD
-      ? 'offline'
+      ? (isBusy ? 'degraded' : 'offline')
       : input.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD
         ? 'degraded'
         : 'unknown';
 
-  const circuitOpenMs = input.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD
-    ? CIRCUIT_OPEN_MS
-    : null;
+  // busy 不计入熔断开闸（板子只是忙，开熔断反而拖慢排空）
+  const circuitOpenMs = isBusy
+    ? null
+    : input.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD
+      ? CIRCUIT_OPEN_MS
+      : null;
 
   if (exhausted) {
     return {
       nextState: 'dead',
       retryDelayMs: null,
-      health: 'offline',
+      health,
       circuitOpenMs,
       reason: 'exhausted',
     };
   }
 
+  let retryDelayMs = backoffWithJitterMs(input.attempts, random);
+  // busy 首个重试间隔 ≥30s（覆盖 ~20s 刷新周期 + 余量），后续按标准档位自然增长
+  if (isBusy) {
+    retryDelayMs = Math.max(retryDelayMs, 30_000);
+  }
+
   return {
     nextState: 'retry_wait',
-    retryDelayMs: backoffWithJitterMs(input.attempts, random),
+    retryDelayMs,
     health,
     circuitOpenMs,
     reason: 'retry',

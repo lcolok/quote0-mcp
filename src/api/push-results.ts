@@ -14,6 +14,7 @@ export type PushErrorCode =
   | 'connection'
   | 'http_4xx'
   | 'http_5xx'
+  | 'busy'
   | 'spec_mismatch'
   | 'unknown';
 
@@ -61,6 +62,7 @@ export function classifyPushError(error: unknown): PushErrorCode {
   const httpMatch = message.match(/(?:HTTP|status)\s*(\d{3})/i);
   if (httpMatch) {
     const code = Number(httpMatch[1]);
+    if (code === 409) return 'busy';
     if (code >= 500) return 'http_5xx';
     if (code >= 400) return 'http_4xx';
   }

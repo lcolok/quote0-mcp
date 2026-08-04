@@ -27,11 +27,16 @@ describe('classifyPushError', () => {
     expect(classifyPushError(new Error('getaddrinfo ENOTFOUND eink.local'))).toBe('connection');
   });
 
-  it('识别 HTTP 4xx / 5xx', () => {
+  it('识别 HTTP 4xx / 5xx / 409 busy', () => {
     expect(classifyPushError(new Error('HTTP 404: not found'))).toBe('http_4xx');
     expect(classifyPushError(new Error('HTTP 401: unauthorized'))).toBe('http_4xx');
     expect(classifyPushError(new Error('HTTP 500: internal'))).toBe('http_5xx');
     expect(classifyPushError(new Error('status HTTP 503'))).toBe('http_5xx');
+  });
+
+  it('识别 409 busy（设备正在刷新，暂时性）', () => {
+    expect(classifyPushError(new Error('HTTP 409: {"error":"busy, refreshing"}'))).toBe('busy');
+    expect(classifyPushError(new Error('status 409 conflict'))).toBe('busy');
   });
 
   it('识别规格不匹配', () => {
