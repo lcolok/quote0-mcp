@@ -15,8 +15,13 @@
  * 打印类设备（print）保持逐条投递——每条都必须送达。
  */
 
-import { getEinkDevices } from './eink-converter.js';
+import { getEinkDevices, pngTo1BitBitmap, type EinkDevice } from './eink-converter.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
+import { upsertDeviceFrame } from './device-frame-cache.js';
+import { loadContent, buildRenderableFromInventory } from './device-delivery-worker.js';
+import { createEinkTarget } from '../react-widgets/core/render-targets.js';
+import { renderSingleEinkTarget } from './target-aware-eink.js';
+import { readFile } from 'node:fs/promises';
 
 export interface EnqueueDeliveriesInput {
   contentId: number;
@@ -124,6 +129,49 @@ export async function enqueueDeliveriesForContent(
       `🧹 投递合并: ${superseded} 条旧 pending 被作废，` +
       `设备=[${[...supersededDevices].join(', ')}]`
     );
+  }
+
+  // ── 拉模式 Phase A：登记投递时即写帧缓存（保证板子失联期间帧也在更新）──
+  // 按设备 unique target 分组，每组渲染一次，再为组内每台设备 convert + upsert。
+  try {
+    const content = await loadContent(input.contentId);
+    const targetGroups = new Map<string, EinkDevice[]>();
+    for (const device of devices) {
+      const key = `${device.width}x${device.height}`;
+      const group = targetGroups.get(key);
+      if (group) {
+        group.push(device);
+      } else {
+        targetGroups.set(key, [device]);
+      }
+    }
+    for (const [, group] of targetGroups) {
+      const refDevice = group[0];
+      const target = createEinkTarget(refDevice.width, refDevice.height);
+      try {
+        const rendered = await renderSingleEinkTarget(content, target);
+        if (!rendered.localImagePath) continue;
+        const pngBuffer = await readFile(rendered.localImagePath);
+        for (const device of group) {
+          try {
+            const bitmap = await pngTo1BitBitmap(pngBuffer, device.width, device.height);
+            await upsertDeviceFrame({
+              deviceId: device.id,
+              bitmap,
+              width: device.width,
+              height: device.height,
+            });
+          } catch (e) {
+            console.warn(`⚠️ 设备 ${device.id} enqueue 帧写入失败: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`⚠️ target ${target.id} enqueue 渲染失败，跳过帧写入: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  } catch (e) {
+    // enqueue 帧写入失败不阻断投递登记
+    console.warn(`⚠️ enqueue 帧写入失败（投递已登记）: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   return {

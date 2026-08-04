@@ -32,6 +32,7 @@ import { thermalLabelRenderer } from '../react-widgets/core/thermal-label-render
 import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
 import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
+import { getDeviceFrame } from './device-frame-cache.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -1867,6 +1868,81 @@ app.get('/api/devices/runtime', async (c) => {
       error: error instanceof Error ? error.message : '获取设备运行时状态失败'
     }, 500);
   }
+});
+
+// ============================================================
+// GET /api/eink/frame — 拉模式帧缓存端点（Phase A，双栈并存）
+// 设备主动轮询拉取最新帧 bitmap，与现有推送路径并存。
+// ============================================================
+app.get('/api/eink/frame', async (c) => {
+  const deviceId = c.req.query('device_id');
+  if (!deviceId) {
+    return c.json({ success: false, error: 'device_id 必填' }, 400);
+  }
+
+  // 鉴权：token 可从 query 或 Authorization header 传入（对齐现有 push 机制）
+  const db = getPostgresDatabase();
+  let row: any;
+  try {
+    row = await db.getPushDeviceById(deviceId);
+  } catch {
+    return c.json({ success: false, error: '查询设备失败' }, 500);
+  }
+  if (!row) {
+    return c.body(null, 404);
+  }
+  // 仅 display 类设备（eink-local / eink-cloud）
+  if (row.kind !== 'eink-local' && row.kind !== 'eink-cloud') {
+    return c.body(null, 404);
+  }
+
+  // token 验：query token 优先 → Authorization Bearer → 无 token 时设备也未设 token 则放行
+  const authHeader = c.req.header('Authorization');
+  let presentedToken = c.req.query('token') || '';
+  if (!presentedToken && authHeader?.startsWith('Bearer ')) {
+    presentedToken = authHeader.slice(7);
+  }
+  const deviceToken = row.token || '';
+  if (deviceToken && presentedToken !== deviceToken) {
+    return c.json({ success: false, error: 'Unauthorized' }, 401);
+  }
+
+  // 遥测头（可选，记录日志）
+  const telemetry = {
+    frameId: c.req.header('X-Frame-Id') || undefined,
+    firmware: c.req.header('X-Firmware') || undefined,
+    freeHeap: c.req.header('X-Free-Heap') || undefined,
+    uptime: c.req.header('X-Uptime') || undefined,
+    rssi: c.req.header('X-RSSI') || undefined,
+    wdReboots: c.req.header('X-Wd-Reboots') || undefined,
+  };
+  if (Object.values(telemetry).some(v => v !== undefined)) {
+    console.log(`📡 设备 ${deviceId} 遥测:`, JSON.stringify(telemetry));
+  }
+
+  // 读帧缓存
+  const frame = await getDeviceFrame(deviceId);
+  if (!frame || !frame.frame_data) {
+    return c.body(null, 204);
+  }
+
+  // 去重：请求头 X-Frame-Id 与当前帧指纹一致 → 304
+  const requestFrameId = c.req.header('X-Frame-Id');
+  if (requestFrameId && requestFrameId === frame.frame_id) {
+    c.header('X-Frame-Id', frame.frame_id!);
+    return c.body(null, 304);
+  }
+
+  // 200：返回帧数据
+  const refreshSec = parseInt(process.env.EINK_FRAME_REFRESH_SEC || '60', 10);
+  c.header('Content-Type', 'application/octet-stream');
+  c.header('X-Frame-Id', frame.frame_id!);
+  c.header('X-Refresh-Sec', String(refreshSec));
+  // frame_data 可能是 Buffer 或 pg 返回的 bytea hex——统一转 Buffer
+  const frameData = Buffer.isBuffer(frame.frame_data)
+    ? frame.frame_data
+    : Buffer.from(frame.frame_data as any, 'hex');
+  return c.body(new Uint8Array(frameData));
 });
 
 // 错误处理

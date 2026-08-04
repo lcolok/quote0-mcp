@@ -1074,6 +1074,18 @@ export class PostgresDatabase {
 
       CREATE INDEX IF NOT EXISTS label_batch_items_batch_idx ON label_batch_items(batch_id);
 
+      -- 拉模式帧缓存（Phase A）：每台 display 设备最新一帧 bitmap
+      CREATE TABLE IF NOT EXISTS device_frames (
+          device_id TEXT PRIMARY KEY,
+          frame_data BYTEA NOT NULL,
+          frame_id TEXT NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          plane_count INTEGER NOT NULL DEFAULT 1,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_frames_updated ON device_frames(updated_at);
+
     `;
   }
 

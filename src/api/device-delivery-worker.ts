@@ -25,6 +25,7 @@ import {
 import { createEinkTarget } from '../react-widgets/core/render-targets.js';
 import { classifyPushError, type PushErrorCode } from './push-results.js';
 import { decideFailure, dedupeByDevice } from './delivery-policy.js';
+import { upsertDeviceFrame } from './device-frame-cache.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
 const TICK_MS = 5000;
@@ -232,6 +233,18 @@ async function executeDelivery(
     const result = await pushToEinkDevice(resolvedDevice, bitmap, { statusSnapshot: status });
     if (!result.ok) throw new Error(result.error || '设备推送失败（无错误信息）');
 
+    // 拉模式 Phase A：推送成功后写帧缓存
+    try {
+      await upsertDeviceFrame({
+        deviceId: delivery.device_id,
+        bitmap,
+        width: resolvedDevice.width,
+        height: resolvedDevice.height,
+      });
+    } catch (e) {
+      console.warn(`⚠️ delivery ${delivery.id} 帧缓存写入失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     await markSucceeded(delivery);
     await recordRuntimeSuccess(delivery.device_id);
     console.log(
@@ -244,7 +257,7 @@ async function executeDelivery(
 }
 
 /** 渲染缓存 miss 时真正排版。返回本地 PNG 路径。 */
-async function renderContentForTarget(delivery: DeliveryRow, device: EinkDevice): Promise<string> {
+export async function renderContentForTarget(delivery: DeliveryRow, device: EinkDevice): Promise<string> {
   const content = await loadContent(delivery.content_id);
   const target = createEinkTarget(device.width, device.height);
   const rendered = await renderSingleEinkTarget(content, target);
