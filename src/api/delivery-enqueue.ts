@@ -3,11 +3,10 @@
  *
  * consumer 从此不再物理推送，只负责「登记这轮该发给谁」。
  * 幂等的两道锁：
- *  ① UNIQUE (content_id, device_id, payload_version) + ON CONFLICT DO NOTHING
- *     → 同一轮次重复触发（scheduler 抖动 / 手动 trigger 撞车）不会生成第二条；
- *  ② payload_version = replay_count + 1
- *     → 复播是「新的一轮」，拿到新的 payload_version，因此会生成新的 delivery，
- *       而不是被①误判成重复。
+ *  ① 每台设备的 payload_version 取自 DB 中该 (content_id, device_id) 已有的最大值 +1，
+ *     而不是内存里的 replay_count，避免 replay_count 被重置后回头踩旧版本；
+ *  ② UNIQUE (content_id, device_id, payload_version) + ON CONFLICT DO NOTHING
+ *     → 同一轮次重复触发（scheduler 抖动 / 手动 trigger 撞车 / 并发race）不会生成第二条。
  *
  * 显示类设备（display）投递合并：登记新 delivery 时作废同设备旧的 pending 投递。
  * 这样断线数小时后重连的设备不会逐条排空历史积压（曾在 eink-2 上产生 259 条、
@@ -25,8 +24,6 @@ import { readFile } from 'node:fs/promises';
 
 export interface EnqueueDeliveriesInput {
   contentId: number;
-  /** 取 content_inventory.replay_count；payload_version = 该值 + 1。 */
-  replayCount: number;
   /** 限定目标设备；不传则取全部已启用的 eink-local 设备（与 Phase 0 同一取数口径）。 */
   deviceIds?: string[];
 }
@@ -92,20 +89,30 @@ async function supersedeOldDeliveries(deviceId: string): Promise<number> {
 export async function enqueueDeliveriesForContent(
   input: EnqueueDeliveriesInput,
 ): Promise<EnqueueDeliveriesResult> {
-  const payloadVersion = (input.replayCount || 0) + 1;
   const devices = await getEinkDevices(
     input.deviceIds?.length ? { deviceIds: input.deviceIds } : {},
   );
 
   if (devices.length === 0) {
-    return { payloadVersion, created: 0, targeted: 0, deviceIds: [] };
+    return { payloadVersion: 0, created: 0, targeted: 0, deviceIds: [] };
   }
 
   const db = getPostgresDatabase();
   let created = 0;
+  let maxPayloadVersion = 0;
   /** 本批实际新增 delivery 的设备（ON CONFLICT 命中的不算）。 */
   const supersededDevices = new Set<string>();
   for (const device of devices) {
+    // 每台设备独立从 DB 取真实最大 payload_version，避免 replayCount 重置导致撞约束。
+    const versionResult = await db.getPool().query(
+      `SELECT COALESCE(MAX(payload_version), 0) + 1 AS next_version
+       FROM device_deliveries
+       WHERE content_id = $1 AND device_id = $2`,
+      [input.contentId, device.id],
+    );
+    const payloadVersion = versionResult.rows[0]?.next_version || 1;
+    maxPayloadVersion = Math.max(maxPayloadVersion, payloadVersion);
+
     const r = await db.getPool().query(
       `INSERT INTO device_deliveries (content_id, device_id, render_target, payload_version)
        VALUES ($1, $2, $3, $4)
@@ -175,7 +182,7 @@ export async function enqueueDeliveriesForContent(
   }
 
   return {
-    payloadVersion,
+    payloadVersion: maxPayloadVersion,
     created,
     targeted: devices.length,
     deviceIds: devices.map((d) => d.id),

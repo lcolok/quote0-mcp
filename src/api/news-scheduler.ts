@@ -2004,6 +2004,12 @@ export class NewsScheduler {
       // 4. local-eink must re-render from structured content for each runtime
       // RenderTarget. Reusing the producer PNG here makes a 296x152 inventory
       // asset get resized to 296x128 and destroys point-to-point pixel layout.
+      // 记录本轮投递登记结果，供后续 scheduler_run_history 与日志统一使用。
+      let enqueueCreated = -1;
+      let enqueueTargeted = -1;
+      let enqueuePayloadVersion = 0;
+      let enqueueDeviceIds: string[] = [];
+
       if (job.config.renderer === 'local-eink') {
         // Phase 1：consumer 不再物理推送，只为每台目标设备创建一条持久化 delivery。
         // 真正的发送由 device-delivery-worker 异步完成：在线设备几秒内收到，
@@ -2014,23 +2020,38 @@ export class NewsScheduler {
         // consumer 本身只要“登记成功”就算本轮完成，不再被单台离线设备阻塞。
         const enqueued = await enqueueDeliveriesForContent({
           contentId: inventoryItem.id,
-          replayCount: inventoryItem.replay_count || 0,
         });
 
         if (enqueued.targeted === 0) {
           throw new Error('未配置 E-Ink 设备，无法创建投递任务');
         }
+        enqueueCreated = enqueued.created;
+        enqueueTargeted = enqueued.targeted;
+        enqueuePayloadVersion = enqueued.payloadVersion;
+        enqueueDeviceIds = enqueued.deviceIds;
+
+        const deliveryAllSucceeded = enqueueCreated === enqueueTargeted;
+        const deliveryAllFailed = enqueueCreated === 0;
+
+        // 已登记投递日志：只有全成功才用 📮；部分/全失败必须上升到警告/错误级别。
+        const registerEmoji = deliveryAllSucceeded ? '📮' : (deliveryAllFailed ? '❌' : '⚠️');
         console.log(
-          `📮 Consumer ${job.config.id} 已登记投递: content=${inventoryItem.id} ` +
-          `payloadVersion=${enqueued.payloadVersion} created=${enqueued.created}/${enqueued.targeted} ` +
-          `devices=[${enqueued.deviceIds.join(', ')}]`
+          `${registerEmoji} Consumer ${job.config.id} 已登记投递: content=${inventoryItem.id} ` +
+          `payloadVersion=${enqueuePayloadVersion} created=${enqueueCreated}/${enqueueTargeted} ` +
+          `devices=[${enqueueDeviceIds.join(', ')}]`
         );
-        if (enqueued.created === 0) {
-          // 全部命中幂等：本轮此前已登记过（重复触发）。不是错误，但值得告警。
-          console.warn(
-            `⚠️ Consumer ${job.config.id} 本轮 delivery 全部已存在（payloadVersion=${enqueued.payloadVersion}），` +
-            `幂等跳过——通常意味着同一轮次被重复触发`
-          );
+        if (!deliveryAllSucceeded) {
+          const conflictReason = `delivery_insert_conflict: ${enqueueCreated}/${enqueueTargeted} devices registered`;
+          if (deliveryAllFailed) {
+            console.error(
+              `❌ Consumer ${job.config.id} 投递登记全失败（${conflictReason}），` +
+              `内容已消费但可能没有设备收到`
+            );
+          } else {
+            console.warn(
+              `⚠️ Consumer ${job.config.id} 投递登记部分失败（${conflictReason}）`
+            );
+          }
         }
       } else {
         await this.pushImageFromMinIO(inventoryItem.image_path, job);
@@ -2060,19 +2081,55 @@ export class NewsScheduler {
       });
 
       if (runHistoryId) {
+        // local-eink 且登记数量不足时必须如实上报，不能继续撒谎 success。
+        let pushStatus: string;
+        let pushReason: string;
+        if (job.config.renderer === 'local-eink') {
+          if (enqueueCreated === enqueueTargeted) {
+            pushStatus = 'success';
+            pushReason = 'inventory_consumed';
+          } else if (enqueueCreated === 0) {
+            pushStatus = 'failed';
+            pushReason = 'delivery_insert_conflict';
+          } else {
+            pushStatus = 'partial_success';
+            pushReason = `delivery_insert_conflict:${enqueueCreated}/${enqueueTargeted}`;
+          }
+        } else {
+          pushStatus = 'success';
+          pushReason = 'inventory_consumed';
+        }
         await this.postgres.updateSchedulerRunHistory(runHistoryId, {
-          pushStatus: 'success',
-          pushReason: 'inventory_consumed',
+          pushStatus,
+          pushReason,
           candidateFingerprint: inventoryItem.fingerprint,
           runFinishedAt: new Date(),
-          metadata: { inventoryId: inventoryItem.id, replayCount: updatedReplayCount }
+          metadata: {
+            inventoryId: inventoryItem.id,
+            replayCount: updatedReplayCount,
+            created: enqueueCreated >= 0 ? enqueueCreated : undefined,
+            targeted: enqueueTargeted >= 0 ? enqueueTargeted : undefined,
+            payloadVersion: enqueuePayloadVersion || undefined,
+          }
         });
       }
 
       job.state.consecutiveFailures = 0;
       const nextRunAt = new Date(Date.now() + job.config.intervalMs);
       await this.persistSchedulerState(job, nextRunAt);
-      console.log(`✅ Consumer ${job.config.id} 完成，下次运行: ${nextRunAt.toISOString()}`);
+      if (job.config.renderer === 'local-eink') {
+        const deliveryAllSucceeded = enqueueCreated === enqueueTargeted;
+        const deliveryAllFailed = enqueueCreated === 0;
+        if (deliveryAllSucceeded) {
+          console.log(`✅ Consumer ${job.config.id} 完成，下次运行: ${nextRunAt.toISOString()}`);
+        } else if (deliveryAllFailed) {
+          console.error(`❌ Consumer ${job.config.id} 完成但投递全失败，下次运行: ${nextRunAt.toISOString()}`);
+        } else {
+          console.warn(`⚠️ Consumer ${job.config.id} 完成但投递部分失败，下次运行: ${nextRunAt.toISOString()}`);
+        }
+      } else {
+        console.log(`✅ Consumer ${job.config.id} 完成，下次运行: ${nextRunAt.toISOString()}`);
+      }
 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

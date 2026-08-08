@@ -3,7 +3,7 @@
  * consumer 不再物理推送，只为每台目标设备登记一条持久化 delivery。
  *
  * 与被它取代的 Phase 0 语义（news-scheduler-consumer-partial.test.ts）的差别：
- *  - Phase 0：consumer 亲自推 → 至少一台成功才推进 inventory（宁漏勿重）
+ *  - Phase 0：consumer 亲自推 → 至少一台设备成功才推进 inventory（宁漏勿重）
  *  - Phase 1：consumer 只登记 → 登记成功即推进 inventory；离线设备由 worker
  *            按退避补投（晚到但不重）。单台设备离线再也不能阻塞 consumer。
  */
@@ -34,12 +34,13 @@ mock.module('./target-aware-eink.js', () => ({
 
 // ---- 极简 postgres 桩 ----
 const executedQueries: Array<{ sql: string; params?: any[] }> = [];
+let historyUpdates: any[] = [];
 let inventoryRow: any = null;
 
 const postgresStub = {
   initialize: async () => {},
   createSchedulerRunHistory: async () => 1,
-  updateSchedulerRunHistory: async () => {},
+  updateSchedulerRunHistory: async (_id: number, updates: any) => { historyUpdates.push(updates); },
   recordPushResult: async () => {},
   getSchedulerJobs: async () => [],
   getPool: () => ({ query: async () => ({ rows: [] }) }),
@@ -82,20 +83,25 @@ function inventoryUpdateQueries() {
 describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () => {
   let scheduler: any;
   let warnings: string[] = [];
+  let errors: string[] = [];
   let logs: string[] = [];
   const realWarn = console.warn;
+  const realError = console.error;
   const realLog = console.log;
 
   beforeEach(() => {
     scheduler = new NewsScheduler();
     scheduler.persistSchedulerState = async () => {};
     executedQueries.length = 0;
+    historyUpdates = [];
     enqueueCalls = [];
     enqueueMock.mockClear();
     renderAndPushMock.mockClear();
     warnings = [];
+    errors = [];
     logs = [];
     console.warn = (...a: any[]) => { warnings.push(a.map(String).join(' ')); };
+    console.error = (...a: any[]) => { errors.push(a.map(String).join(' ')); };
     console.log = (...a: any[]) => { logs.push(a.map(String).join(' ')); };
     inventoryRow = {
       id: 42,
@@ -115,7 +121,11 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     };
   });
 
-  const restore = () => { console.warn = realWarn; console.log = realLog; };
+  const restore = () => {
+    console.warn = realWarn;
+    console.error = realError;
+    console.log = realLog;
+  };
 
   it('为每台设备登记 delivery，inventory 照旧推进 pushed', async () => {
     await scheduler.runConsumerJob(makeJob());
@@ -124,9 +134,9 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     // 核心：不再走物理推送路径
     expect(renderAndPushMock).not.toHaveBeenCalled();
 
-    // 登记参数正确：contentId + replayCount
+    // 登记参数只传 contentId（不再用 replayCount 推导 payload_version）
     expect(enqueueMock).toHaveBeenCalledTimes(1);
-    expect(enqueueCalls[0]).toEqual({ contentId: 42, replayCount: 0 });
+    expect(enqueueCalls[0]).toEqual({ contentId: 42 });
 
     // inventory 推进语义与 Phase 0 完全一致（SQL 未改动）
     const updates = inventoryUpdateQueries();
@@ -135,17 +145,22 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     expect(updates[0].sql).toContain('replay_count=replay_count+1');
     expect(updates[0].sql).toContain('last_pushed_at=CURRENT_TIMESTAMP');
     expect(updates[0].params).toEqual([42]);
+
+    // 运行历史如实记录 success
+    expect(historyUpdates).toHaveLength(1);
+    expect(historyUpdates[0].pushStatus).toBe('success');
+    expect(historyUpdates[0].pushReason).toBe('inventory_consumed');
   });
 
-  it('payload_version 取 replay_count+1：复播轮次生成新 delivery', async () => {
-    inventoryRow.replay_count = 2;
-    nextEnqueueResult = { payloadVersion: 3, created: 3, targeted: 3, deviceIds: ['a', 'b', 'c'] };
+  it('payload_version 由 enqueue 返回并写入运行历史', async () => {
+    nextEnqueueResult = { payloadVersion: 7, created: 3, targeted: 3, deviceIds: ['a', 'b', 'c'] };
 
     await scheduler.runConsumerJob(makeJob());
     restore();
 
-    expect(enqueueCalls[0]).toEqual({ contentId: 42, replayCount: 2 });
+    expect(enqueueCalls[0]).toEqual({ contentId: 42 });
     expect(inventoryUpdateQueries()).toHaveLength(1);
+    expect(historyUpdates[0].metadata?.payloadVersion).toBe(7);
   });
 
   it('单台设备离线不再阻塞 consumer —— 登记成功即推进（这就是 Phase 1 的意义）', async () => {
@@ -160,14 +175,31 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     expect(warnings.some((w) => w.includes('设备推送失败'))).toBe(false);
   });
 
-  it('幂等命中（created=0）→ 告警但仍推进，不 throw', async () => {
+  it('投递登记部分失败（created<targeted）→ 告警 + scheduler_run_history 记 partial_success', async () => {
+    nextEnqueueResult = { payloadVersion: 1, created: 1, targeted: 3, deviceIds: ['a', 'b', 'c'] };
+
+    await scheduler.runConsumerJob(makeJob());
+    restore();
+
+    expect(inventoryUpdateQueries()).toHaveLength(1);
+    expect(warnings.some((w) => w.includes('投递登记部分失败'))).toBe(true);
+    expect(historyUpdates).toHaveLength(1);
+    expect(historyUpdates[0].pushStatus).toBe('partial_success');
+    expect(historyUpdates[0].pushReason).toContain('delivery_insert_conflict');
+  });
+
+  it('投递登记全失败（created=0）→ 错误 + scheduler_run_history 记 failed', async () => {
     nextEnqueueResult = { payloadVersion: 1, created: 0, targeted: 3, deviceIds: ['a', 'b', 'c'] };
 
     await scheduler.runConsumerJob(makeJob());
     restore();
 
-    expect(warnings.some((w) => w.includes('幂等跳过'))).toBe(true);
+    // inventory 仍推进，但日志与历史必须诚实上报失败
     expect(inventoryUpdateQueries()).toHaveLength(1);
+    expect(errors.some((e) => e.includes('投递登记全失败'))).toBe(true);
+    expect(historyUpdates).toHaveLength(1);
+    expect(historyUpdates[0].pushStatus).toBe('failed');
+    expect(historyUpdates[0].pushReason).toBe('delivery_insert_conflict');
   });
 
   it('无任何目标设备（targeted=0）→ 走失败路径，不推进 inventory', async () => {
