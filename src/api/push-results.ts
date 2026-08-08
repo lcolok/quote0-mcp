@@ -15,6 +15,7 @@ export type PushErrorCode =
   | 'http_4xx'
   | 'http_5xx'
   | 'busy'
+  | 'device_reject'
   | 'spec_mismatch'
   | 'unknown';
 
@@ -58,6 +59,11 @@ export function classifyPushError(error: unknown): PushErrorCode {
   if (lower.includes('设备规格不匹配') || lower.includes('位图大小不匹配') ||
       lower.includes('spec mismatch') || lower.includes('只支持 epd1-v1')) {
     return 'spec_mismatch';
+  }
+  // 板端明确拒收但设备本身仍在线：例如接收状态机错位导致的 bad magic。
+  // 这类错误对“当前请求”是失败，但已实证可通过状态机复位/重启恢复，不能和 401/403 一样永久 dead。
+  if (lower.includes('bad magic')) {
+    return 'device_reject';
   }
   const httpMatch = message.match(/(?:HTTP|status)\s*(\d{3})/i);
   if (httpMatch) {

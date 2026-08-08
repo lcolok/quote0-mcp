@@ -66,10 +66,11 @@ describe('jitter ±20%', () => {
 });
 
 describe('永久性失败判定', () => {
-  it('http_4xx / spec_mismatch 是永久错；busy / 其余可重试', () => {
+  it('普通 http_4xx / spec_mismatch 是永久错；busy / device_reject / 其余可重试', () => {
     expect(isPermanentFailure('http_4xx')).toBe(true);
     expect(isPermanentFailure('spec_mismatch')).toBe(true);
     expect(isPermanentFailure('busy')).toBe(false);
+    expect(isPermanentFailure('device_reject')).toBe(false);
     expect(isPermanentFailure('timeout')).toBe(false);
     expect(isPermanentFailure('connection')).toBe(false);
     expect(isPermanentFailure('http_5xx')).toBe(false);
@@ -84,8 +85,12 @@ describe('永久性失败判定', () => {
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 500: internal error')))).toBe(false);
     expect(isPermanentFailure(classifyPushError(new Error('The operation timed out.')))).toBe(false);
     expect(isPermanentFailure(classifyPushError(new Error('fetch failed ECONNREFUSED')))).toBe(false);
-    // 409 → busy 不是永久错
+    // 409 → busy 不是永久错；400 bad magic → device_reject，也必须可恢复重试
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 409: {"error":"busy, refreshing"}')))).toBe(false);
+    expect(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}'))).toBe('device_reject');
+    expect(isPermanentFailure(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}')))).toBe(false);
+    // 其它没有专门恢复语义的 400 仍保持永久 4xx
+    expect(classifyPushError(new Error('HTTP 400: {"error":"invalid request"}'))).toBe('http_4xx');
   });
 });
 
@@ -196,6 +201,34 @@ describe('decideFailure — 错误分类 → 状态转移映射', () => {
     expect(d.health).toBe('degraded');
     expect(d.circuitOpenMs).toBeNull();
     expect(d.reason).toBe('exhausted');
+  });
+
+  // ---------- device_reject / bad magic ----------
+
+  it('device_reject 可重试；连续拒收时开熔断但最多 degraded', () => {
+    const first = decideFailure(
+      { errorCode: 'device_reject', attempts: 1, maxAttempts: 5, consecutiveFailures: 1 },
+      () => 0.5,
+    );
+    expect(first.nextState).toBe('retry_wait');
+    expect(first.retryDelayMs).toBe(15_000);
+    expect(first.health).toBe('unknown');
+    expect(first.circuitOpenMs).toBeNull();
+
+    const repeated = decideFailure(
+      { errorCode: 'device_reject', attempts: 3, maxAttempts: 5, consecutiveFailures: 5 },
+      () => 0.5,
+    );
+    expect(repeated.nextState).toBe('retry_wait');
+    expect(repeated.health).toBe('degraded');
+    expect(repeated.circuitOpenMs).toBe(CIRCUIT_OPEN_MS);
+
+    const exhausted = decideFailure({
+      errorCode: 'device_reject', attempts: 5, maxAttempts: 5, consecutiveFailures: 9,
+    });
+    expect(exhausted.nextState).toBe('dead');
+    expect(exhausted.health).toBe('degraded');
+    expect(exhausted.reason).toBe('exhausted');
   });
 });
 

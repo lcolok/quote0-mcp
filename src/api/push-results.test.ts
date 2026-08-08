@@ -39,6 +39,12 @@ describe('classifyPushError', () => {
     expect(classifyPushError(new Error('status 409 conflict'))).toBe('busy');
   });
 
+  it('识别 bad magic 为可恢复的板端拒收，而不是永久 4xx', () => {
+    expect(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: BAD MAGIC'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: {"error":"invalid request"}'))).toBe('http_4xx');
+  });
+
   it('识别规格不匹配', () => {
     expect(classifyPushError(new Error('设备规格不匹配: 登记=296x128'))).toBe('spec_mismatch');
     expect(classifyPushError(new Error('位图大小不匹配: expect 4736, got 5624'))).toBe('spec_mismatch');
