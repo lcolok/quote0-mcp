@@ -39,15 +39,33 @@ describe('classifyPushError', () => {
     expect(classifyPushError(new Error('status 409 conflict'))).toBe('busy');
   });
 
-  it('识别 bad magic 为可恢复的板端拒收，而不是永久 4xx', () => {
+  it('识别接收/组装/ACK 异常为可恢复 device_reject', () => {
     expect(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}'))).toBe('device_reject');
     expect(classifyPushError(new Error('HTTP 400: BAD MAGIC'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"bad_magic","crc_verified":false}'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"body_crc_mismatch"}'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"body_overflow"}'))).toBe('device_reject');
+    expect(classifyPushError(new Error('EPD1 ACK trace mismatch code=ack_trace_mismatch'))).toBe('device_reject');
+    expect(classifyPushError(new Error('EPD1 ACK CRC mismatch code=ack_crc_mismatch'))).toBe('device_reject');
+  });
+
+  it('CRC 已验证完整送达后的非法 header 归为永久 protocol_mismatch', () => {
+    expect(classifyPushError(new Error(
+      'HTTP 400: {"code":"bad_magic","crc_verified":true}'
+    ))).toBe('protocol_mismatch');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"unsupported_version"}'))).toBe('protocol_mismatch');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"reserved_nonzero"}'))).toBe('protocol_mismatch');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"body_size_mismatch"}'))).toBe('protocol_mismatch');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"bad_crc_header"}'))).toBe('protocol_mismatch');
+    expect(classifyPushError(new Error('EPD1 ACK trace missing code=ack_trace_missing'))).toBe('protocol_mismatch');
+    expect(classifyPushError(new Error('EPD1 ACK CRC missing code=ack_crc_missing'))).toBe('protocol_mismatch');
     expect(classifyPushError(new Error('HTTP 400: {"error":"invalid request"}'))).toBe('http_4xx');
   });
 
   it('识别规格不匹配', () => {
     expect(classifyPushError(new Error('设备规格不匹配: 登记=296x128'))).toBe('spec_mismatch');
     expect(classifyPushError(new Error('位图大小不匹配: expect 4736, got 5624'))).toBe('spec_mismatch');
+    expect(classifyPushError(new Error('HTTP 400: {"code":"geometry_mismatch"}'))).toBe('spec_mismatch');
   });
 
   it('兜底 unknown', () => {

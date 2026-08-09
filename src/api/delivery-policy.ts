@@ -60,9 +60,10 @@ export function backoffWithJitterMs(attempts: number, random: () => number = Mat
  * 永久性失败：配置层面就错了，重试只会白打 token / 白刷设备。
  * - http_4xx：401/403/普通 4xx 之类的鉴权与请求错误；可恢复的板端拒收会先分类成 device_reject
  * - spec_mismatch：登记规格与板端自报规格不符，必须人改配置
+ * - protocol_mismatch：CRC 已证实完整送达，但版本/保留位/长度/魔数本身非法，重试同一内容不会变好
  */
 export function isPermanentFailure(code: PushErrorCode): boolean {
-  return code === 'http_4xx' || code === 'spec_mismatch';
+  return code === 'http_4xx' || code === 'spec_mismatch' || code === 'protocol_mismatch';
 }
 
 export interface FailureDecisionInput {
@@ -93,7 +94,7 @@ export interface FailureDecision {
  * 失败后的完整判决：delivery 状态 + 退避 + 设备健康 + 熔断。
  *
  * 三条互斥分支：
- * ① 永久错（普通 4xx / spec_mismatch）→ dead + misconfigured，不重试、不熔断
+ * ① 永久错（普通 4xx / spec_mismatch / protocol_mismatch）→ dead + misconfigured，不重试、不熔断
  *    （熔断是为了保护「暂时性故障的设备」，配置错的设备熔断没有意义，
  *     而且它会连累同设备其他 delivery 的正常判决）
  * ② 重试次数耗尽 → dead；真正离线类判 offline，device_reject/busy 保持 degraded

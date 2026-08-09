@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { buildEpd1Body, type EinkDevice } from './eink-converter.js';
+import { buildEpd1Body, crc32Hex, crc32Ieee, normalizeEpdTraceId, type EinkDevice } from './eink-converter.js';
 
 const s3Device: EinkDevice = {
   id: 'eink-2',
@@ -14,6 +14,18 @@ const s3Device: EinkDevice = {
 };
 
 describe('EPD1 wire protocol', () => {
+  it('CRC32 使用标准 IEEE 向量，便于服务端与固件跨语言对账', () => {
+    const vector = Buffer.from('123456789', 'ascii');
+    expect(crc32Ieee(vector)).toBe(0xcbf43926);
+    expect(crc32Hex(vector)).toBe('cbf43926');
+  });
+
+  it('trace id 清洗成 header-safe 且限制 32 字符', () => {
+    expect(normalizeEpdTraceId('delivery 123 / attempt#2')).toBe('delivery123attempt2');
+    expect(normalizeEpdTraceId('x'.repeat(80))).toBe('x'.repeat(32));
+    expect(normalizeEpdTraceId()).toMatch(/^[0-9a-f]{16}$/);
+  });
+
   it('builds the 16-byte header and 296x128 plane', () => {
     const bitmap = Buffer.alloc(296 / 8 * 128, 0xa5);
     const body = buildEpd1Body(bitmap, s3Device);

@@ -230,7 +230,11 @@ async function executeDelivery(
     // 4. 物理发送
     const pngBuffer = await readFile(localImagePath);
     const bitmap = await pngTo1BitBitmap(pngBuffer, resolvedDevice.width, resolvedDevice.height);
-    const result = await pushToEinkDevice(resolvedDevice, bitmap, { statusSnapshot: status });
+    const result = await pushToEinkDevice(resolvedDevice, bitmap, {
+      statusSnapshot: status,
+      // 让板端 /status、HTTP 错误、worker 日志与 DB delivery 可以直接互相反查。
+      traceId: `d${delivery.id}-a${delivery.attempts}`,
+    });
     if (!result.ok) throw new Error(result.error || '设备推送失败（无错误信息）');
 
     // 拉模式 Phase A：推送成功后写帧缓存

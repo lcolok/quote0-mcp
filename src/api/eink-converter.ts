@@ -6,11 +6,36 @@
  */
 
 import sharp from 'sharp';
+import { randomBytes } from 'node:crypto';
 import { EINK_DEVICE_WIDTH as EINK_WIDTH, EINK_DEVICE_HEIGHT as EINK_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { createEinkTarget, type RenderTarget } from '../react-widgets/core/render-targets.js';
 
 const EINK_BITMAP_SIZE = (EINK_WIDTH * EINK_HEIGHT) / 8; // 5624
+const EPD_TRACE_HEADER = 'X-EPD-Trace-Id';
+const EPD_CRC32_HEADER = 'X-EPD-CRC32';
+
+/** 标准 IEEE CRC32（poly 0xEDB88320），用于校验“HTTP 收到的完整逻辑帧”而非替代 TCP checksum。 */
+export function crc32Ieee(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export function crc32Hex(data: Uint8Array): string {
+  return crc32Ieee(data).toString(16).padStart(8, '0');
+}
+
+/** trace 只用于关联日志/DB/板端状态，不承担认证；限制为 header-safe 的 32 字符。 */
+export function normalizeEpdTraceId(value?: string): string {
+  const cleaned = (value ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+  return cleaned || randomBytes(8).toString('hex');
+}
 
 export type EinkWireProtocol = 'legacy-raw-v0' | 'epd1-v1';
 export type EinkColorMode = 'mono-1bit' | '3-color';
@@ -114,6 +139,16 @@ export interface PushToEinkOptions {
    * 未提供时（老调用方 / 直接调用）退回自己探一次，行为与改动前一致。
    */
   statusSnapshot?: EinkStatus;
+  /** 端到端关联 ID；worker 会使用 delivery id + attempt，其他调用方未传时自动生成。 */
+  traceId?: string;
+}
+
+export interface EinkPushResult {
+  ok: boolean;
+  ts?: number;
+  error?: string;
+  traceId?: string;
+  crc32?: string;
 }
 
 /**
@@ -123,45 +158,83 @@ export async function pushToEinkDevice(
   device: EinkDevice,
   bitmap: Buffer,
   options: PushToEinkOptions = {}
-): Promise<{ ok: boolean; ts?: number; error?: string }> {
+): Promise<EinkPushResult> {
   const url = `${device.baseUrl}/display/bitmap`;
   const protocol = device.wireProtocol ?? 'legacy-raw-v0';
   const width = device.width || EINK_WIDTH;
   const height = device.height || EINK_HEIGHT;
+  const traceId = protocol === 'epd1-v1' ? normalizeEpdTraceId(options.traceId) : undefined;
+  let bodyCrc32: string | undefined;
+  let statusSnapshot = options.statusSnapshot;
   console.log(`📤 推送 bitmap 到设备: ${device.name} (${url}, ${protocol}, ${width}x${height})`);
 
   try {
     if (protocol === 'epd1-v1') {
-      const status = options.statusSnapshot ?? await getEinkStatus(device);
-      assertEinkStatusMatches(device, status);
+      statusSnapshot = statusSnapshot ?? await getEinkStatus(device);
+      assertEinkStatusMatches(device, statusSnapshot);
     }
 
     const body = protocol === 'epd1-v1'
       ? buildEpd1Body(bitmap, device)
       : bitmap;
+    bodyCrc32 = protocol === 'epd1-v1' ? crc32Hex(body) : undefined;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/octet-stream',
+      'Authorization': `Bearer ${device.token}`,
+    };
+    if (traceId) headers[EPD_TRACE_HEADER] = traceId;
+    if (bodyCrc32) headers[EPD_CRC32_HEADER] = bodyCrc32;
+
+    if (traceId) {
+      console.log(`🧭 EPD1 trace=${traceId} crc32=${bodyCrc32} body=${body.length}B device=${device.id}`);
+    }
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Authorization': `Bearer ${device.token}`
-      },
+      headers,
       body: new Uint8Array(body),
       signal: AbortSignal.timeout(30000)
     });
 
+    const echoedTrace = response.headers.get(EPD_TRACE_HEADER) || traceId;
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
+      throw new Error(
+        `HTTP ${response.status}` +
+        `${echoedTrace ? ` trace=${echoedTrace}` : ''}` +
+        `${bodyCrc32 ? ` crc32=${bodyCrc32}` : ''}: ${errorText}`
+      );
     }
 
-    const result = await response.json() as { ok: boolean; ts: number };
-    console.log(`✅ 设备推送成功: ${device.name}, protocol=${protocol}, body=${body.length}B, ts=${result.ts ?? '-'}`);
-    return result;
+    const result = await response.json() as { ok: boolean; ts?: number; trace_id?: string; crc32?: string };
+    const diagV1 = protocol === 'epd1-v1' && (statusSnapshot?.protocol_diag ?? 0) >= 1;
+    if (diagV1 && statusSnapshot?.trace_supported && !result.trace_id) {
+      throw new Error(`EPD1 ACK trace missing code=ack_trace_missing expect=${traceId ?? '-'}`);
+    }
+    if (diagV1 && statusSnapshot?.crc32_supported && !result.crc32) {
+      throw new Error(`EPD1 ACK CRC missing code=ack_crc_missing trace=${traceId ?? '-'}`);
+    }
+    if (traceId && result.trace_id && result.trace_id !== traceId) {
+      throw new Error(`EPD1 ACK trace mismatch code=ack_trace_mismatch expect=${traceId} got=${result.trace_id}`);
+    }
+    if (bodyCrc32 && result.crc32 && result.crc32.toLowerCase() !== bodyCrc32) {
+      throw new Error(
+        `EPD1 ACK CRC mismatch code=ack_crc_mismatch trace=${traceId ?? '-'} ` +
+        `expect=${bodyCrc32} got=${result.crc32}`
+      );
+    }
+    const resultTrace = result.trace_id || echoedTrace;
+    const resultCrc32 = result.crc32 || bodyCrc32;
+    console.log(
+      `✅ 设备推送成功: ${device.name}, protocol=${protocol}, body=${body.length}B, ` +
+      `trace=${resultTrace ?? '-'}, crc32=${resultCrc32 ?? '-'}, ts=${result.ts ?? '-'}`
+    );
+    return { ...result, traceId: resultTrace, crc32: resultCrc32 };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`❌ 设备推送失败: ${device.name}`, errorMsg);
-    return { ok: false, error: errorMsg };
+    return { ok: false, error: errorMsg, traceId, crc32: bodyCrc32 };
   }
 }
 
@@ -172,6 +245,15 @@ export interface EinkStatus {
   planeCount?: number;
   planeBytes?: number;
   firmware?: string;
+  wire_protocol?: string;
+  protocol_diag?: number;
+  crc32_supported?: boolean;
+  trace_supported?: boolean;
+  last_push_trace_id?: string;
+  last_reject_trace_id?: string;
+  last_reject_code?: string;
+  stale_body_resets?: number;
+  crc_mismatches?: number;
 }
 
 /**

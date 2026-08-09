@@ -66,9 +66,10 @@ describe('jitter ±20%', () => {
 });
 
 describe('永久性失败判定', () => {
-  it('普通 http_4xx / spec_mismatch 是永久错；busy / device_reject / 其余可重试', () => {
+  it('普通 http_4xx / spec_mismatch / protocol_mismatch 是永久错；busy / device_reject / 其余可重试', () => {
     expect(isPermanentFailure('http_4xx')).toBe(true);
     expect(isPermanentFailure('spec_mismatch')).toBe(true);
+    expect(isPermanentFailure('protocol_mismatch')).toBe(true);
     expect(isPermanentFailure('busy')).toBe(false);
     expect(isPermanentFailure('device_reject')).toBe(false);
     expect(isPermanentFailure('timeout')).toBe(false);
@@ -89,6 +90,13 @@ describe('永久性失败判定', () => {
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 409: {"error":"busy, refreshing"}')))).toBe(false);
     expect(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}'))).toBe('device_reject');
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}')))).toBe(false);
+    // CRC 已验证完整送达但 header 仍非法 → protocol_mismatch，也必须永久失败
+    expect(classifyPushError(new Error(
+      'HTTP 400: {"code":"bad_magic","crc_verified":true}'
+    ))).toBe('protocol_mismatch');
+    expect(isPermanentFailure(classifyPushError(new Error(
+      'HTTP 400: {"code":"bad_magic","crc_verified":true}'
+    )))).toBe(true);
     // 其它没有专门恢复语义的 400 仍保持永久 4xx
     expect(classifyPushError(new Error('HTTP 400: {"error":"invalid request"}'))).toBe('http_4xx');
   });
@@ -98,7 +106,7 @@ describe('decideFailure — 错误分类 → 状态转移映射', () => {
   const base = { attempts: 1, maxAttempts: 5, consecutiveFailures: 1 };
 
   it('永久错 → dead + misconfigured，不重试、不熔断（即使连续失败很多）', () => {
-    for (const code of ['http_4xx', 'spec_mismatch'] as const) {
+    for (const code of ['http_4xx', 'spec_mismatch', 'protocol_mismatch'] as const) {
       const d = decideFailure({ ...base, errorCode: code, consecutiveFailures: 99 });
       expect(d.nextState).toBe('dead');
       expect(d.retryDelayMs).toBeNull();

@@ -17,6 +17,7 @@ export type PushErrorCode =
   | 'busy'
   | 'device_reject'
   | 'spec_mismatch'
+  | 'protocol_mismatch'
   | 'unknown';
 
 export interface DevicePushResult {
@@ -57,12 +58,28 @@ export function classifyPushError(error: unknown): PushErrorCode {
     return 'timeout';
   }
   if (lower.includes('设备规格不匹配') || lower.includes('位图大小不匹配') ||
-      lower.includes('spec mismatch') || lower.includes('只支持 epd1-v1')) {
+      lower.includes('spec mismatch') || lower.includes('只支持 epd1-v1') ||
+      lower.includes('"code":"geometry_mismatch"')) {
     return 'spec_mismatch';
   }
-  // 板端明确拒收但设备本身仍在线：例如接收状态机错位导致的 bad magic。
-  // 这类错误对“当前请求”是失败，但已实证可通过状态机复位/重启恢复，不能和 401/403 一样永久 dead。
-  if (lower.includes('bad magic')) {
+  // CRC 已由接收端验证通过时，header 本身仍非法，说明发送方构造/协议代际有问题；重试不会改变内容。
+  if ((lower.includes('"code":"bad_magic"') && lower.includes('"crc_verified":true')) ||
+      lower.includes('"code":"unsupported_version"') ||
+      lower.includes('"code":"reserved_nonzero"') ||
+      lower.includes('"code":"body_size_mismatch"') ||
+      lower.includes('"code":"bad_crc_header"') ||
+      lower.includes('code=ack_trace_missing') ||
+      lower.includes('code=ack_crc_missing')) {
+    return 'protocol_mismatch';
+  }
+  // 板端仍在线但逻辑帧接收/组装/ACK 对不上：优先重试并降级，而不是第一次就永久判死。
+  // 自然语言 bad magic 与没有 crc_verified=true 的结构化 bad_magic 保持旧故障的可恢复语义。
+  if (lower.includes('bad magic') ||
+      lower.includes('"code":"bad_magic"') ||
+      lower.includes('"code":"body_crc_mismatch"') ||
+      lower.includes('"code":"body_overflow"') ||
+      lower.includes('code=ack_trace_mismatch') ||
+      lower.includes('code=ack_crc_mismatch')) {
     return 'device_reject';
   }
   const httpMatch = message.match(/(?:HTTP|status)\s*(\d{3})/i);
