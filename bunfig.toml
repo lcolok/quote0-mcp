@@ -1,0 +1,11 @@
+[test]
+# 默认 `bun test` 只跑可重复、无外部服务依赖的 source unit suite。
+# Integration / live smoke 由 package.json 中的显式 profile 单独执行。
+root = "src"
+pathIgnorePatterns = [
+  "src/api/device-delivery-worker.pg.test.ts",
+  "src/api/device-health-alerts.pg.test.ts",
+  "src/api/device-frame-cache.test.ts",
+  "src/api/news-api-server.test.ts",
+  "src/react-widgets/tests/**"
+]

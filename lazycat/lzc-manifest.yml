@@ -239,7 +239,11 @@ services:
       LLM_MAX_TOKENS: "1000"
       LLM_TEMPERATURE: "0.7"
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
-      NEWS_SCHEDULER_EXTRA_RENDERERS: 'local-eink'
+      # Bark 设备健康状态迁移告警；device key 只通过懒猫控制台注入，不进 Git。
+      BARK_ALERTS_ENABLED: 'true'
+      BARK_DEVICE_KEY: '<set-via-lazycat-console>'
+      BARK_BASE: 'https://bark.logic.heiyu.space'
+      BARK_GROUP: 'quote0-eink'
       AMAP_API_KEY: dae9a4112f54312a2cef32517cc1ecbe
       # ADR-0002 Phase C: niimbot 热敏标签机 push endpoint（4 级 fallback 链的 env 兜底）
       NIIMBOT_ENDPOINT: http://192.168.31.186/api/print/raw

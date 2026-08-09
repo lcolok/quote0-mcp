@@ -21,11 +21,20 @@ import {
   pngTo1BitBitmap,
   pushToEinkDevice,
   type EinkDevice,
+  type EinkPushResult,
+  type EinkStatus,
 } from './eink-converter.js';
 import { createEinkTarget } from '../react-widgets/core/render-targets.js';
 import { classifyPushError, type PushErrorCode } from './push-results.js';
-import { decideFailure, dedupeByDevice } from './delivery-policy.js';
+import { backoffWithJitterMs, decideFailure, dedupeByDevice, type DeviceHealth, type FailureDecision } from './delivery-policy.js';
 import { upsertDeviceFrame } from './device-frame-cache.js';
+import {
+  deliveryAttemptTraceId,
+  pushResultEvidence,
+  recordDeliveryAttemptEvidenceBestEffort,
+} from './delivery-attempt-store.js';
+import { enqueueDeviceHealthTransition } from './device-health-alerts.js';
+import { readDeliveryPngPayload } from './delivery-payload-store.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
 const TICK_MS = 5000;
@@ -40,13 +49,17 @@ let running = false;
 
 export interface DeliveryRow {
   id: string;
-  content_id: number;
+  content_id: number | null;
   device_id: string;
   render_target: string;
   state: string;
   attempts: number;
   max_attempts: number;
   payload_version: number;
+  payload_kind?: 'content' | 'minio-image';
+  payload_ref?: string | null;
+  payload_hash?: string | null;
+  source_key?: string | null;
 }
 
 export function startDeviceDeliveryWorker(): void {
@@ -188,7 +201,7 @@ async function executeBatch(deliveries: DeliveryRow[]): Promise<void> {
     renewLeases(deliveries.map((d) => d.id)).catch((e) => console.warn('delivery lease renew failed:', e));
   }, HEARTBEAT_MS);
 
-  const renderCache = new Map<string, Promise<string>>();
+  const renderCache = new Map<string, Promise<Buffer>>();
   try {
     // 逐条串行执行：批量上限 4，每条对应不同设备（已去重），
     // 串行的代价是最坏 4×35s，换来的是渲染缓存命中简单且日志顺序可读。
@@ -202,40 +215,73 @@ async function executeBatch(deliveries: DeliveryRow[]): Promise<void> {
 
 async function executeDelivery(
   delivery: DeliveryRow,
-  renderCache: Map<string, Promise<string>>,
+  renderCache: Map<string, Promise<Buffer>>,
 ): Promise<void> {
+  const traceId = deliveryAttemptTraceId(delivery.id, delivery.attempts);
+  let resolvedDevice: EinkDevice | undefined;
+  let status: EinkStatus | undefined;
+  let pushResult: EinkPushResult | undefined;
+
+  const baseEvidence = () => ({
+    deliveryId: delivery.id,
+    attemptNo: delivery.attempts,
+    deviceId: delivery.device_id,
+    workerId: WORKER_ID,
+    wireProtocol: resolvedDevice?.wireProtocol,
+    firmware: status?.firmware,
+    protocolDiag: status?.protocol_diag,
+    statusSnapshot: status,
+    ...pushResultEvidence(pushResult),
+    traceId: pushResult?.requestTraceId ?? traceId,
+  });
+
+  // 诊断旁路先开一条 attempt。写失败只告警，绝不阻断 delivery。
+  await recordDeliveryAttemptEvidenceBestEffort({
+    ...baseEvidence(),
+    outcome: 'started',
+  });
+
   try {
     // 1. 查设备（复用 Phase 0 的 deviceIds 过滤能力）
     const devices = await getEinkDevices({ deviceIds: [delivery.device_id] });
     const device = devices.find((d) => d.id === delivery.device_id);
     if (!device) {
       // 设备已被下线/删除：这是配置事实，不是暂时性故障，重试没有意义。
-      await markDead(delivery, 'spec_mismatch', `设备不存在或已停用: ${delivery.device_id}`);
-      await recordRuntimeFailure(delivery.device_id, 'spec_mismatch', 'misconfigured', null);
+      const message = `设备不存在或已停用: ${delivery.device_id}`;
+      await markDead(delivery, 'spec_mismatch', message);
+      await recordRuntimeFailure(delivery.device_id, 'spec_mismatch', 'misconfigured', null, 1);
+      await recordDeliveryAttemptEvidenceBestEffort({
+        ...baseEvidence(),
+        outcome: 'dead',
+        errorCode: 'spec_mismatch',
+        errorText: message,
+        finished: true,
+      });
       return;
     }
 
     // 2. 解析运行时规格 —— 本次投递唯一一次 /status 探测，快照随发送一路传下去。
-    const { device: resolvedDevice, status } = await resolveEinkDeviceSpecWithStatus(device);
+    const resolved = await resolveEinkDeviceSpecWithStatus(device);
+    resolvedDevice = resolved.device;
+    status = resolved.status;
 
-    // 3. 渲染（同 tick 内按 content_id + render_target 复用）
-    const cacheKey = `${delivery.content_id}:${delivery.render_target}`;
-    let pngPath = renderCache.get(cacheKey);
-    if (!pngPath) {
-      pngPath = renderContentForTarget(delivery, resolvedDevice);
-      renderCache.set(cacheKey, pngPath);
-    }
-    const localImagePath = await pngPath;
+    // 3. 取得本次 delivery 的稳定 PNG 字节。
+    // content 会按 runtime RenderTarget 重排；minio-image 则读取 enqueue 时的不可变 SHA256 快照。
+    const pngBuffer = await loadDeliveryPngBuffer(delivery, resolvedDevice, renderCache);
 
     // 4. 物理发送
-    const pngBuffer = await readFile(localImagePath);
     const bitmap = await pngTo1BitBitmap(pngBuffer, resolvedDevice.width, resolvedDevice.height);
-    const result = await pushToEinkDevice(resolvedDevice, bitmap, {
+    pushResult = await pushToEinkDevice(resolvedDevice, bitmap, {
       statusSnapshot: status,
-      // 让板端 /status、HTTP 错误、worker 日志与 DB delivery 可以直接互相反查。
-      traceId: `d${delivery.id}-a${delivery.attempts}`,
+      // 让板端 /status、HTTP 错误、worker 日志与 DB attempt ledger 可以直接互相反查。
+      traceId,
     });
-    if (!result.ok) throw new Error(result.error || '设备推送失败（无错误信息）');
+    // push 返回后马上补齐 request/ACK/结构化板端错误；即使后续 frame cache/DB 状态更新失败，物理证据也不会丢。
+    await recordDeliveryAttemptEvidenceBestEffort({
+      ...baseEvidence(),
+      outcome: 'started',
+    });
+    if (!pushResult.ok) throw new Error(pushResult.error || '设备推送失败（无错误信息）');
 
     // 拉模式 Phase A：推送成功后写帧缓存
     try {
@@ -251,17 +297,97 @@ async function executeDelivery(
 
     await markSucceeded(delivery);
     await recordRuntimeSuccess(delivery.device_id);
+    await recordDeliveryAttemptEvidenceBestEffort({
+      ...baseEvidence(),
+      outcome: 'succeeded',
+      finished: true,
+    });
+    const payloadLabel = (delivery.payload_kind ?? 'content') === 'content'
+      ? `content=${delivery.content_id}`
+      : `source=${delivery.source_key ?? '-'} payload=${delivery.payload_hash?.slice(0, 12) ?? '-'}`;
     console.log(
-      `✅ delivery ${delivery.id} 成功: content=${delivery.content_id} device=${delivery.device_id} ` +
+      `✅ delivery ${delivery.id} 成功: ${payloadLabel} device=${delivery.device_id} ` +
       `target=${delivery.render_target} attempt=${delivery.attempts}/${delivery.max_attempts}`,
     );
   } catch (error) {
-    await handleFailure(delivery, error);
+    if (isPayloadPreparationError(error)) {
+      const failure = await handlePayloadPreparationFailure(delivery, error);
+      await recordDeliveryAttemptEvidenceBestEffort({
+        ...baseEvidence(),
+        outcome: failure.nextState,
+        errorCode: 'payload_error',
+        errorText: failure.message,
+        finished: true,
+      });
+      return;
+    }
+
+    const failure = await handleFailure(delivery, error);
+    await recordDeliveryAttemptEvidenceBestEffort({
+      ...baseEvidence(),
+      outcome: failure.decision.nextState,
+      errorCode: failure.errorCode,
+      errorText: failure.message,
+      finished: true,
+    });
   }
+}
+
+function isPayloadPreparationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.toLowerCase().includes('code=payload_error');
+}
+
+async function loadDeliveryPngBuffer(
+  delivery: DeliveryRow,
+  device: EinkDevice,
+  cache: Map<string, Promise<Buffer>>,
+): Promise<Buffer> {
+  const payloadKind = delivery.payload_kind ?? 'content';
+  if (payloadKind === 'minio-image') {
+    if (!delivery.payload_ref || !delivery.payload_hash) {
+      throw new Error(`delivery ${delivery.id} minio-image 缺 payload_ref/hash code=payload_error`);
+    }
+    const key = `image:${delivery.payload_hash}`;
+    let pending = cache.get(key);
+    if (!pending) {
+      pending = readDeliveryPngPayload(delivery.payload_ref, delivery.payload_hash);
+      cache.set(key, pending);
+    }
+    return pending;
+  }
+
+  if (payloadKind !== 'content') {
+    throw new Error(`delivery ${delivery.id} payload_kind=${payloadKind} 不支持 code=payload_error`);
+  }
+  if (delivery.content_id === null || delivery.content_id === undefined) {
+    throw new Error(`delivery ${delivery.id} content payload 缺 content_id code=payload_error`);
+  }
+
+  const key = `content:${delivery.content_id}:${device.width}x${device.height}`;
+  let pending = cache.get(key);
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const localImagePath = await renderContentForTarget(delivery, device);
+        return await readFile(localImagePath);
+      } catch (error) {
+        throw new Error(
+          `delivery ${delivery.id} content render/read 失败 code=payload_error: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    })();
+    cache.set(key, pending);
+  }
+  return pending;
 }
 
 /** 渲染缓存 miss 时真正排版。返回本地 PNG 路径。 */
 export async function renderContentForTarget(delivery: DeliveryRow, device: EinkDevice): Promise<string> {
+  if (delivery.content_id === null || delivery.content_id === undefined) {
+    throw new Error(`delivery ${delivery.id} 缺 content_id`);
+  }
   const content = await loadContent(delivery.content_id);
   const target = createEinkTarget(device.width, device.height);
   const rendered = await renderSingleEinkTarget(content, target);
@@ -302,7 +428,38 @@ export function buildRenderableFromInventory(item: any): any {
   };
 }
 
-async function handleFailure(delivery: DeliveryRow, error: unknown): Promise<void> {
+/** @internal exported for PostgreSQL regression verification. */
+export async function handlePayloadPreparationFailure(
+  delivery: DeliveryRow,
+  error: unknown,
+): Promise<{ nextState: 'retry_wait' | 'dead'; message: string }> {
+  const message = error instanceof Error ? error.message : String(error);
+  const exhausted = delivery.attempts >= delivery.max_attempts;
+  if (exhausted) {
+    await markDead(delivery, 'payload_error', message);
+    console.error(
+      `❌ delivery ${delivery.id} payload 准备失败且重试耗尽: ` +
+      `attempt=${delivery.attempts}/${delivery.max_attempts} error=${message}`,
+    );
+    return { nextState: 'dead', message };
+  }
+
+  // MinIO / render / 本地文件准备失败属于 server-side delivery infrastructure，
+  // 可退避重试，但绝不能增加 device_runtime_state.consecutive_failures 或打开设备熔断。
+  const retryDelayMs = backoffWithJitterMs(delivery.attempts);
+  await markRetryWait(delivery, 'payload_error', message, retryDelayMs);
+  console.warn(
+    `⚠️ delivery ${delivery.id} payload 准备失败(server-side): ` +
+    `attempt=${delivery.attempts}/${delivery.max_attempts} retry=${Math.round(retryDelayMs / 1000)}s ` +
+    `error=${message}`,
+  );
+  return { nextState: 'retry_wait', message };
+}
+
+async function handleFailure(
+  delivery: DeliveryRow,
+  error: unknown,
+): Promise<{ errorCode: PushErrorCode; message: string; decision: FailureDecision }> {
   const errorCode = classifyPushError(error);
   const message = error instanceof Error ? error.message : String(error);
 
@@ -320,7 +477,13 @@ async function handleFailure(delivery: DeliveryRow, error: unknown): Promise<voi
   } else {
     await markRetryWait(delivery, errorCode, message, decision.retryDelayMs!);
   }
-  await recordRuntimeFailure(delivery.device_id, errorCode, decision.health, decision.circuitOpenMs);
+  await recordRuntimeFailure(
+    delivery.device_id,
+    errorCode,
+    decision.health,
+    decision.circuitOpenMs,
+    consecutiveFailures,
+  );
 
   console.warn(
     `⚠️ delivery ${delivery.id} 失败(${decision.reason}): device=${delivery.device_id} ` +
@@ -328,6 +491,7 @@ async function handleFailure(delivery: DeliveryRow, error: unknown): Promise<voi
     `next=${decision.nextState}${decision.retryDelayMs !== null ? ` in ${Math.round(decision.retryDelayMs / 1000)}s` : ''} ` +
     `consecutiveFailures=${consecutiveFailures} error=${message}`,
   );
+  return { errorCode, message, decision };
 }
 
 async function markSucceeded(delivery: DeliveryRow): Promise<void> {
@@ -341,7 +505,7 @@ async function markSucceeded(delivery: DeliveryRow): Promise<void> {
   );
 }
 
-async function markDead(delivery: DeliveryRow, code: PushErrorCode, err: string): Promise<void> {
+async function markDead(delivery: DeliveryRow, code: string, err: string): Promise<void> {
   await getPostgresDatabase().getPool().query(
     `UPDATE device_deliveries
         SET state='dead', finished_at=now(), updated_at=now(),
@@ -354,7 +518,7 @@ async function markDead(delivery: DeliveryRow, code: PushErrorCode, err: string)
 
 async function markRetryWait(
   delivery: DeliveryRow,
-  code: PushErrorCode,
+  code: string,
   err: string,
   delayMs: number,
 ): Promise<void> {
@@ -384,42 +548,142 @@ async function bumpConsecutiveFailures(deviceId: string): Promise<number> {
   return Number(r.rows[0]?.consecutive_failures ?? 1);
 }
 
-async function recordRuntimeFailure(
+async function enqueueHealthTransitionBestEffortInTx(
+  client: any,
+  transition: {
+    deviceId: string;
+    fromHealth: DeviceHealth;
+    toHealth: DeviceHealth;
+    errorCode?: PushErrorCode | null;
+    consecutiveFailures?: number;
+  },
+): Promise<void> {
+  await client.query('SAVEPOINT device_health_alert_enqueue');
+  try {
+    await enqueueDeviceHealthTransition(client, transition);
+    await client.query('RELEASE SAVEPOINT device_health_alert_enqueue');
+  } catch (error) {
+    // PostgreSQL 某条 alert SQL 失败会把当前事务置 aborted；回滚到 savepoint 后
+    // 仍然提交 runtime state，保证通知旁路绝不反向破坏 delivery 成败。
+    await client.query('ROLLBACK TO SAVEPOINT device_health_alert_enqueue').catch(() => {});
+    await client.query('RELEASE SAVEPOINT device_health_alert_enqueue').catch(() => {});
+    console.warn(
+      `⚠️ device health alert enqueue failed: device=${transition.deviceId} ` +
+      `${transition.fromHealth}→${transition.toHealth}`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/** @internal exported for PostgreSQL integration verification. */
+export async function recordRuntimeFailure(
   deviceId: string,
   code: PushErrorCode,
   health: string,
   circuitOpenMs: number | null,
+  consecutiveFailures: number,
 ): Promise<void> {
-  // health='unknown' 表示「本次判决不改变健康度」（失败次数还没到降级阈值），
-  // 此时保留既有 health，避免把一台 healthy 设备的一次抖动直接抹成 unknown。
-  await getPostgresDatabase().getPool().query(
-    `UPDATE device_runtime_state
-        SET health = CASE WHEN $2 = 'unknown' THEN health ELSE $2 END,
-            last_error_code = $3,
-            circuit_open_until = CASE
-              WHEN $4::bigint IS NULL THEN circuit_open_until
-              ELSE now() + ($4 || ' milliseconds')::interval
-            END,
-            updated_at = now()
-      WHERE device_id = $1`,
-    [deviceId, health, code, circuitOpenMs === null ? null : String(Math.round(circuitOpenMs))],
-  );
+  const pool = getPostgresDatabase().getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const previous = await client.query(
+      `SELECT health FROM device_runtime_state WHERE device_id=$1 FOR UPDATE`,
+      [deviceId],
+    );
+    const fromHealth = (previous.rows[0]?.health ?? 'unknown') as DeviceHealth;
+    // health='unknown' 表示「本次判决不改变健康度」（失败次数还没到降级阈值）。
+    const toHealth = (health === 'unknown' ? fromHealth : health) as DeviceHealth;
+
+    await client.query(
+      `INSERT INTO device_runtime_state
+         (device_id, health, last_failure_at, consecutive_failures,
+          circuit_open_until, last_error_code, updated_at)
+       VALUES (
+         $1,$2,now(),$5,
+         CASE WHEN $4::bigint IS NULL THEN NULL ELSE now() + ($4 || ' milliseconds')::interval END,
+         $3,now()
+       )
+       ON CONFLICT (device_id) DO UPDATE SET
+         health=$2,
+         last_failure_at=now(),
+         consecutive_failures=GREATEST(device_runtime_state.consecutive_failures, $5),
+         last_error_code=$3,
+         circuit_open_until=CASE
+           WHEN $4::bigint IS NULL THEN device_runtime_state.circuit_open_until
+           ELSE now() + ($4 || ' milliseconds')::interval
+         END,
+         updated_at=now()`,
+      [
+        deviceId,
+        toHealth,
+        code,
+        circuitOpenMs === null ? null : String(Math.round(circuitOpenMs)),
+        Math.max(1, consecutiveFailures),
+      ],
+    );
+
+    await enqueueHealthTransitionBestEffortInTx(client, {
+      deviceId,
+      fromHealth,
+      toHealth,
+      errorCode: code,
+      consecutiveFailures,
+    });
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-async function recordRuntimeSuccess(deviceId: string): Promise<void> {
-  await getPostgresDatabase().getPool().query(
-    `INSERT INTO device_runtime_state
-       (device_id, health, last_success_at, consecutive_failures, circuit_open_until, last_error_code, updated_at)
-     VALUES ($1, 'healthy', now(), 0, NULL, NULL, now())
-     ON CONFLICT (device_id) DO UPDATE
-        SET health='healthy',
-            last_success_at=now(),
-            consecutive_failures=0,
-            circuit_open_until=NULL,
-            last_error_code=NULL,
-            updated_at=now()`,
-    [deviceId],
-  );
+/** @internal exported for PostgreSQL integration verification. */
+export async function recordRuntimeSuccess(deviceId: string): Promise<void> {
+  const pool = getPostgresDatabase().getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const previous = await client.query(
+      `SELECT health, last_error_code, consecutive_failures
+         FROM device_runtime_state WHERE device_id=$1 FOR UPDATE`,
+      [deviceId],
+    );
+    const previousRow = previous.rows[0];
+    const fromHealth = (previousRow?.health ?? 'unknown') as DeviceHealth;
+
+    await client.query(
+      `INSERT INTO device_runtime_state
+         (device_id, health, last_success_at, consecutive_failures, circuit_open_until, last_error_code, updated_at)
+       VALUES ($1, 'healthy', now(), 0, NULL, NULL, now())
+       ON CONFLICT (device_id) DO UPDATE
+          SET health='healthy',
+              last_success_at=now(),
+              consecutive_failures=0,
+              circuit_open_until=NULL,
+              last_error_code=NULL,
+              updated_at=now()`,
+      [deviceId],
+    );
+
+    // 初次建行 unknown→healthy 不通知；真正的 degraded/offline/misconfigured→healthy 才 enqueue recovery。
+    if (previousRow) {
+      await enqueueHealthTransitionBestEffortInTx(client, {
+        deviceId,
+        fromHealth,
+        toHealth: 'healthy',
+        errorCode: previousRow.last_error_code as PushErrorCode | null,
+        consecutiveFailures: Number(previousRow.consecutive_failures ?? 0),
+      });
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function sleep(ms: number): Promise<void> {

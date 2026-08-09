@@ -35,6 +35,8 @@ let ackCrcOverride: string | undefined;
 let omitAckTrace = false;
 let omitAckCrc = false;
 let advertiseDiagnostics = true;
+let bitmapResponseStatus = 200;
+let bitmapErrorBody = '';
 
 let realFetch: typeof fetch;
 
@@ -59,6 +61,15 @@ const stubFetch = (async (input: any, init?: any) => {
   if (url.endsWith('/display/bitmap')) {
     bitmapCalls += 1;
     lastBitmapHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+    if (bitmapResponseStatus !== 200) {
+      return new Response(bitmapErrorBody, {
+        status: bitmapResponseStatus,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-EPD-Trace-Id': lastBitmapHeaders['x-epd-trace-id'] ?? '',
+        },
+      });
+    }
     return new Response(JSON.stringify({
       ok: true,
       ts: 12345,
@@ -92,6 +103,8 @@ describe('EPD1 /status 单快照', () => {
     omitAckTrace = false;
     omitAckCrc = false;
     advertiseDiagnostics = true;
+    bitmapResponseStatus = 200;
+    bitmapErrorBody = '';
   });
 
   it('resolve + push 全链路只探测一次 /status', async () => {
@@ -112,6 +125,11 @@ describe('EPD1 /status 单快照', () => {
     expect(lastBitmapHeaders['x-epd-crc32']).toMatch(/^[0-9a-f]{8}$/);
     expect(result.traceId).toBe('d123-a2');
     expect(result.crc32).toBe(lastBitmapHeaders['x-epd-crc32']);
+    expect(result.requestTraceId).toBe('d123-a2');
+    expect(result.requestCrc32).toBe(lastBitmapHeaders['x-epd-crc32']);
+    expect(result.bodyBytes).toBe(16 + PLANE_BYTES);
+    expect(result.ackTraceId).toBe('d123-a2');
+    expect(result.ackCrc32).toBe(lastBitmapHeaders['x-epd-crc32']);
     // 关键断言：推送环节复用快照，没有发起第二次 /status
     expect(statusCalls).toBe(1);
   });
@@ -126,6 +144,8 @@ describe('EPD1 /status 单快照', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('code=ack_trace_mismatch');
+    expect(result.requestTraceId).toBe('d456-a1');
+    expect(result.ackTraceId).toBe('wrong-trace');
 
     ackTraceOverride = undefined;
     ackCrcOverride = '00000000';
@@ -135,6 +155,38 @@ describe('EPD1 /status 单快照', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('code=ack_crc_mismatch');
+    expect(result.requestCrc32).toMatch(/^[0-9a-f]{8}$/);
+    expect(result.ackCrc32).toBe('00000000');
+  });
+
+  it('HTTP 结构化板端错误会保留为 deviceError，供 attempt ledger 入库', async () => {
+    const { device: resolved, status } = await resolveEinkDeviceSpecWithStatus(DEVICE);
+    bitmapResponseStatus = 400;
+    bitmapErrorBody = JSON.stringify({
+      error: 'body crc mismatch',
+      code: 'body_crc_mismatch',
+      stage: 'integrity',
+      trace_id: 'd790-a1',
+      expect: 'DEADBEEF',
+      got: '0513DEE1',
+    });
+
+    const result = await pushToEinkDevice(resolved, Buffer.alloc(PLANE_BYTES), {
+      statusSnapshot: status,
+      traceId: 'd790-a1',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.requestTraceId).toBe('d790-a1');
+    expect(result.requestCrc32).toMatch(/^[0-9a-f]{8}$/);
+    expect(result.bodyBytes).toBe(16 + PLANE_BYTES);
+    expect(result.ackTraceId).toBe('d790-a1');
+    expect(result.deviceError).toMatchObject({
+      code: 'body_crc_mismatch',
+      stage: 'integrity',
+      expect: 'DEADBEEF',
+      got: '0513DEE1',
+    });
   });
 
   it('设备声明 protocol_diag=1 后缺少 ACK 证据会失败，不静默伪装成旧固件', async () => {

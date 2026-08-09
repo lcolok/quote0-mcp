@@ -44,6 +44,30 @@ describe("news-api-server endpoints", () => {
     expect(allIds).toContain("solidot");
   });
 
+  it("GET /api/delivery-attempts validates filters before touching DB", async () => {
+    let res = await app.request("/api/delivery-attempts?delivery_id=0");
+    expect(res.status).toBe(400);
+    let body = await res.json();
+    expect(body.error).toContain("delivery_id");
+
+    res = await app.request("/api/delivery-attempts?outcome=maybe");
+    expect(res.status).toBe(400);
+    body = await res.json();
+    expect(body.error).toContain("outcome");
+  });
+
+  it("GET /api/device-alerts validates state/level before touching DB", async () => {
+    let res = await app.request("/api/device-alerts?state=maybe");
+    expect(res.status).toBe(400);
+    let body = await res.json();
+    expect(body.error).toContain("state");
+
+    res = await app.request("/api/device-alerts?level=urgent");
+    expect(res.status).toBe(400);
+    body = await res.json();
+    expect(body.error).toContain("level");
+  });
+
   // @ts-ignore — bun:test timeout option typing
   it("POST /api/news/process with mock source should succeed", { timeout: 15000 }, async () => {
     const res = await app.request("/api/news/process", {

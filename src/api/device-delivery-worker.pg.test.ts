@@ -14,6 +14,8 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { Pool } from 'pg';
+import { recordDeliveryAttemptEvidence } from './delivery-attempt-store.js';
+import { handlePayloadPreparationFailure } from './device-delivery-worker.js';
 
 const CONN = process.env.TEST_DATABASE_URL
   || 'postgresql://quote0_user:quote0_password@localhost:25432/quote0_cache';
@@ -26,7 +28,7 @@ let pgAvailable = false;
 const PHASE1_MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS device_deliveries (
     id BIGSERIAL PRIMARY KEY,
-    content_id INTEGER NOT NULL,
+    content_id INTEGER,
     device_id TEXT NOT NULL,
     render_target TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'queued',
@@ -38,14 +40,64 @@ const PHASE1_MIGRATIONS = [
     last_error_code TEXT,
     last_error TEXT,
     payload_version INTEGER NOT NULL DEFAULT 1,
+    payload_kind TEXT NOT NULL DEFAULT 'content',
+    payload_ref TEXT,
+    payload_hash TEXT,
+    source_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (content_id, device_id, payload_version)
   )`,
+  `ALTER TABLE device_deliveries ALTER COLUMN content_id DROP NOT NULL`,
+  `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS payload_kind TEXT NOT NULL DEFAULT 'content'`,
+  `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS payload_ref TEXT`,
+  `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS payload_hash TEXT`,
+  `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS source_key TEXT`,
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'device_deliveries_payload_kind_check') THEN
+       ALTER TABLE device_deliveries ADD CONSTRAINT device_deliveries_payload_kind_check
+         CHECK (payload_kind IN ('content','minio-image'));
+     END IF;
+   END $$`,
   `CREATE INDEX IF NOT EXISTS idx_deliveries_due ON device_deliveries(state, next_attempt_at)`,
   `CREATE INDEX IF NOT EXISTS idx_deliveries_device ON device_deliveries(device_id, state)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_source_version
+     ON device_deliveries(source_key, device_id, payload_version)
+     WHERE payload_kind = 'minio-image' AND source_key IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_deliveries_source
+     ON device_deliveries(source_key, created_at DESC)
+     WHERE source_key IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS device_delivery_attempts (
+    id BIGSERIAL PRIMARY KEY,
+    delivery_id BIGINT NOT NULL REFERENCES device_deliveries(id) ON DELETE CASCADE,
+    attempt_no INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    worker_id TEXT,
+    wire_protocol TEXT,
+    firmware TEXT,
+    protocol_diag INTEGER,
+    trace_id TEXT,
+    request_crc32 TEXT,
+    body_bytes INTEGER,
+    ack_trace_id TEXT,
+    ack_crc32 TEXT,
+    status_snapshot JSONB,
+    device_error JSONB,
+    outcome TEXT NOT NULL DEFAULT 'started',
+    error_code TEXT,
+    error_text TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (delivery_id, attempt_no)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_delivery_attempts_device_time
+     ON device_delivery_attempts(device_id, started_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_delivery_attempts_trace
+     ON device_delivery_attempts(trace_id) WHERE trace_id IS NOT NULL`,
   `CREATE TABLE IF NOT EXISTS device_runtime_state (
     device_id TEXT PRIMARY KEY,
     health TEXT NOT NULL DEFAULT 'unknown',
@@ -180,10 +232,10 @@ describe('Phase 1 · device_deliveries 集成测试（真实 PostgreSQL）', () 
     const tables = await pool!.query(
       `SELECT table_name FROM information_schema.tables
         WHERE table_schema='public' AND table_name = ANY($1)`,
-      [['device_deliveries', 'device_runtime_state']],
+      [['device_deliveries', 'device_delivery_attempts', 'device_runtime_state']],
     );
     expect(tables.rows.map((r: any) => r.table_name).sort())
-      .toEqual(['device_deliveries', 'device_runtime_state']);
+      .toEqual(['device_deliveries', 'device_delivery_attempts', 'device_runtime_state']);
 
     const idx = await pool!.query(
       `SELECT indexname FROM pg_indexes WHERE tablename='device_deliveries'`,
@@ -191,6 +243,14 @@ describe('Phase 1 · device_deliveries 集成测试（真实 PostgreSQL）', () 
     const names = idx.rows.map((r: any) => r.indexname);
     expect(names).toContain('idx_deliveries_due');
     expect(names).toContain('idx_deliveries_device');
+    expect(names).toContain('idx_deliveries_source_version');
+    expect(names).toContain('idx_deliveries_source');
+    const attemptIdx = await pool!.query(
+      `SELECT indexname FROM pg_indexes WHERE tablename='device_delivery_attempts'`,
+    );
+    const attemptIndexNames = attemptIdx.rows.map((r: any) => r.indexname);
+    expect(attemptIndexNames).toContain('idx_delivery_attempts_device_time');
+    expect(attemptIndexNames).toContain('idx_delivery_attempts_trace');
 
     // 唯一键真的生效：同 (content_id, device_id, payload_version) 第二次插入被 ON CONFLICT 吞掉
     await cleanup();
@@ -214,6 +274,160 @@ describe('Phase 1 · device_deliveries 集成测试（真实 PostgreSQL）', () 
        ON CONFLICT (content_id, device_id, payload_version) DO NOTHING RETURNING id`,
     );
     expect(c.rows).toHaveLength(1);
+    await cleanup();
+  });
+
+  maybe('①a pre-rendered delivery：content_id 可空、source/version 幂等且能与 content 行共存', async () => {
+    await cleanup();
+    const hash = 'a'.repeat(64);
+    const ref = `delivery-payloads/sha256/${hash}.png`;
+
+    const first = await pool!.query(
+      `INSERT INTO device_deliveries (
+         content_id,device_id,render_target,payload_version,payload_kind,payload_ref,payload_hash,source_key
+       ) VALUES (
+         NULL,'pgtest-image-1','eink-296x152',1,'minio-image',$1,$2,'weather:test'
+       ) ON CONFLICT DO NOTHING RETURNING *`,
+      [ref, hash],
+    );
+    const duplicate = await pool!.query(
+      `INSERT INTO device_deliveries (
+         content_id,device_id,render_target,payload_version,payload_kind,payload_ref,payload_hash,source_key
+       ) VALUES (
+         NULL,'pgtest-image-1','eink-296x152',1,'minio-image',$1,$2,'weather:test'
+       ) ON CONFLICT DO NOTHING RETURNING id`,
+      [ref, hash],
+    );
+    const nextVersion = await pool!.query(
+      `INSERT INTO device_deliveries (
+         content_id,device_id,render_target,payload_version,payload_kind,payload_ref,payload_hash,source_key
+       ) VALUES (
+         NULL,'pgtest-image-1','eink-296x152',2,'minio-image',$1,$2,'weather:test'
+       ) ON CONFLICT DO NOTHING RETURNING id`,
+      [ref, hash],
+    );
+    const content = await pool!.query(
+      `INSERT INTO device_deliveries (content_id,device_id,render_target,payload_version)
+       VALUES (900049,'pgtest-image-1','eink-296x152',1) RETURNING *`,
+    );
+
+    expect(first.rows).toHaveLength(1);
+    expect(first.rows[0].content_id).toBeNull();
+    expect(first.rows[0].payload_kind).toBe('minio-image');
+    expect(first.rows[0].payload_ref).toBe(ref);
+    expect(duplicate.rows).toHaveLength(0);
+    expect(nextVersion.rows).toHaveLength(1);
+    expect(content.rows).toHaveLength(1);
+    expect(content.rows[0].payload_kind).toBe('content');
+    await cleanup();
+  });
+
+  maybe('①b attempt ledger：同一 delivery 的多次重试证据不会互相覆盖', async () => {
+    await cleanup();
+    const delivery = await insertDelivery({ device_id: 'pgtest-eink-attempt', content_id: 900050 });
+
+    await recordDeliveryAttemptEvidence({
+      deliveryId: String(delivery.id),
+      attemptNo: 1,
+      deviceId: delivery.device_id,
+      traceId: 'dtest-a1',
+      requestCrc32: 'AAAABBBB',
+      bodyBytes: 5640,
+      ackTraceId: 'dtest-a1',
+      ackCrc32: 'AAAABBBB',
+      statusSnapshot: { firmware: 'eink-core v1', protocol_diag: 1, crc_mismatches: 1 },
+      outcome: 'started',
+    });
+    // 同一 attempt 分阶段补齐，不能产生第二行。
+    await recordDeliveryAttemptEvidence({
+      deliveryId: String(delivery.id),
+      attemptNo: 1,
+      deviceId: delivery.device_id,
+      traceId: 'dtest-a1',
+      outcome: 'retry_wait',
+      errorCode: 'busy',
+      errorText: 'HTTP 409 busy',
+      finished: true,
+    });
+    await recordDeliveryAttemptEvidence({
+      deliveryId: String(delivery.id),
+      attemptNo: 2,
+      deviceId: delivery.device_id,
+      traceId: 'dtest-a2',
+      requestCrc32: 'CCCCDDDD',
+      bodyBytes: 5640,
+      ackTraceId: 'dtest-a2',
+      ackCrc32: 'CCCCDDDD',
+      statusSnapshot: { firmware: 'eink-core v1', protocol_diag: 1, crc_mismatches: 1 },
+      outcome: 'succeeded',
+      finished: true,
+    });
+
+    const rows = await pool!.query(
+      `SELECT attempt_no, trace_id, request_crc32, ack_crc32, outcome, status_snapshot
+         FROM device_delivery_attempts
+        WHERE delivery_id=$1 ORDER BY attempt_no`,
+      [delivery.id],
+    );
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows.map((r: any) => [r.attempt_no, r.trace_id, r.outcome])).toEqual([
+      [1, 'dtest-a1', 'retry_wait'],
+      [2, 'dtest-a2', 'succeeded'],
+    ]);
+    expect(rows.rows[0].request_crc32).toBe('AAAABBBB');
+    expect(rows.rows[1].ack_crc32).toBe('CCCCDDDD');
+    expect(rows.rows[1].status_snapshot.protocol_diag).toBe(1);
+
+    // delivery 删除时 attempt 证据按 FK CASCADE 一并清理，不留孤儿。
+    await cleanup();
+    const left = await pool!.query(
+      `SELECT count(*)::int AS n FROM device_delivery_attempts WHERE delivery_id=$1`,
+      [delivery.id],
+    );
+    expect(left.rows[0].n).toBe(0);
+  });
+
+  maybe('①c server-side payload_error 只重试 delivery，不污染设备健康度/熔断', async () => {
+    await cleanup();
+    const delivery = await insertDelivery({
+      device_id: 'pgtest-payload-sidepath',
+      content_id: 900051,
+      attempts: 1,
+      max_attempts: 5,
+    });
+    await pool!.query(
+      `INSERT INTO device_runtime_state
+         (device_id,health,consecutive_failures,circuit_open_until,last_error_code,updated_at)
+       VALUES ($1,'healthy',0,NULL,NULL,now())`,
+      [delivery.device_id],
+    );
+
+    const result = await handlePayloadPreparationFailure(
+      { ...delivery, attempts: 1 },
+      new Error('synthetic MinIO read failed code=payload_error'),
+    );
+    expect(result.nextState).toBe('retry_wait');
+
+    const d = await pool!.query(
+      `SELECT state,last_error_code,attempts,next_attempt_at > now() AS future_retry
+         FROM device_deliveries WHERE id=$1`,
+      [delivery.id],
+    );
+    expect(d.rows[0].state).toBe('retry_wait');
+    expect(d.rows[0].last_error_code).toBe('payload_error');
+    expect(d.rows[0].future_retry).toBe(true);
+
+    const runtime = await pool!.query(
+      `SELECT health,consecutive_failures,circuit_open_until,last_error_code
+         FROM device_runtime_state WHERE device_id=$1`,
+      [delivery.device_id],
+    );
+    expect(runtime.rows[0]).toMatchObject({
+      health: 'healthy',
+      consecutive_failures: 0,
+      circuit_open_until: null,
+      last_error_code: null,
+    });
     await cleanup();
   });
 

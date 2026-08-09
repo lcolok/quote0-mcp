@@ -1,7 +1,6 @@
 import { createHash } from 'crypto';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
-import { stagedCacheManager } from '../react-widgets/core/staged-cache-manager.js';
 import { devicePusher } from './device-pusher.js';
 import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type { NewsData } from '../react-widgets/components/NewsWidget.js';
@@ -71,6 +70,10 @@ export async function processNews(body: NewsProcessRequest): Promise<FullNewsPro
     rawIndex: params.index,
     ...body.context
   };
+
+  // staged cache 会构造 MinIO image storage；只有真正执行 processNews 时才加载，
+  // 避免仅 import 本模块（例如 producer/unit tests）就产生外部网络副作用。
+  const { stagedCacheManager } = await import('../react-widgets/core/staged-cache-manager.js');
 
   try {
     await stagedCacheManager.initialize();

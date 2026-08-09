@@ -177,7 +177,6 @@ export class PostgresDatabase {
       `ALTER TABLE push_devices ADD COLUMN IF NOT EXISTS dpi INTEGER`,
       // Phase F (ADR-0004): BizyAir 图像驱动标签
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'svg'`,
-      `ALTER TABLE label_gen_turns ADD COLUMN IF NOT EXISTS deleted_at timestamptz`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_model text`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS source_image_url text`,
       // Phase F v1.2.1: async 生成需要新增 generating/failed 状态 + last_error 字段
@@ -381,6 +380,7 @@ export class PostgresDatabase {
         created_at        timestamptz NOT NULL DEFAULT now()
       )`,
       `ALTER TABLE label_gen_turns ADD COLUMN IF NOT EXISTS effective_prompt_zh text`,
+      `ALTER TABLE label_gen_turns ADD COLUMN IF NOT EXISTS deleted_at timestamptz`,
       `CREATE INDEX IF NOT EXISTS label_gen_turns_session_idx
         ON label_gen_turns(session_id, created_at)`,
       `ALTER TABLE label_batch_items ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES label_sessions(id) ON DELETE SET NULL`,
@@ -396,10 +396,11 @@ export class PostgresDatabase {
       // 每台设备一条独立、幂等、可重试的 delivery。Phase 0 的“当轮推完即忘”
       // （离线设备错过的内容永不补）升级为“晚到但不重”。
       // 队列就是 PostgreSQL：认领走 FOR UPDATE SKIP LOCKED + lease，
-      // 幂等靠 UNIQUE (content_id, device_id, payload_version)。
+      // 新闻内容幂等靠 UNIQUE (content_id, device_id, payload_version)；
+      // weather/Memo 等预渲染图则走 source_key + payload_version 的独立 partial unique index。
       `CREATE TABLE IF NOT EXISTS device_deliveries (
         id BIGSERIAL PRIMARY KEY,
-        content_id INTEGER NOT NULL,
+        content_id INTEGER,
         device_id TEXT NOT NULL,
         render_target TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'queued',
@@ -411,14 +412,68 @@ export class PostgresDatabase {
         last_error_code TEXT,
         last_error TEXT,
         payload_version INTEGER NOT NULL DEFAULT 1,
+        payload_kind TEXT NOT NULL DEFAULT 'content',
+        payload_ref TEXT,
+        payload_hash TEXT,
+        source_key TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         started_at TIMESTAMPTZ,
         finished_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         UNIQUE (content_id, device_id, payload_version)
       )`,
+      // 已存在的生产表走幂等 ALTER；旧行默认保持 content 路径。
+      `ALTER TABLE device_deliveries ALTER COLUMN content_id DROP NOT NULL`,
+      `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS payload_kind TEXT NOT NULL DEFAULT 'content'`,
+      `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS payload_ref TEXT`,
+      `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS payload_hash TEXT`,
+      `ALTER TABLE device_deliveries ADD COLUMN IF NOT EXISTS source_key TEXT`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'device_deliveries_payload_kind_check') THEN
+          ALTER TABLE device_deliveries ADD CONSTRAINT device_deliveries_payload_kind_check
+            CHECK (payload_kind IN ('content','minio-image'));
+        END IF;
+      END $$`,
       `CREATE INDEX IF NOT EXISTS idx_deliveries_due ON device_deliveries(state, next_attempt_at)`,
       `CREATE INDEX IF NOT EXISTS idx_deliveries_device ON device_deliveries(device_id, state)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_source_version
+         ON device_deliveries(source_key, device_id, payload_version)
+         WHERE payload_kind = 'minio-image' AND source_key IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_source
+         ON device_deliveries(source_key, created_at DESC)
+         WHERE source_key IS NOT NULL`,
+
+      // 每次 attempt 单独留证，避免 delivery 重试时覆盖前一次 trace/CRC/设备错误现场。
+      // 这张表是旁路 observability：worker 写失败不得改变 delivery 的业务判决。
+      `CREATE TABLE IF NOT EXISTS device_delivery_attempts (
+        id BIGSERIAL PRIMARY KEY,
+        delivery_id BIGINT NOT NULL REFERENCES device_deliveries(id) ON DELETE CASCADE,
+        attempt_no INTEGER NOT NULL,
+        device_id TEXT NOT NULL,
+        worker_id TEXT,
+        wire_protocol TEXT,
+        firmware TEXT,
+        protocol_diag INTEGER,
+        trace_id TEXT,
+        request_crc32 TEXT,
+        body_bytes INTEGER,
+        ack_trace_id TEXT,
+        ack_crc32 TEXT,
+        status_snapshot JSONB,
+        device_error JSONB,
+        outcome TEXT NOT NULL DEFAULT 'started',
+        error_code TEXT,
+        error_text TEXT,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (delivery_id, attempt_no)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_delivery_attempts_device_time
+         ON device_delivery_attempts(device_id, started_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_delivery_attempts_trace
+         ON device_delivery_attempts(trace_id) WHERE trace_id IS NOT NULL`,
 
       // 登记配置（push_devices）是期望值，runtime_state 是观察值。两者语义不同，
       // 不合并：期望值由人写、观察值由 worker 写，混在一张表里改一个会误伤另一个。
@@ -432,6 +487,36 @@ export class PostgresDatabase {
         last_error_code TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
+
+      // 设备健康状态迁移告警 outbox。健康更新与 enqueue 同事务；Bark 网络发送由独立 worker 完成，
+      // 因此通知失败不会阻塞 delivery，进程重启也不会丢 pending 事件。
+      `CREATE TABLE IF NOT EXISTS device_health_alerts (
+        id BIGSERIAL PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        from_health TEXT NOT NULL,
+        to_health TEXT NOT NULL,
+        alert_kind TEXT NOT NULL,
+        level TEXT NOT NULL,
+        error_code TEXT,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        sent_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_device_health_alerts_due
+         ON device_health_alerts(state, next_attempt_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_device_health_alerts_device_time
+         ON device_health_alerts(device_id, created_at DESC)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_device_health_alerts_one_pending_target
+         ON device_health_alerts(device_id, to_health)
+         WHERE state IN ('pending','leased','retry_wait')`,
     ];
   }
 
@@ -807,6 +892,23 @@ export class PostgresDatabase {
           ('rss', 0, 0, 0)
       ON CONFLICT (cache_type) DO NOTHING;
 
+      -- 推送设备基础表必须属于 base schema：后面的 update_push_devices_updated_at trigger
+      -- 在 migration runner 之前创建；若只在 migrations 里 CREATE，空数据库冷启动会先报 42P01。
+      CREATE TABLE IF NOT EXISTS push_devices (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          base_url TEXT NOT NULL,
+          token TEXT NOT NULL DEFAULT '',
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          wire_protocol TEXT NOT NULL DEFAULT 'legacy-raw-v0',
+          color_mode TEXT NOT NULL DEFAULT 'mono-1bit',
+          plane_count INTEGER NOT NULL DEFAULT 1,
+          enabled BOOLEAN NOT NULL DEFAULT true,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       -- 创建更新触发器函数
       CREATE OR REPLACE FUNCTION update_updated_at_column()
       RETURNS TRIGGER AS $$
@@ -981,6 +1083,22 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS labels_status_idx ON labels(status);
       CREATE INDEX IF NOT EXISTS labels_created_at_idx ON labels(created_at DESC);
       CREATE INDEX IF NOT EXISTS labels_tags_gin_idx ON labels USING gin(tags);
+
+      -- image_presets 必须在 label_batches 之前属于 base schema，因为 label_batches.preset_id
+      -- 直接 REFERENCES image_presets。source_label_id 反向引用 labels，因此放在 labels 之后可打破依赖环。
+      CREATE TABLE IF NOT EXISTS image_presets (
+        id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        name             text NOT NULL,
+        prompt           text NOT NULL,
+        model            text,
+        model_options    jsonb,
+        thumbnail_path   text,
+        source_label_id  uuid REFERENCES labels(id) ON DELETE SET NULL,
+        use_count        int NOT NULL DEFAULT 0,
+        last_used_at     timestamptz,
+        created_at       timestamptz NOT NULL DEFAULT now(),
+        updated_at       timestamptz NOT NULL DEFAULT now()
+      );
 
       -- 元器件编号标签渲染/打印索引(2026-07-18)：只存"编号→渲染出的 label"的幂等映射，
       -- 不存储任何元件元数据(型号/厂商/封装等留给外部料号管理系统，本项目刻意与之解耦)。

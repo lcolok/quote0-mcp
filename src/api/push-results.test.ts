@@ -43,6 +43,8 @@ describe('classifyPushError', () => {
     expect(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}'))).toBe('device_reject');
     expect(classifyPushError(new Error('HTTP 400: BAD MAGIC'))).toBe('device_reject');
     expect(classifyPushError(new Error('HTTP 400: {"code":"bad_magic","crc_verified":false}'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: {"error":"empty body"}'))).toBe('device_reject');
+    expect(classifyPushError(new Error('HTTP 400: {"error":"empty body","code":"empty_body"}'))).toBe('device_reject');
     expect(classifyPushError(new Error('HTTP 400: {"code":"body_crc_mismatch"}'))).toBe('device_reject');
     expect(classifyPushError(new Error('HTTP 400: {"code":"body_overflow"}'))).toBe('device_reject');
     expect(classifyPushError(new Error('EPD1 ACK trace mismatch code=ack_trace_mismatch'))).toBe('device_reject');

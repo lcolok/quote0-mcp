@@ -33,6 +33,7 @@ import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targ
 import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 import { getDeviceFrame } from './device-frame-cache.js';
+import { isBarkAlertsConfigured } from './device-health-alerts.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -1847,6 +1848,149 @@ app.get('/api/deliveries', async (c) => {
       success: false,
       error: error instanceof Error ? error.message : '获取投递任务列表失败'
     }, 500);
+  }
+});
+
+// delivery attempt 证据账本：每次重试一行，保留 trace/CRC/ACK/设备状态快照。
+app.get('/api/delivery-attempts', async (c) => {
+  try {
+    const deliveryId = c.req.query('delivery_id');
+    const deviceId = c.req.query('device_id');
+    const traceId = c.req.query('trace_id');
+    const errorCode = c.req.query('error_code');
+    const outcome = c.req.query('outcome');
+    const limitRaw = parseInt(c.req.query('limit') || '50', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 50;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (deliveryId) {
+      if (!/^[1-9]\d*$/.test(deliveryId)) {
+        return c.json({ success: false, error: 'delivery_id 必须是正整数' }, 400);
+      }
+      params.push(deliveryId);
+      conditions.push(`delivery_id = $${params.length}::bigint`);
+    }
+    if (deviceId) {
+      params.push(deviceId);
+      conditions.push(`device_id = $${params.length}`);
+    }
+    if (traceId) {
+      params.push(traceId);
+      conditions.push(`trace_id = $${params.length}`);
+    }
+    if (errorCode) {
+      params.push(errorCode);
+      conditions.push(`error_code = $${params.length}`);
+    }
+    if (outcome) {
+      const allowedOutcomes = new Set(['started', 'succeeded', 'retry_wait', 'dead']);
+      if (!allowedOutcomes.has(outcome)) {
+        return c.json({ success: false, error: 'outcome 必须是 started/succeeded/retry_wait/dead' }, 400);
+      }
+      params.push(outcome);
+      conditions.push(`outcome = $${params.length}`);
+    }
+    params.push(limit);
+
+    const result = await postgres.query(
+      `SELECT * FROM device_delivery_attempts
+       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+       ORDER BY id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+
+    return c.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+      filters: {
+        deliveryId: deliveryId || null,
+        deviceId: deviceId || null,
+        traceId: traceId || null,
+        errorCode: errorCode || null,
+        outcome: outcome || null,
+        limit,
+      },
+    });
+  } catch (error) {
+    console.error('获取 delivery attempt 证据失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取 delivery attempt 证据失败',
+    }, 500);
+  }
+});
+
+// 设备健康告警 outbox：只读诊断，不暴露 Bark key/base 等 secret。
+app.get('/api/device-alerts', async (c) => {
+  try {
+    const deviceId = c.req.query('device_id');
+    const state = c.req.query('state');
+    const level = c.req.query('level');
+    const limitRaw = parseInt(c.req.query('limit') || '50', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 50;
+    const allowedStates = new Set(['pending', 'leased', 'retry_wait', 'sent', 'dead', 'skipped']);
+    const allowedLevels = new Set(['info', 'warning', 'critical']);
+    if (state && !allowedStates.has(state)) {
+      return c.json({ success: false, error: 'state 非法' }, 400);
+    }
+    if (level && !allowedLevels.has(level)) {
+      return c.json({ success: false, error: 'level 非法' }, 400);
+    }
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (deviceId) {
+      params.push(deviceId);
+      conditions.push(`device_id = $${params.length}`);
+    }
+    if (state) {
+      params.push(state);
+      conditions.push(`state = $${params.length}`);
+    }
+    if (level) {
+      params.push(level);
+      conditions.push(`level = $${params.length}`);
+    }
+    params.push(limit);
+
+    const result = await postgres.query(
+      `SELECT * FROM device_health_alerts
+       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+       ORDER BY id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return c.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+      filters: { deviceId: deviceId || null, state: state || null, level: level || null, limit },
+    });
+  } catch (error) {
+    console.error('获取设备健康告警失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '获取设备健康告警失败' }, 500);
+  }
+});
+
+app.get('/api/device-alerts/status', async (c) => {
+  try {
+    const result = await postgres.query(
+      `SELECT state, count(*)::int AS count
+         FROM device_health_alerts
+        GROUP BY state ORDER BY state`,
+    );
+    const states = Object.fromEntries(result.rows.map((row: any) => [row.state, Number(row.count)]));
+    return c.json({
+      success: true,
+      barkConfigured: isBarkAlertsConfigured(),
+      states,
+    });
+  } catch (error) {
+    console.error('获取设备健康告警状态失败:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : '获取设备健康告警状态失败' }, 500);
   }
 });
 

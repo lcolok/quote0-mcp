@@ -1,6 +1,7 @@
 import { processNews, computeNewsFingerprint } from './news-processing-service.js';
 import { devicePusher } from './device-pusher.js';
-import { enqueueDeliveriesForContent } from './delivery-enqueue.js';
+import { enqueueDeliveriesForContent, enqueuePreRenderedImageDeliveries } from './delivery-enqueue.js';
+import { resolveSchedulerExtraRenderers } from './scheduler-extra-renderers.js';
 import type {
   FullNewsProcessingResult,
   NewsProcessRequest,
@@ -727,8 +728,16 @@ export class NewsScheduler {
 
       console.log(`✅ 定时任务 ${job.config.id} 推送成功，缓存:${result.cacheHit ? '命中' : '未命中'} 来源:${result.cacheSource}`);
 
-      // Fire-and-forget: 额外渲染器推送（如 local-eink）
-      const extraRenderers = (process.env.NEWS_SCHEDULER_EXTRA_RENDERERS || '').split(',').map(s => s.trim()).filter(Boolean);
+      // Fire-and-forget: 额外渲染器。producer 的 local-eink 已由 Phase 1 delivery worker 接管，
+      // 必须忽略旧 env 旁路，避免同一内容直推 + delivery 双推并发撞同一 ESP32。
+      const extraResolution = resolveSchedulerExtraRenderers(
+        process.env.NEWS_SCHEDULER_EXTRA_RENDERERS,
+        job.config.jobRole,
+      );
+      if (extraResolution.ignored.includes('local-eink')) {
+        console.warn('⚠️ producer 忽略 legacy NEWS_SCHEDULER_EXTRA_RENDERERS=local-eink：请使用 device_deliveries 正门');
+      }
+      const extraRenderers = extraResolution.renderers;
       if (extraRenderers.length > 0) {
         const extraContext = {
           title: candidate.context.title,
@@ -1007,22 +1016,36 @@ export class NewsScheduler {
       const objectKey = uploadResult.objectKey;
       console.log(`✅ 天气图片已上传 MinIO: ${imageUrl}`);
 
-      // 5. 推送到设备（统一使用 DevicePusher，与新闻处理路径保持一致）
+      // 5. 输出到目标。
+      // local-eink 走 Phase 1 正门：预渲染天气图先做不可变 payload snapshot，再按设备登记 delivery；
+      // 物理 POST 只允许 device-delivery-worker 执行。MindReset(device) 保持原同步 API 语义。
       let deviceResult = '未推送';
       let pushResults: Array<{ device: string; ok: boolean; error?: string }> = [];
+      let einkDelivery: Awaited<ReturnType<typeof enqueuePreRenderedImageDeliveries>> | null = null;
 
-      if (job.config.renderer === 'local-eink' || job.config.renderer === 'device') {
-        const pushResult = await devicePusher.push(
-          localImagePath,
-          job.config.renderer as 'device' | 'local-eink'
+      if (job.config.renderer === 'local-eink') {
+        einkDelivery = await enqueuePreRenderedImageDeliveries({
+          sourceKey: `weather:${job.config.id}`,
+          pngBuffer: imageBuffer,
+        });
+        if (einkDelivery.targeted === 0) {
+          throw new Error('天气任务未配置 E-Ink 设备，无法创建持久投递');
+        }
+        deviceResult = `E-Ink delivery queued: ${einkDelivery.created}/${einkDelivery.targeted} new`;
+        console.log(
+          `📮 天气任务 ${job.config.id} 已登记 E-Ink delivery: ` +
+          `created=${einkDelivery.created}/${einkDelivery.targeted} ` +
+          `payload=${einkDelivery.payloadHash?.slice(0, 12) ?? '-'}`,
         );
+      } else if (job.config.renderer === 'device') {
+        const pushResult = await devicePusher.push(localImagePath, 'device');
         deviceResult = pushResult.deviceResult || pushResult.error || '未推送';
         if (pushResult.pushResults) {
           pushResults = pushResult.pushResults;
         }
       }
 
-      // 6. 记录推送结果
+      // 6. 记录输出结果
       const fingerprint = `weather:${city}:${Math.floor(timestamp / 600000)}`;
       const displayTitle = `${city}天气 ${weatherData.temperature}°C ${weatherData.weather}`;
       const summary = `${city} ${weatherData.temperature}°C ${weatherData.weather}，湿度 ${weatherData.humidity}%，${weatherData.windDirection || ''}风${weatherData.windPower || ''}`;
@@ -1063,21 +1086,34 @@ export class NewsScheduler {
         result: {
           deviceResult,
           pushResults,
-          imageUrl
+          imageUrl,
+          einkDelivery: einkDelivery ? {
+            created: einkDelivery.created,
+            targeted: einkDelivery.targeted,
+            deviceIds: einkDelivery.deviceIds,
+            payloadVersion: einkDelivery.payloadVersion,
+            payloadHash: einkDelivery.payloadHash,
+          } : null,
         }
       });
 
-      // 7. 更新运行历史
+      // 7. 更新运行历史。local-eink 此时只是 queued，不再伪称物理 pushed。
       if (runHistoryId) {
         await this.postgres.updateSchedulerRunHistory(runHistoryId, {
           pushStatus: 'success',
-          pushReason: 'weather_pushed',
+          pushReason: job.config.renderer === 'local-eink' ? 'weather_delivery_queued' : 'weather_pushed',
           runFinishedAt: new Date(),
           metadata: {
             city,
             weather: weatherData.weather,
             temperature: weatherData.temperature,
-            deviceResult
+            deviceResult,
+            einkDelivery: einkDelivery ? {
+              created: einkDelivery.created,
+              targeted: einkDelivery.targeted,
+              payloadVersion: einkDelivery.payloadVersion,
+              payloadHash: einkDelivery.payloadHash,
+            } : null,
           }
         });
       }
@@ -1121,7 +1157,6 @@ export class NewsScheduler {
   private async runMemoJob(job: SchedulerJobInstance): Promise<void> {
     const runStartedAt = new Date();
     let runHistoryId: number | null = null;
-    const fs = await import('fs/promises');
 
     try {
       runHistoryId = await this.postgres.createSchedulerRunHistory({
@@ -1182,30 +1217,46 @@ export class NewsScheduler {
         }
       }
 
-      // local-eink / both：推局域网 ESP32（统一使用 DevicePusher）
+      // local-eink / both：同样只登记持久 delivery，不再从 scheduler 直接 POST ESP32。
+      let localEinkQueued = targetRenderer !== 'local-eink' && targetRenderer !== 'both';
       if (targetRenderer === 'local-eink' || targetRenderer === 'both') {
-        const tmpFile = `/tmp/memo_${memo.id}_${Date.now()}.png`;
         try {
-          await fs.writeFile(tmpFile, pngBuffer);
-          const pushResult = await devicePusher.push(tmpFile, 'local-eink');
-          if (pushResult.pushResults && pushResult.pushResults.length > 0) {
-            pushDetails.localEink = { devices: pushResult.pushResults };
-          } else if (!pushResult.ok) {
-            pushDetails.localEink = { skipped: true, reason: pushResult.error || 'push_failed' };
+          const enqueued = await enqueuePreRenderedImageDeliveries({
+            sourceKey: `memo:${memo.id}`,
+            pngBuffer,
+          });
+          localEinkQueued = enqueued.targeted > 0;
+          pushDetails.localEink = {
+            queued: localEinkQueued,
+            created: enqueued.created,
+            targeted: enqueued.targeted,
+            deviceIds: enqueued.deviceIds,
+            payloadVersion: enqueued.payloadVersion,
+            payloadHash: enqueued.payloadHash,
+          };
+          if (localEinkQueued) {
+            console.log(
+              `📮 Memo任务 ${job.config.id} 已登记 E-Ink delivery: memo.id=${memo.id} ` +
+              `created=${enqueued.created}/${enqueued.targeted} payload=${enqueued.payloadHash?.slice(0, 12) ?? '-'}`,
+            );
           }
         } catch (einkError) {
           const msg = einkError instanceof Error ? einkError.message : String(einkError);
-          console.error(`❌ Memo任务 ${job.config.id} local-eink 推送异常: ${msg}`);
-          pushDetails.localEink = { error: msg };
-        } finally {
-          try { await fs.unlink(tmpFile); } catch {}
+          console.error(`❌ Memo任务 ${job.config.id} local-eink 登记异常: ${msg}`);
+          pushDetails.localEink = { queued: false, error: msg };
+          localEinkQueued = false;
         }
       }
 
-      // 成败判定
+      // 成败判定：单目标必须成功；both 允许其中一路成功，run history 会如实标 partial_success。
       if (targetRenderer === 'device' && !deviceOk) {
         throw new Error(`MindReset 推送失败: ${pushDetails.device?.error || 'unknown'}`);
       }
+      if (targetRenderer === 'local-eink' && !localEinkQueued) {
+        throw new Error(`E-Ink delivery 登记失败: ${pushDetails.localEink?.error || 'no_target_device'}`);
+      }
+      // 保持既有 both 契约：MindReset 是必达主通道；E-Ink 失败可降为 partial_success，
+      // 但不能趁本次队列重构悄悄把 “both” 改成“任一成功即可”。
       if (targetRenderer === 'both' && !deviceOk) {
         throw new Error(`both 模式 MindReset 推送失败: ${pushDetails.device?.error || 'unknown'}`);
       }
@@ -1217,9 +1268,14 @@ export class NewsScheduler {
       await this.persistSchedulerState(job, nextRunAt);
 
       if (runHistoryId) {
+        const bothPartial = targetRenderer === 'both' && (!deviceOk || !localEinkQueued);
         await this.postgres.updateSchedulerRunHistory(runHistoryId, {
-          pushStatus: 'success',
-          pushReason: 'memo_pushed',
+          pushStatus: bothPartial ? 'partial_success' : 'success',
+          pushReason: targetRenderer === 'local-eink'
+            ? 'memo_delivery_queued'
+            : bothPartial
+              ? 'memo_partial_output'
+              : 'memo_pushed',
           candidateFingerprint: String(memo.id),
           runFinishedAt: new Date(),
           metadata: { memoId: memo.id, index: idx, total: rows.length, targetRenderer, pushDetails }
@@ -2204,7 +2260,10 @@ export class NewsScheduler {
     });
 
     try {
-      if (renderer === 'local-eink' || renderer === 'device') {
+      if (renderer === 'local-eink') {
+        throw new Error('local-eink consumer 禁止走 pushImageFromMinIO 直推；必须使用 device_deliveries');
+      }
+      if (renderer === 'device') {
         const pushResult = await devicePusher.push(tempFilePath, renderer);
         if (!pushResult.ok && pushResult.error) {
           console.warn(`⚠️ consumer 推送失败: ${pushResult.error}`);

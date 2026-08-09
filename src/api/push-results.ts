@@ -76,6 +76,8 @@ export function classifyPushError(error: unknown): PushErrorCode {
   // 自然语言 bad magic 与没有 crc_verified=true 的结构化 bad_magic 保持旧故障的可恢复语义。
   if (lower.includes('bad magic') ||
       lower.includes('"code":"bad_magic"') ||
+      lower.includes('"code":"empty_body"') ||
+      lower.includes('"error":"empty body"') ||
       lower.includes('"code":"body_crc_mismatch"') ||
       lower.includes('"code":"body_overflow"') ||
       lower.includes('code=ack_trace_mismatch') ||

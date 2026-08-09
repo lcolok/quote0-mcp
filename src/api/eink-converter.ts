@@ -147,24 +147,84 @@ export interface EinkPushResult {
   ok: boolean;
   ts?: number;
   error?: string;
+  /** 兼容字段：成功时优先是设备 ACK 值，旧固件则回退为请求值。 */
   traceId?: string;
   crc32?: string;
+  /** 明确区分请求证据与设备 ACK，供 attempt ledger 长期保存。 */
+  requestTraceId?: string;
+  requestCrc32?: string;
+  bodyBytes?: number;
+  ackTraceId?: string;
+  ackCrc32?: string;
+  /** HTTP 非 2xx 且响应体是 JSON 时保留板端结构化错误。 */
+  deviceError?: unknown;
+}
+
+// 同一物理 E-Ink 端点只能有一个 POST /display/bitmap 在途。
+// Phase 1 delivery worker 之外仍存在 weather/memo/manual 等直接推送路径；若它们和 worker
+// 同时命中同一 ESP32，板端单缓冲 onBody 状态机会互相打断，实测触发 stale_body_resets / empty_body。
+// 这里作为中央防线按物理 endpoint 串行；不同设备仍保持并行。
+const einkPushTails = new Map<string, Promise<void>>();
+
+function einkPushLockKey(device: EinkDevice): string {
+  try {
+    const url = new URL(device.baseUrl);
+    const port = url.port || (url.protocol === 'http:' ? '80' : url.protocol === 'https:' ? '443' : '');
+    return `${url.protocol}//${url.hostname}:${port}`;
+  } catch {
+    return device.baseUrl.replace(/\/+$/, '') || device.id;
+  }
+}
+
+async function withEinkDevicePushLock<T>(device: EinkDevice, fn: () => Promise<T>): Promise<T> {
+  const key = einkPushLockKey(device);
+  const previous = einkPushTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.catch(() => {}).then(() => gate);
+  einkPushTails.set(key, tail);
+
+  const waitStartedAt = Date.now();
+  await previous.catch(() => {});
+  const waitedMs = Date.now() - waitStartedAt;
+  if (waitedMs >= 10) {
+    console.log(`⏳ EPD push serialization waited ${waitedMs}ms: device=${device.id} endpoint=${key}`);
+  }
+
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (einkPushTails.get(key) === tail) einkPushTails.delete(key);
+  }
 }
 
 /**
- * 推送 bitmap 到 E-Ink 设备
+ * 推送 bitmap 到 E-Ink 设备。中央按物理 endpoint 串行，避免任何调用路径并发打同一板端。
  */
 export async function pushToEinkDevice(
   device: EinkDevice,
   bitmap: Buffer,
   options: PushToEinkOptions = {}
 ): Promise<EinkPushResult> {
-  const url = `${device.baseUrl}/display/bitmap`;
+  return withEinkDevicePushLock(device, () => pushToEinkDeviceUnlocked(device, bitmap, options));
+}
+
+async function pushToEinkDeviceUnlocked(
+  device: EinkDevice,
+  bitmap: Buffer,
+  options: PushToEinkOptions = {}
+): Promise<EinkPushResult> {
+  const url = `${device.baseUrl.replace(/\/+$/, '')}/display/bitmap`;
   const protocol = device.wireProtocol ?? 'legacy-raw-v0';
   const width = device.width || EINK_WIDTH;
   const height = device.height || EINK_HEIGHT;
   const traceId = protocol === 'epd1-v1' ? normalizeEpdTraceId(options.traceId) : undefined;
   let bodyCrc32: string | undefined;
+  let bodyBytes: number | undefined;
+  let ackTraceId: string | undefined;
+  let ackCrc32: string | undefined;
+  let deviceError: unknown;
   let statusSnapshot = options.statusSnapshot;
   console.log(`📤 推送 bitmap 到设备: ${device.name} (${url}, ${protocol}, ${width}x${height})`);
 
@@ -178,6 +238,7 @@ export async function pushToEinkDevice(
       ? buildEpd1Body(bitmap, device)
       : bitmap;
     bodyCrc32 = protocol === 'epd1-v1' ? crc32Hex(body) : undefined;
+    bodyBytes = body.length;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/octet-stream',
@@ -197,9 +258,15 @@ export async function pushToEinkDevice(
       signal: AbortSignal.timeout(30000)
     });
 
-    const echoedTrace = response.headers.get(EPD_TRACE_HEADER) || traceId;
+    ackTraceId = response.headers.get(EPD_TRACE_HEADER) || undefined;
+    const echoedTrace = ackTraceId || traceId;
     if (!response.ok) {
       const errorText = await response.text();
+      try {
+        deviceError = JSON.parse(errorText);
+      } catch {
+        deviceError = undefined;
+      }
       throw new Error(
         `HTTP ${response.status}` +
         `${echoedTrace ? ` trace=${echoedTrace}` : ''}` +
@@ -208,6 +275,8 @@ export async function pushToEinkDevice(
     }
 
     const result = await response.json() as { ok: boolean; ts?: number; trace_id?: string; crc32?: string };
+    ackTraceId = result.trace_id || ackTraceId;
+    ackCrc32 = result.crc32;
     const diagV1 = protocol === 'epd1-v1' && (statusSnapshot?.protocol_diag ?? 0) >= 1;
     if (diagV1 && statusSnapshot?.trace_supported && !result.trace_id) {
       throw new Error(`EPD1 ACK trace missing code=ack_trace_missing expect=${traceId ?? '-'}`);
@@ -230,11 +299,31 @@ export async function pushToEinkDevice(
       `✅ 设备推送成功: ${device.name}, protocol=${protocol}, body=${body.length}B, ` +
       `trace=${resultTrace ?? '-'}, crc32=${resultCrc32 ?? '-'}, ts=${result.ts ?? '-'}`
     );
-    return { ...result, traceId: resultTrace, crc32: resultCrc32 };
+    return {
+      ...result,
+      traceId: resultTrace,
+      crc32: resultCrc32,
+      requestTraceId: traceId,
+      requestCrc32: bodyCrc32,
+      bodyBytes,
+      ackTraceId,
+      ackCrc32,
+    };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`❌ 设备推送失败: ${device.name}`, errorMsg);
-    return { ok: false, error: errorMsg, traceId, crc32: bodyCrc32 };
+    return {
+      ok: false,
+      error: errorMsg,
+      traceId,
+      crc32: bodyCrc32,
+      requestTraceId: traceId,
+      requestCrc32: bodyCrc32,
+      bodyBytes,
+      ackTraceId,
+      ackCrc32,
+      deviceError,
+    };
   }
 }
 
@@ -260,7 +349,7 @@ export interface EinkStatus {
  * EPD1 设备自报规格。只在 epd1-v1 推送前调用，旧 C3 裸位图路径不依赖该端点。
  */
 export async function getEinkStatus(device: EinkDevice): Promise<EinkStatus> {
-  const response = await fetch(`${device.baseUrl}/status`, {
+  const response = await fetch(`${device.baseUrl.replace(/\/+$/, '')}/status`, {
     method: 'GET',
     signal: AbortSignal.timeout(5000),
   });

@@ -11,6 +11,7 @@ import { runStartupAssertions } from './startup-assertions.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { startLabelJobWorker } from './label-jobs-worker.js';
 import { startDeviceDeliveryWorker } from './device-delivery-worker.js';
+import { startDeviceHealthAlertWorker } from './device-health-alerts.js';
 
 const PORT = parseInt(process.env.PORT || '3001');
 const HOST = process.env.HOST || 'localhost';
@@ -45,4 +46,6 @@ if (import.meta.main) {
   startLabelJobWorker();
   // 启动 device delivery worker（Phase 1：每台设备一条独立、幂等、可重试的投递）
   startDeviceDeliveryWorker();
+  // 健康状态迁移通知独立 outbox worker；Bark 网络失败不阻塞 delivery hot path。
+  startDeviceHealthAlertWorker();
 }

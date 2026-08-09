@@ -90,6 +90,8 @@ describe('永久性失败判定', () => {
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 409: {"error":"busy, refreshing"}')))).toBe(false);
     expect(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}'))).toBe('device_reject');
     expect(isPermanentFailure(classifyPushError(new Error('HTTP 400: {"error":"bad magic"}')))).toBe(false);
+    expect(classifyPushError(new Error('HTTP 400: {"error":"empty body"}'))).toBe('device_reject');
+    expect(isPermanentFailure(classifyPushError(new Error('HTTP 400: {"error":"empty body"}')))).toBe(false);
     // CRC 已验证完整送达但 header 仍非法 → protocol_mismatch，也必须永久失败
     expect(classifyPushError(new Error(
       'HTTP 400: {"code":"bad_magic","crc_verified":true}'

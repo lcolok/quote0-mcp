@@ -17,10 +17,11 @@
 import { getEinkDevices, pngTo1BitBitmap, type EinkDevice } from './eink-converter.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { upsertDeviceFrame } from './device-frame-cache.js';
-import { loadContent, buildRenderableFromInventory } from './device-delivery-worker.js';
+import { loadContent } from './device-delivery-worker.js';
 import { createEinkTarget } from '../react-widgets/core/render-targets.js';
 import { renderSingleEinkTarget } from './target-aware-eink.js';
 import { readFile } from 'node:fs/promises';
+import { persistDeliveryPngPayload } from './delivery-payload-store.js';
 
 export interface EnqueueDeliveriesInput {
   contentId: number;
@@ -35,6 +36,20 @@ export interface EnqueueDeliveriesResult {
   /** 本次覆盖到的目标设备总数（含因幂等未插入的）。 */
   targeted: number;
   deviceIds: string[];
+}
+
+export interface EnqueuePreRenderedImageInput {
+  /** 业务源身份，不含版本；例如 weather:<job-id> / memo:<memo-id>。 */
+  sourceKey: string;
+  /** 已完成业务版式的 PNG；enqueue 会写入内容寻址的 MinIO delivery snapshot。 */
+  pngBuffer: Buffer;
+  /** 限定目标设备；不传则取全部已启用 eink-local。 */
+  deviceIds?: string[];
+}
+
+export interface EnqueuePreRenderedImageResult extends EnqueueDeliveriesResult {
+  payloadRef?: string;
+  payloadHash?: string;
 }
 
 /**
@@ -84,6 +99,30 @@ async function supersedeOldDeliveries(deviceId: string): Promise<number> {
     [deviceId],
   );
   return r.rowCount ?? 0;
+}
+
+function normalizeSourceKey(sourceKey: string): string {
+  const normalized = sourceKey.trim();
+  if (!normalized || normalized.length > 256 || /[\u0000\r\n]/.test(normalized)) {
+    throw new Error('delivery sourceKey 非法');
+  }
+  return normalized;
+}
+
+async function writeFramesFromPngBuffer(devices: EinkDevice[], pngBuffer: Buffer): Promise<void> {
+  for (const device of devices) {
+    try {
+      const bitmap = await pngTo1BitBitmap(pngBuffer, device.width, device.height);
+      await upsertDeviceFrame({
+        deviceId: device.id,
+        bitmap,
+        width: device.width,
+        height: device.height,
+      });
+    } catch (e) {
+      console.warn(`⚠️ 设备 ${device.id} enqueue 帧写入失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 }
 
 export async function enqueueDeliveriesForContent(
@@ -186,5 +225,101 @@ export async function enqueueDeliveriesForContent(
     created,
     targeted: devices.length,
     deviceIds: devices.map((d) => d.id),
+  };
+}
+
+/**
+ * 把已经完成业务版式的 PNG 纳入 Phase 1 持久 delivery。
+ *
+ * 与 content delivery 的区别只有 payload 来源：
+ * - content：worker 从 content_inventory 重新按 runtime RenderTarget 排版；
+ * - minio-image：enqueue 先把字节保存成 SHA-256 内容寻址快照，worker 重试时读取同一字节。
+ *
+ * 两种 delivery 共享同一套 per-device lease / retry / circuit / supersede / attempt ledger。
+ */
+export async function enqueuePreRenderedImageDeliveries(
+  input: EnqueuePreRenderedImageInput,
+): Promise<EnqueuePreRenderedImageResult> {
+  const sourceKey = normalizeSourceKey(input.sourceKey);
+  const devices = await getEinkDevices(
+    input.deviceIds?.length ? { deviceIds: input.deviceIds } : {},
+  );
+  if (devices.length === 0) {
+    return { payloadVersion: 0, created: 0, targeted: 0, deviceIds: [] };
+  }
+
+  // 先确保不可变 payload 已落 MinIO，再写 delivery；禁止制造“队列有任务但 payload 不存在”的必死行。
+  const payload = await persistDeliveryPngPayload(input.pngBuffer);
+  const db = getPostgresDatabase();
+  let created = 0;
+  let maxPayloadVersion = 0;
+  const supersededDevices = new Set<string>();
+
+  for (const device of devices) {
+    const versionResult = await db.getPool().query(
+      `SELECT COALESCE(MAX(payload_version), 0) + 1 AS next_version
+         FROM device_deliveries
+        WHERE source_key = $1
+          AND device_id = $2
+          AND payload_kind = 'minio-image'`,
+      [sourceKey, device.id],
+    );
+    const payloadVersion = Number(versionResult.rows[0]?.next_version ?? 1);
+    maxPayloadVersion = Math.max(maxPayloadVersion, payloadVersion);
+
+    const r = await db.getPool().query(
+      `INSERT INTO device_deliveries (
+         content_id, device_id, render_target, payload_version,
+         payload_kind, payload_ref, payload_hash, source_key
+       ) VALUES (
+         NULL, $1, $2, $3,
+         'minio-image', $4, $5, $6
+       )
+       ON CONFLICT DO NOTHING
+       RETURNING id`,
+      [
+        device.id,
+        renderTargetIdForDevice(device),
+        payloadVersion,
+        payload.objectKey,
+        payload.sha256,
+        sourceKey,
+      ],
+    );
+    if (r.rows.length > 0) {
+      created += 1;
+      supersededDevices.add(device.id);
+    }
+  }
+
+  // 显示类统一遵循“只保留最新待显示帧”；正在 leased 的条目仍不碰。
+  let superseded = 0;
+  for (const deviceId of supersededDevices) {
+    superseded += await supersedeOldDeliveries(deviceId);
+  }
+  if (superseded > 0) {
+    console.log(
+      `🧹 预渲染投递合并: ${superseded} 条旧 pending 被作废，` +
+      `source=${sourceKey} 设备=[${[...supersededDevices].join(', ')}]`,
+    );
+  }
+
+  // pull-mode frame cache 也立即更新；失败只是旁路告警，delivery 本身已经安全持久化。
+  try {
+    await writeFramesFromPngBuffer(devices, input.pngBuffer);
+  } catch (error) {
+    console.warn(
+      `⚠️ 预渲染 enqueue 帧写入失败（投递已登记）: ` +
+      `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  return {
+    payloadVersion: maxPayloadVersion,
+    created,
+    targeted: devices.length,
+    deviceIds: devices.map((device) => device.id),
+    payloadRef: payload.objectKey,
+    payloadHash: payload.sha256,
   };
 }

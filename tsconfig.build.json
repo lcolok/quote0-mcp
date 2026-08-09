@@ -4,5 +4,9 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/feedback-ui"]
+  "exclude": [
+    "src/feedback-ui",
+    "src/**/*.test.ts",
+    "src/react-widgets/tests/**"
+  ]
 }
