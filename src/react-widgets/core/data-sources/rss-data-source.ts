@@ -15,6 +15,24 @@ import {
   type RSSSourceDefinition,
 } from './rss-source-registry.js';
 
+const MAX_FUTURE_PUBLISH_SKEW_MS = 5 * 60 * 1000;
+
+export function normalizeRssPublishTime(raw: string | undefined, nowMs = Date.now()): {
+  publishTime: string;
+  rawPublishTime?: string;
+  futureClamped: boolean;
+} {
+  if (!raw) return { publishTime: new Date(nowMs).toISOString(), futureClamped: false };
+  const parsed = new Date(raw).getTime();
+  if (!Number.isFinite(parsed)) {
+    return { publishTime: new Date(nowMs).toISOString(), rawPublishTime: raw, futureClamped: false };
+  }
+  if (parsed > nowMs + MAX_FUTURE_PUBLISH_SKEW_MS) {
+    return { publishTime: new Date(nowMs).toISOString(), rawPublishTime: raw, futureClamped: true };
+  }
+  return { publishTime: new Date(parsed).toISOString(), rawPublishTime: raw, futureClamped: false };
+}
+
 export class RSSDataSourceModule extends BaseDataSourceModule {
   name = 'RSS数据源';
   version = '1.0.0';
@@ -69,21 +87,27 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
       const endIndex = Math.min(startIndex + count, feed.items.length);
       const selectedItems = feed.items.slice(startIndex, endIndex);
       
-      const rawDataItems: RawDataItem[] = selectedItems.map((item, index) => ({
-        id: `rss_${params.source || 'custom'}_${startIndex + index}_${Date.now()}`,
-        title: item.title || '无标题',
-        content: this.cleanContent(item.contentSnippet || item.content || item.description || ''),
-        source: feed.title || sourceName,
-        publishTime: item.pubDate || new Date().toISOString(),
-        link: item.link,
-        category,
-        metadata: {
-          rssUrl,
-          rssSource: params.source || 'custom',
-          originalIndex: startIndex + index,
-          guid: item.guid
-        }
-      }));
+      const nowMs = Date.now();
+      const rawDataItems: RawDataItem[] = selectedItems.map((item, index) => {
+        const normalizedTime = normalizeRssPublishTime(item.pubDate, nowMs);
+        return {
+          id: `rss_${params.source || 'custom'}_${startIndex + index}_${nowMs}`,
+          title: item.title || '无标题',
+          content: this.cleanContent(item.contentSnippet || item.content || item.description || ''),
+          source: feed.title || sourceName,
+          publishTime: normalizedTime.publishTime,
+          link: item.link,
+          category,
+          metadata: {
+            rssUrl,
+            rssSource: params.source || 'custom',
+            originalIndex: startIndex + index,
+            guid: item.guid,
+            rawPublishTime: normalizedTime.rawPublishTime,
+            publishTimeFutureClamped: normalizedTime.futureClamped,
+          }
+        };
+      });
       
       console.log(`✅ RSS数据源获取成功: ${rawDataItems.length}条数据 来自 ${sourceName}`);
       return rawDataItems;

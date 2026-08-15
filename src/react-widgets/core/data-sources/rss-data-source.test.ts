@@ -4,10 +4,27 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { RSSDataSourceModule } from "./rss-data-source.js";
+import { RSSDataSourceModule, normalizeRssPublishTime } from "./rss-data-source.js";
 
 describe("RSSDataSourceModule", () => {
   const module = new RSSDataSourceModule();
+
+  describe("publish time normalization", () => {
+    const now = Date.parse("2026-08-16T00:00:00.000Z");
+
+    it("keeps normal source timestamps", () => {
+      const result = normalizeRssPublishTime("2026-08-15T23:00:00.000Z", now);
+      expect(result.publishTime).toBe("2026-08-15T23:00:00.000Z");
+      expect(result.futureClamped).toBe(false);
+    });
+
+    it("clamps materially future source timestamps but preserves raw evidence", () => {
+      const result = normalizeRssPublishTime("2026-08-16T00:40:00.000Z", now);
+      expect(result.publishTime).toBe("2026-08-16T00:00:00.000Z");
+      expect(result.rawPublishTime).toBe("2026-08-16T00:40:00.000Z");
+      expect(result.futureClamped).toBe(true);
+    });
+  });
 
   describe("cleanContent", () => {
     // 通过 as any 访问 private 方法进行单元测试
