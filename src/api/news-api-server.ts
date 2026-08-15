@@ -34,6 +34,10 @@ import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 import { getDeviceFrame } from './device-frame-cache.js';
 import { isBarkAlertsConfigured } from './device-health-alerts.js';
+import {
+  getRssSourceRegistry,
+  RECOMMENDED_RSS_SOURCE_IDS,
+} from '../react-widgets/core/data-sources/rss-source-registry.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -149,6 +153,7 @@ interface RSSSourceInfo {
   name: string;
   description: string;
   category: string;
+  profile: 'core' | 'extended' | 'legacy';
 }
 
 // 创建Hono应用
@@ -323,88 +328,15 @@ app.route('/api/label-sessions', labelSessionsApp);
 app.route('/api/memos', memosApp);
 
 // RSS源数据配置
-const RSS_SOURCES: Record<string, RSSSourceInfo> = {
-  // 科技资讯
-  solidot: {
-    id: 'solidot',
-    name: 'Solidot',
-    description: '奇客的资讯，重要的东西',
-    category: 'technology'
-  },
-  sspai: {
-    id: 'sspai', 
-    name: '少数派',
-    description: '高效工作，品质生活',
-    category: 'technology'
-  },
-  cnbeta: {
-    id: 'cnbeta',
-    name: 'cnBeta', 
-    description: '中文业界资讯站',
-    category: 'technology'
-  },
-  // pingwest 源已失效（返回 404），暂时注释以避免调度器空跑
-  // pingwest: {
-  //   id: 'pingwest',
-  //   name: 'PingWest',
-  //   description: '科技媒体平台',
-  //   category: 'technology'
-  // },
-  techcrunch: {
-    id: 'techcrunch',
-    name: 'TechCrunch',
-    description: '全球科技创业资讯',
-    category: 'technology'
-  },
-  arstechnica: {
-    id: 'arstechnica',
-    name: 'Ars Technica',
-    description: '深度科技分析',
-    category: 'technology'
-  },
-  
-  // 商业财经
-  '36kr': {
-    id: '36kr',
-    name: '36氪',
-    description: '创投媒体平台',
-    category: 'business'
-  },
-  'reuters-tech': {
-    id: 'reuters-tech',
-    name: 'Reuters Tech',
-    description: '路透社科技新闻',
-    category: 'business'
-  },
-  
-  // 设计创意
-  'designer-news': {
-    id: 'designer-news',
-    name: 'Designer News',
-    description: '设计师资讯平台',
-    category: 'design'
-  },
-  
-  // 开发者
-  'github-trending': {
-    id: 'github-trending',
-    name: 'GitHub Trending',
-    description: 'GitHub热门项目',
-    category: 'programming'
-  },
-  'dev-to': {
-    id: 'dev-to',
-    name: 'DEV Community',
-    description: '开发者技术分享',
-    category: 'programming'
-  },
-  'hackernews': {
-    id: 'hackernews',
-    name: 'Hacker News',
-    description: 'Hacker News首页热门文章',
-    category: 'technology'
-  }
-};
+const RSS_SOURCES: Record<string, RSSSourceInfo> = Object.fromEntries(
+  Object.values(getRssSourceRegistry()).map((source) => [source.id, {
+    id: source.id,
+    name: source.name,
+    description: source.description,
+    category: source.category,
+    profile: source.profile,
+  }]),
+);
 
 // API路由
 
@@ -709,7 +641,8 @@ app.get('/api/news/sources', (c) => {
   return c.json({
     sources: groupedSources,
     total: Object.keys(sources).length,
-    categories: Object.keys(groupedSources)
+    categories: Object.keys(groupedSources),
+    recommendedSources: RECOMMENDED_RSS_SOURCE_IDS,
   });
 });
 
@@ -897,8 +830,12 @@ app.notFound((c) => {
  */
 app.get('/api/rss/list', async (c) => {
   try {
-    const category = c.req.query('category') || 'technology';
     const rssSource = c.req.query('rssSource') || 'solidot';
+    const sourceInfo = RSS_SOURCES[rssSource];
+    if (!sourceInfo) {
+      return c.json({ success: false, error: `未知 RSS 源: ${rssSource}` }, 400);
+    }
+    const category = c.req.query('category') || sourceInfo.category;
     const count = Number.isNaN(parseInt(c.req.query('count') || '10', 10)) ? 10 : parseInt(c.req.query('count') || '10', 10);
     const startIndex = Number.isNaN(parseInt(c.req.query('startIndex') || '0', 10)) ? 0 : parseInt(c.req.query('startIndex') || '0', 10);
 
@@ -909,7 +846,7 @@ app.get('/api/rss/list', async (c) => {
     // 获取RSS新闻
     const news = await rssSourceModule.fetchRawData({
       category,
-      rssSource,
+      source: rssSource,
       count,
       startIndex
     });

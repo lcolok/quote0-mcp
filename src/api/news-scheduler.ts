@@ -19,6 +19,7 @@ import React from 'react';
 import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
+import { RECOMMENDED_RSS_SOURCE_IDS } from '../react-widgets/core/data-sources/rss-source-registry.js';
 import { MindResetDeviceClient } from '../image-sender/services/api/device-client.js';
 
 function sanitizeWeatherData(data: any): WeatherData {
@@ -102,6 +103,7 @@ interface SchedulerJobState {
   shuffledPointer: number;
   recentFingerprints: string[];
   failureCount: Record<string, number>;
+  sourceCooldownUntil: Record<string, string>;
 }
 
 interface SchedulerJobInstance {
@@ -340,17 +342,19 @@ export class NewsScheduler {
         enabled: true
       });
       
-      // 创建多源RSS轮播任务（1分钟）
+      // 创建平衡多源 RSS 轮播任务。8 源 × 10min ≈ 每个站点 80min 抓一次，
+      // 与历史 4 源 × 20min 的单站压力相当，但整体新内容生产频率约翻倍。
       await this.postgres.upsertSchedulerJob({
         id: 'multi-source-rotation',
         name: '多源RSS轮播',
-        description: '每1分钟轮播Solidot、36kr、sspai、hackernews四个RSS源',
+        description: '平衡轮播中文、全球科技与开发者核心 RSS 源',
         category: 'news',
         dataSource: 'rss',
-        rssSource: 'solidot',
+        rssSource: RECOMMENDED_RSS_SOURCE_IDS[0] || 'solidot',
+        rssSources: RECOMMENDED_RSS_SOURCE_IDS,
         processor: 'ax-optimized',
         renderer: 'device',
-        intervalMs: 60 * 1000,
+        intervalMs: 10 * 60 * 1000,
         initialDelayMs: 0,
         options: { border: '0' },
         indexStrategy: { type: 'fair-rotation', poolSize: 4, startIndex: 0, cooldownHours: 24, maxPushCount: 5, rotateAfterEachPush: true, skipEmptySource: true },
@@ -1546,7 +1550,7 @@ export class NewsScheduler {
     };
   }
 
-  private async resolveRunnableSource(job: SchedulerJobInstance, overrideIndex?: number): Promise<{ source: string; skipped: Array<{ source: string; failureCount: number }> }> {
+  private async resolveRunnableSource(job: SchedulerJobInstance, overrideIndex?: number): Promise<{ source: string; skipped: Array<{ source: string; failureCount: number; cooldownUntil?: string }> }> {
     const initialSource = this.getCurrentRssSource(job);
     if (overrideIndex !== undefined) {
       return { source: initialSource, skipped: [] };
@@ -1562,21 +1566,39 @@ export class NewsScheduler {
       return { source: initialSource, skipped: [] };
     }
 
-    const skipped: Array<{ source: string; failureCount: number }> = [];
+    const skipped: Array<{ source: string; failureCount: number; cooldownUntil?: string }> = [];
     let currentSource = initialSource;
+    const now = Date.now();
 
     for (let attempt = 0; attempt < enabledSources.length; attempt++) {
       const failureCount = this.getFailureCount(job, currentSource);
+      const cooldownUntil = this.getSourceCooldownUntil(job, currentSource);
+
+      if (cooldownUntil && cooldownUntil > now) {
+        const cooldownIso = new Date(cooldownUntil).toISOString();
+        skipped.push({ source: currentSource, failureCount, cooldownUntil: cooldownIso });
+        console.warn(`⚠️ 源 ${currentSource} 冷却中，跳过到 ${cooldownIso}`);
+        await this.rotateRssSource(job);
+        currentSource = this.getCurrentRssSource(job);
+        continue;
+      }
+
+      if (cooldownUntil && cooldownUntil <= now) {
+        // 冷却到期仅放行一次 probe；若再次失败，handlePostRunFailure 会重新进入冷却。
+        this.clearSourceCooldown(job, currentSource);
+        if (failureCount >= threshold) {
+          this.reduceFailureCount(job, currentSource, Math.max(0, threshold - 1));
+        }
+        return { source: currentSource, skipped };
+      }
+
       if (failureCount < threshold) {
         return { source: currentSource, skipped };
       }
 
-      skipped.push({ source: currentSource, failureCount });
-      console.warn(`⚠️ 源 ${currentSource} 因连续失败 ${failureCount} 次，将尝试跳过`);
-      if (threshold > 0) {
-        const reduced = Math.max(0, threshold - 1);
-        this.reduceFailureCount(job, currentSource, reduced);
-      }
+      const nextCooldown = this.setSourceCooldown(job, currentSource);
+      skipped.push({ source: currentSource, failureCount, cooldownUntil: nextCooldown.toISOString() });
+      console.warn(`⚠️ 源 ${currentSource} 连续失败 ${failureCount} 次，进入冷却到 ${nextCooldown.toISOString()}`);
       await this.rotateRssSource(job);
       currentSource = this.getCurrentRssSource(job);
     }
@@ -1590,23 +1612,33 @@ export class NewsScheduler {
       passed: 0,
       blockedByCooldown: 0,
       blockedByPushCount: 0,
-      blockedByRecent: 0
+      blockedByRecent: 0,
+      blockedByAge: 0
     };
 
     const config = layer === 'strict'
       ? {
           cooldownMs: this.strategyConfig.cooldownHoursStrict * 60 * 60 * 1000,
           maxPushCount: this.strategyConfig.maxPushCountStrict,
-          recentLimit: this.strategyConfig.recentFingerprintsLimitStrict
+          recentLimit: this.strategyConfig.recentFingerprintsLimitStrict,
+          maxArticleAgeMs: this.strategyConfig.maxArticleAgeHoursStrict * 60 * 60 * 1000,
         }
       : {
           cooldownMs: this.strategyConfig.cooldownHoursRelaxed * 60 * 60 * 1000,
           maxPushCount: this.strategyConfig.maxPushCountRelaxed,
-          recentLimit: this.strategyConfig.recentFingerprintsLimitRelaxed
+          recentLimit: this.strategyConfig.recentFingerprintsLimitRelaxed,
+          maxArticleAgeMs: this.strategyConfig.maxArticleAgeHoursRelaxed * 60 * 60 * 1000,
         };
 
     const filtered: CandidateArticle[] = [];
     for (const candidate of candidates) {
+      if (candidate.publishTime && config.maxArticleAgeMs > 0) {
+        const publishMs = new Date(candidate.publishTime).getTime();
+        if (Number.isFinite(publishMs) && now - publishMs > config.maxArticleAgeMs) {
+          stats.blockedByAge += 1;
+          continue;
+        }
+      }
       if (config.maxPushCount !== undefined && candidate.pushCount >= config.maxPushCount) {
         stats.blockedByPushCount += 1;
         continue;
@@ -1695,6 +1727,7 @@ export class NewsScheduler {
         currentSourceIndex: job.state.currentSourceIndex,
         recentFingerprints: job.state.recentFingerprints.slice(0, snapshotSize),
         failureCount: job.state.failureCount,
+        sourceCooldownUntil: job.state.sourceCooldownUntil,
         consecutiveFailures: job.state.consecutiveFailures,
         shuffledPointer: job.state.shuffledPointer
       },
@@ -1717,6 +1750,7 @@ export class NewsScheduler {
     }
     this.ensureIndexState(job);
     job.state.failureCount[source] = 0;
+    this.clearSourceCooldown(job, source);
   }
 
   private reduceFailureCount(job: SchedulerJobInstance, source: string | undefined, target?: number): void {
@@ -1737,6 +1771,28 @@ export class NewsScheduler {
     }
     this.ensureIndexState(job);
     return job.state.failureCount[source] ?? 0;
+  }
+
+  private getSourceCooldownUntil(job: SchedulerJobInstance, source: string | undefined): number | null {
+    if (!source) return null;
+    this.ensureIndexState(job);
+    const raw = job.state.sourceCooldownUntil[source];
+    if (!raw) return null;
+    const value = new Date(raw).getTime();
+    return Number.isFinite(value) ? value : null;
+  }
+
+  private setSourceCooldown(job: SchedulerJobInstance, source: string): Date {
+    this.ensureIndexState(job);
+    const cooldownMinutes = Math.max(1, this.strategyConfig.sourceFailureCooldownMinutes ?? 120);
+    const until = new Date(Date.now() + cooldownMinutes * 60_000);
+    job.state.sourceCooldownUntil[source] = until.toISOString();
+    return until;
+  }
+
+  private clearSourceCooldown(job: SchedulerJobInstance, source: string): void {
+    this.ensureIndexState(job);
+    delete job.state.sourceCooldownUntil[source];
   }
 
   private isFingerprintRecent(job: SchedulerJobInstance, fingerprint: string | undefined, limit: number | undefined): boolean {
@@ -1761,7 +1817,8 @@ export class NewsScheduler {
       currentSourceIndex: job.state.currentSourceIndex,
       dynamicPoolSize: job.state.dynamicPoolSize,
       recentFingerprints: job.state.recentFingerprints,
-      failureCount: job.state.failureCount
+      failureCount: job.state.failureCount,
+      sourceCooldownUntil: job.state.sourceCooldownUntil
     }, nextRunAt);
   }
 
@@ -1769,7 +1826,8 @@ export class NewsScheduler {
     const threshold = this.strategyConfig.sourceFailureSkipThreshold ?? 0;
     const failureCount = this.getFailureCount(job, currentRssSource);
     if (threshold > 0 && failureCount >= threshold) {
-      console.warn(`⚠️ 源 ${currentRssSource} 连续失败 ${failureCount} 次，将轮换到下一个源`);
+      const cooldownUntil = this.setSourceCooldown(job, currentRssSource);
+      console.warn(`⚠️ 源 ${currentRssSource} 连续失败 ${failureCount} 次，冷却到 ${cooldownUntil.toISOString()} 并轮换到下一个源`);
       await this.rotateRssSource(job);
     }
 
@@ -1903,6 +1961,9 @@ export class NewsScheduler {
     }
     if (!job.state.failureCount || typeof job.state.failureCount !== 'object') {
       job.state.failureCount = {};
+    }
+    if (!job.state.sourceCooldownUntil || typeof job.state.sourceCooldownUntil !== 'object') {
+      job.state.sourceCooldownUntil = {};
     }
   }
 
@@ -2336,7 +2397,8 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
     shuffledOrder: [],
     shuffledPointer: 0,
     recentFingerprints: [],
-    failureCount: {}
+    failureCount: {},
+    sourceCooldownUntil: {}
   };
 
   const mergedState = {
@@ -2362,6 +2424,9 @@ function createJobInstance(job: NormalizedSchedulerJob): SchedulerJobInstance {
   }
   if (!mergedState.failureCount || typeof mergedState.failureCount !== 'object') {
     mergedState.failureCount = {};
+  }
+  if (!mergedState.sourceCooldownUntil || typeof mergedState.sourceCooldownUntil !== 'object') {
+    mergedState.sourceCooldownUntil = {};
   }
 
   return {

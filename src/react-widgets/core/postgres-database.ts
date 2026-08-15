@@ -2099,6 +2099,7 @@ export class PostgresDatabase {
     dynamicPoolSize: number | null;
     recentFingerprints: string[];
     failureCount?: Record<string, number>;
+    sourceCooldownUntil?: Record<string, string>;
   }, nextRunAt?: Date): Promise<void> {
     const client = await this.pool.connect();
     try {

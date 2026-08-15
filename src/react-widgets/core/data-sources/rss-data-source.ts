@@ -10,111 +10,27 @@ import {
   DataSourceParamDefinition,
   DataSourceHealthStatus 
 } from '../modular-architecture.js';
-
-interface RSSSource {
-  name: string;
-  url: string;
-  category: string;
-  description: string;
-}
+import {
+  getRssSourceRegistry,
+  type RSSSourceDefinition,
+} from './rss-source-registry.js';
 
 export class RSSDataSourceModule extends BaseDataSourceModule {
   name = 'RSS数据源';
   version = '1.0.0';
   description = '从多个RSS订阅源获取新闻数据';
   
-  // 预设的RSS订阅源
-  private rssFeeds: Record<string, RSSSource> = {
-    // 科技资讯
-    solidot: {
-      name: 'Solidot',
-      // solidot 官方对机房 IP 封 403（按来源 IP），盒子直抓不到。
-      // 改走 devaiplus(Tailscale)中转服务：经 r.jina.ai 用 jina 的 IP 抓取，输出标准 RSS，不会被封。
-      url: 'http://100.94.204.103:8899/solidot.rss',
-      category: 'technology',
-      description: '奇客的资讯，重要的东西'
-    },
-    sspai: {
-      name: '少数派',
-      url: 'https://sspai.com/feed',
-      category: 'technology',
-      description: '高效工作，品质生活'
-    },
-    'cnbeta': {
-      name: 'cnBeta',
-      url: 'https://www.cnbeta.com/backend.php',
-      category: 'technology', 
-      description: '中文业界资讯站'
-    },
-    // pingwest 源已失效（返回 404），暂时注释以避免调度器空跑
-    // 'pingwest': {
-    //   name: 'PingWest',
-    //   url: 'https://www.pingwest.com/feed',
-    //   category: 'technology',
-    //   description: '科技媒体平台'
-    // },
-    'techcrunch': {
-      name: 'TechCrunch',
-      url: 'https://feeds.feedburner.com/TechCrunch',
-      category: 'technology',
-      description: '全球科技创业资讯'
-    },
-    'arstechnica': {
-      name: 'Ars Technica',
-      url: 'http://feeds.arstechnica.com/arstechnica/index',
-      category: 'technology',
-      description: '深度科技分析'
-    },
-    
-    // 商业财经
-    '36kr': {
-      name: '36氪',
-      url: 'https://36kr.com/feed',
-      category: 'business',
-      description: '创投媒体平台'
-    },
-    'reuters-tech': {
-      name: 'Reuters Tech',
-      url: 'https://feeds.reuters.com/reuters/technologyNews',
-      category: 'business',
-      description: '路透社科技新闻'
-    },
-    
-    // 设计创意
-    'designer-news': {
-      name: 'Designer News',
-      url: 'https://www.designernews.co/feeds/stories',
-      category: 'design',
-      description: '设计师资讯平台'
-    },
-    
-    // 开发者
-    'github-trending': {
-      name: 'GitHub Trending',
-      url: 'https://rsshub.app/github/trending/daily',
-      category: 'programming',
-      description: 'GitHub热门项目'
-    },
-    'dev-to': {
-      name: 'DEV Community',
-      url: 'https://dev.to/feed',
-      category: 'programming',
-      description: '开发者技术分享'
-    },
-    'hackernews': {
-      name: 'Hacker News',
-      url: 'https://hnrss.org/frontpage',
-      category: 'technology',
-      description: 'Hacker News首页热门文章'
-    }
-  };
+  // 每个实例持有可变副本，避免 addFeed() 污染全局 registry。
+  private rssFeeds: Record<string, RSSSourceDefinition> = getRssSourceRegistry();
   
   async fetchRawData(params: DataSourceParams): Promise<RawDataItem[]> {
     const Parser = (await import('rss-parser')).default;
     const parser = new Parser({
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; ModularNewsWidget/1.0)'
-      }
+      },
+      // rss-parser 默认 60s；一个坏源不应占住 producer 整整一分钟。
+      timeout: Math.max(1000, Number(process.env.RSS_FETCH_TIMEOUT_MS ?? '8000')),
     });
     
     // 支持通过source参数选择预设订阅源，或直接指定url
@@ -226,14 +142,14 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
   /**
    * 获取所有预设RSS订阅源信息
    */
-  getAvailableFeeds(): Record<string, RSSSource> {
+  getAvailableFeeds(): Record<string, RSSSourceDefinition> {
     return { ...this.rssFeeds };
   }
   
   /**
    * 添加新的RSS订阅源
    */
-  addFeed(key: string, source: RSSSource): void {
+  addFeed(key: string, source: RSSSourceDefinition): void {
     this.rssFeeds[key] = source;
   }
   

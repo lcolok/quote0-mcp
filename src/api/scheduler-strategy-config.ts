@@ -5,11 +5,14 @@ type NumericKeys =
   | 'cooldownHoursStrict'
   | 'maxPushCountStrict'
   | 'recentFingerprintsLimitStrict'
+  | 'maxArticleAgeHoursStrict'
   | 'cooldownHoursRelaxed'
   | 'maxPushCountRelaxed'
   | 'recentFingerprintsLimitRelaxed'
+  | 'maxArticleAgeHoursRelaxed'
   | 'fallbackRepeatLimit'
   | 'sourceFailureSkipThreshold'
+  | 'sourceFailureCooldownMinutes'
   | 'recentFingerprintGlobalLimit'
   | 'recentFingerprintSnapshotSize';
 
@@ -20,11 +23,14 @@ export interface SchedulerStrategyConfig {
   cooldownHoursStrict: number;
   maxPushCountStrict: number;
   recentFingerprintsLimitStrict: number;
+  maxArticleAgeHoursStrict: number;
   cooldownHoursRelaxed: number;
   maxPushCountRelaxed: number;
   recentFingerprintsLimitRelaxed: number;
+  maxArticleAgeHoursRelaxed: number;
   fallbackRepeatLimit: number;
   sourceFailureSkipThreshold: number;
+  sourceFailureCooldownMinutes: number;
   recentFingerprintGlobalLimit: number;
   recentFingerprintSnapshotSize: number;
 }
@@ -34,11 +40,14 @@ const DEFAULT_CONFIG: SchedulerStrategyConfig = {
   cooldownHoursStrict: 6,
   maxPushCountStrict: 3,
   recentFingerprintsLimitStrict: 10,
+  maxArticleAgeHoursStrict: 24,
   cooldownHoursRelaxed: 3,
   maxPushCountRelaxed: 6,
   recentFingerprintsLimitRelaxed: 5,
+  maxArticleAgeHoursRelaxed: 72,
   fallbackRepeatLimit: 2,
   sourceFailureSkipThreshold: 3,
+  sourceFailureCooldownMinutes: 120,
   recentFingerprintGlobalLimit: 24,
   recentFingerprintSnapshotSize: 12
 };
@@ -47,11 +56,14 @@ const NUMERIC_KEYS: NumericKeys[] = [
   'cooldownHoursStrict',
   'maxPushCountStrict',
   'recentFingerprintsLimitStrict',
+  'maxArticleAgeHoursStrict',
   'cooldownHoursRelaxed',
   'maxPushCountRelaxed',
   'recentFingerprintsLimitRelaxed',
+  'maxArticleAgeHoursRelaxed',
   'fallbackRepeatLimit',
   'sourceFailureSkipThreshold',
+  'sourceFailureCooldownMinutes',
   'recentFingerprintGlobalLimit',
   'recentFingerprintSnapshotSize'
 ];
@@ -60,11 +72,14 @@ const ENV_MAP: Partial<Record<NumericKeys | 'version', string>> = {
   cooldownHoursStrict: 'NEWS_STRATEGY_COOLDOWN_STRICT',
   maxPushCountStrict: 'NEWS_STRATEGY_MAX_PUSH_STRICT',
   recentFingerprintsLimitStrict: 'NEWS_STRATEGY_RECENT_LIMIT_STRICT',
+  maxArticleAgeHoursStrict: 'NEWS_STRATEGY_MAX_ARTICLE_AGE_HOURS_STRICT',
   cooldownHoursRelaxed: 'NEWS_STRATEGY_COOLDOWN_RELAXED',
   maxPushCountRelaxed: 'NEWS_STRATEGY_MAX_PUSH_RELAXED',
   recentFingerprintsLimitRelaxed: 'NEWS_STRATEGY_RECENT_LIMIT_RELAXED',
+  maxArticleAgeHoursRelaxed: 'NEWS_STRATEGY_MAX_ARTICLE_AGE_HOURS_RELAXED',
   fallbackRepeatLimit: 'NEWS_STRATEGY_FALLBACK_REPEAT',
   sourceFailureSkipThreshold: 'NEWS_STRATEGY_SOURCE_FAILURE_SKIP',
+  sourceFailureCooldownMinutes: 'NEWS_STRATEGY_SOURCE_FAILURE_COOLDOWN_MINUTES',
   recentFingerprintGlobalLimit: 'NEWS_STRATEGY_RECENT_GLOBAL_LIMIT',
   recentFingerprintSnapshotSize: 'NEWS_STRATEGY_RECENT_SNAPSHOT',
   version: 'NEWS_STRATEGY_VERSION'
