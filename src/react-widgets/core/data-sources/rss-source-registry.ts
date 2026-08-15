@@ -7,6 +7,8 @@ export interface RSSSourceDefinition {
   category: string;
   description: string;
   profile: RSSSourceProfile;
+  /** Optional source-specific fetch timeout; default comes from RSS_FETCH_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /**
@@ -40,6 +42,7 @@ export const RSS_SOURCE_REGISTRY: Record<string, RSSSourceDefinition> = {
     category: 'technology',
     description: 'Hacker News 首页热门文章',
     profile: 'core',
+    timeoutMs: 12_000,
   },
   arstechnica: {
     id: 'arstechnica',
@@ -63,7 +66,7 @@ export const RSS_SOURCE_REGISTRY: Record<string, RSSSourceDefinition> = {
     url: 'https://www.theverge.com/rss/index.xml',
     category: 'technology',
     description: '消费科技、AI 与互联网产品资讯',
-    profile: 'core',
+    profile: 'extended',
   },
   'dev-to': {
     id: 'dev-to',
@@ -90,7 +93,7 @@ export const RSS_SOURCE_REGISTRY: Record<string, RSSSourceDefinition> = {
     url: 'https://blog.cloudflare.com/rss/',
     category: 'technology',
     description: '网络、安全、基础设施与 AI 工程',
-    profile: 'extended',
+    profile: 'core',
   },
   'openai-news': {
     id: 'openai-news',

@@ -25,29 +25,33 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
   
   async fetchRawData(params: DataSourceParams): Promise<RawDataItem[]> {
     const Parser = (await import('rss-parser')).default;
-    const parser = new Parser({
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; ModularNewsWidget/1.0)'
-      },
-      // rss-parser 默认 60s；一个坏源不应占住 producer 整整一分钟。
-      timeout: Math.max(1000, Number(process.env.RSS_FETCH_TIMEOUT_MS ?? '8000')),
-    });
     
     // 支持通过source参数选择预设订阅源，或直接指定url
     let rssUrl: string;
     let sourceName: string;
     let defaultCategory: string;
+    let sourceTimeoutMs: number | undefined;
     
     if (params.source && this.rssFeeds[params.source]) {
       const feed = this.rssFeeds[params.source];
       rssUrl = feed.url;
       sourceName = feed.name;
       defaultCategory = feed.category;
+      sourceTimeoutMs = feed.timeoutMs;
     } else {
       rssUrl = params.url || this.rssFeeds.solidot.url;
       sourceName = 'RSS源';
       defaultCategory = '新闻';
     }
+
+    const defaultTimeoutMs = Math.max(1000, Number(process.env.RSS_FETCH_TIMEOUT_MS ?? '8000'));
+    const parser = new Parser({
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; ModularNewsWidget/1.0)'
+      },
+      // 默认 fail-fast；对已实测存在长尾的源允许 registry 做局部放宽。
+      timeout: Math.max(1000, sourceTimeoutMs ?? defaultTimeoutMs),
+    });
     
     const count = params.count || 10;
     const startIndex = params.startIndex || 0;

@@ -13,13 +13,20 @@ describe('RSS source registry', () => {
       'hackernews',
       'arstechnica',
       'infoq-cn',
-      'the-verge',
       'dev-to',
       'github-changelog',
+      'cloudflare-blog',
     ]);
     for (const id of RECOMMENDED_RSS_SOURCE_IDS) {
       expect(getRssSourceDefinition(id)?.profile).toBe('core');
     }
+  });
+
+  it('HN 只局部放宽超时，The Verge 则降为扩展源', () => {
+    expect(RSS_SOURCE_REGISTRY.hackernews.timeoutMs).toBe(12_000);
+    expect(RSS_SOURCE_REGISTRY['the-verge'].profile).toBe('extended');
+    expect(RECOMMENDED_RSS_SOURCE_IDS).not.toContain('the-verge');
+    expect(RSS_SOURCE_REGISTRY['cloudflare-blog'].profile).toBe('core');
   });
 
   it('legacy 源仍可被旧 DB 配置解析，但不会进入推荐池', () => {
