@@ -544,9 +544,15 @@ export class NewsScheduler {
       const selection = selectionOutcome.selection;
 
       if (!selection) {
-        const reason = selectionOutcome.attempts.length
-          ? selectionOutcome.attempts.map((item) => `${item.layer}:${item.reason}`).join('|')
-          : 'no_candidate';
+        const sourceFailure = selectionOutcome.attempts.some((item) =>
+          item.reason === 'fetch_error' || item.reason === 'data_source_missing'
+        );
+        const producerNoFreshCandidate = job.config.jobRole === 'producer' && !sourceFailure;
+        const reason = producerNoFreshCandidate
+          ? 'producer:no_fresh_candidate'
+          : selectionOutcome.attempts.length
+            ? selectionOutcome.attempts.map((item) => `${item.layer}:${item.reason}`).join('|')
+            : 'no_candidate';
 
         if (runHistoryId) {
           try {
@@ -564,6 +570,17 @@ export class NewsScheduler {
           } catch (historyError) {
             console.warn('⚠️ 更新运行历史失败:', historyError);
           }
+        }
+
+        if (producerNoFreshCandidate) {
+          // producer 的职责是补充新鲜库存；源可访问但本轮没有新鲜候选不是 source failure。
+          // consumer 已有独立 LRU replay，因此这里应直接轮到下一个源，而不是 fallback 旧闻。
+          this.resetFailureCount(job, currentRssSource);
+          job.state.consecutiveFailures = 0;
+          await this.rotateRssSource(job);
+          const nextRunAt = new Date(Date.now() + job.config.intervalMs);
+          await this.persistSchedulerState(job, nextRunAt);
+          return;
         }
 
         this.incrementFailureCount(job, currentRssSource);
@@ -1509,6 +1526,16 @@ export class NewsScheduler {
         };
       }
       attempts.push({ layer: 'relaxed', reason: 'order_exhausted', stats: { filtered: relaxedFilter.stats.passed } });
+    }
+
+    if (job.config.jobRole === 'producer') {
+      attempts.push({ layer: 'fallback', reason: 'producer_disabled' });
+      return {
+        selection: null,
+        attempts,
+        totalCandidates,
+        poolSize
+      };
     }
 
     const fallbackFilter = this.filterCandidatesForFallback(scored, job);
