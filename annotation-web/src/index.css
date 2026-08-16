@@ -1,60 +1,308 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+
+  --color-primary-50: #eff8ff;
+  --color-primary-100: #dbeeff;
+  --color-primary-200: #b9ddff;
+  --color-primary-300: #86c4ff;
+  --color-primary-400: #4aa5ff;
+  --color-primary-500: #2087f3;
+  --color-primary-600: #116ad9;
+  --color-primary-700: #1055b0;
+  --color-primary-800: #12498e;
+  --color-primary-900: #153e70;
+  --color-primary-950: #0e274b;
+}
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(0, 0, 0, 0.87);
-  background-color: #f5f5f5;
-
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+
+  --app-bg: #f5f5f4;
+  --surface-1: rgba(255, 255, 255, 0.96);
+  --surface-2: #fafaf9;
+  --surface-3: #f0f0ee;
+  --surface-glass: rgba(250, 250, 249, 0.82);
+  --text-primary: #1b1d21;
+  --text-secondary: #5f646d;
+  --text-muted: #878c95;
+  --border-subtle: rgba(31, 36, 44, 0.10);
+  --border-strong: rgba(31, 36, 44, 0.18);
+  --brand-soft: #eef1ff;
+  --brand-strong: #526dcc;
+  --success: #278463;
+  --success-soft: #edf7f3;
+  --danger: #b94f52;
+  --danger-soft: #fbf0f0;
+  --warning: #9a7627;
+  --warning-soft: #faf6e9;
+  --agent: #7463c6;
+  --agent-soft: #f3f0ff;
+  --shadow-soft: 0 1px 2px rgba(20, 22, 26, 0.03), 0 8px 24px rgba(20, 22, 26, 0.05);
+  --shadow-float: 0 18px 55px rgba(20, 22, 26, 0.14);
+  --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-fluid: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-* {
-  box-sizing: border-box;
+html.dark {
+  color-scheme: dark;
+  --app-bg: #0f1115;
+  --surface-1: rgba(21, 24, 30, 0.96);
+  --surface-2: #191d24;
+  --surface-3: #20252d;
+  --surface-glass: rgba(18, 21, 26, 0.84);
+  --text-primary: #f0f2f5;
+  --text-secondary: #adb3bd;
+  --text-muted: #7e8793;
+  --border-subtle: rgba(235, 239, 245, 0.08);
+  --border-strong: rgba(235, 239, 245, 0.15);
+  --brand-soft: rgba(122, 145, 226, 0.13);
+  --brand-strong: #91a7f2;
+  --success: #67b99a;
+  --success-soft: rgba(70, 151, 119, 0.12);
+  --danger: #e18a8d;
+  --danger-soft: rgba(181, 75, 79, 0.12);
+  --warning: #d3b264;
+  --warning-soft: rgba(174, 133, 50, 0.11);
+  --agent: #ad9df2;
+  --agent-soft: rgba(116, 99, 198, 0.14);
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.18), 0 12px 30px rgba(0, 0, 0, 0.16);
+  --shadow-float: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+}
+
+html {
+  background: var(--app-bg);
+  scrollbar-gutter: stable;
 }
 
 body {
   margin: 0;
-  padding: 0;
   min-height: 100vh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background:
+    radial-gradient(circle at 12% -8%, color-mix(in oklab, var(--brand-strong) 10%, transparent), transparent 34rem),
+    var(--app-bg);
+  color: var(--text-primary);
 }
 
-#root {
-  min-height: 100vh;
+@supports (height: 100dvh) {
+  body,
+  #root {
+    min-height: 100dvh;
+  }
 }
 
-/* 自定义滚动条 */
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a {
+  touch-action: manipulation;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--brand-strong) 24%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--text-muted) 45%, transparent) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
+  background: color-mix(in oklab, var(--text-muted) 42%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: color-mix(in oklab, var(--text-muted) 62%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
-/* 过渡动画 */
-@layer utilities {
-  .transition-all-smooth {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+/* Tailwind v3 页面逐步迁移期间的暗色兼容桥。新组件优先使用语义 token。 */
+.dark .bg-white { background-color: var(--surface-1); }
+.dark .bg-gray-50 { background-color: var(--surface-2); }
+.dark .bg-gray-100 { background-color: var(--surface-3); }
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700 { color: var(--text-primary); }
+.dark .text-gray-600,
+.dark .text-gray-500 { color: var(--text-secondary); }
+.dark .text-gray-400,
+.dark .text-gray-300 { color: var(--text-muted); }
+.dark .border-gray-100,
+.dark .border-gray-200,
+.dark .border-gray-300 { border-color: var(--border-subtle); }
+.dark .divide-gray-200 > :not(:last-child) { border-color: var(--border-subtle); }
+.dark .hover\:bg-gray-50:hover,
+.dark .hover\:bg-gray-100:hover { background-color: var(--surface-2); }
+.dark .bg-yellow-50 { background-color: rgba(245, 180, 56, 0.09); }
+.dark .border-yellow-200 { border-color: rgba(245, 180, 56, 0.24); }
+.dark .text-yellow-900,
+.dark .text-yellow-800 { color: #f8d98a; }
+.dark .text-yellow-700,
+.dark .text-yellow-600 { color: #e6bd62; }
+.dark .bg-green-50 { background-color: rgba(56, 189, 102, 0.09); }
+.dark .border-green-200 { border-color: rgba(56, 189, 102, 0.24); }
+.dark .text-green-900,
+.dark .text-green-800 { color: #a8edbd; }
+.dark .text-green-700,
+.dark .text-green-600 { color: #7bd699; }
+.dark .bg-blue-50 { background-color: rgba(74, 165, 255, 0.09); }
+.dark .border-blue-100,
+.dark .border-blue-200 { border-color: rgba(74, 165, 255, 0.22); }
+.dark .text-blue-900,
+.dark .text-blue-800 { color: #b9ddff; }
+.dark .text-blue-700,
+.dark .text-blue-600 { color: #86c4ff; }
+.dark input,
+.dark textarea,
+.dark select {
+  background-color: var(--surface-2);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Review console semantic surfaces: low-saturation by design. */
+.review-panel {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-soft);
+}
+
+.review-source-card,
+.review-enhanced-card,
+.review-agent-card {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+}
+
+.review-source-card {
+  border-color: color-mix(in oklab, var(--warning) 26%, var(--border-subtle));
+  background: color-mix(in oklab, var(--warning-soft) 62%, var(--surface-2));
+}
+
+.review-enhanced-card {
+  border-color: color-mix(in oklab, var(--brand-strong) 20%, var(--border-subtle));
+  background: color-mix(in oklab, var(--brand-soft) 54%, var(--surface-2));
+}
+
+.review-agent-card {
+  border-color: color-mix(in oklab, var(--agent) 30%, var(--border-subtle));
+  background: color-mix(in oklab, var(--agent-soft) 72%, var(--surface-2));
+}
+
+.review-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid color-mix(in oklab, var(--agent) 34%, var(--border-subtle));
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  background: var(--agent-soft);
+  color: var(--agent);
+  font-size: 0.6875rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.quality-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.75rem;
+  padding: 0.8rem 0.9rem;
+  text-align: left;
+  transition:
+    transform 160ms var(--ease-snappy),
+    border-color 160ms var(--ease-snappy),
+    background-color 160ms var(--ease-snappy);
+}
+
+.quality-action:hover {
+  transform: translateY(-1px);
+}
+
+.quality-action:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.quality-action-high {
+  border-color: color-mix(in oklab, var(--success) 32%, var(--border-subtle));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.quality-action-low {
+  border-color: color-mix(in oklab, var(--danger) 30%, var(--border-subtle));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.surface-enter {
+  animation: surface-enter 420ms var(--ease-fluid) both;
+}
+
+@keyframes surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -1,26 +1,9 @@
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {
-      colors: {
-        primary: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          200: '#bae6fd',
-          300: '#7dd3fc',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
-        },
-      },
-    },
-  },
-  plugins: [],
-}
+/**
+ * Tailwind CSS v4 compatibility placeholder.
+ *
+ * Annotation Web now uses the first-party @tailwindcss/vite plugin and the
+ * CSS-first theme defined in src/index.css. Keep this file intentionally empty
+ * so older editor/tooling probes do not mistake the former v3 config for the
+ * design-token source of truth.
+ */
+export default {};

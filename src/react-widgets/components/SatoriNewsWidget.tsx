@@ -82,13 +82,10 @@ export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target
         <span
           key={`highlight-${highlight.startIndex}`}
           style={{
-            backgroundColor: '#000000',
-            color: '#FFFFFF',
-            padding: '2px 3px',
-            margin: '0 1px',
-            borderRadius: '3px',
-            fontWeight: 'bold',
-            border: '1px solid #000000'
+            // Keep emphasis geometry-neutral. resvg can panic when multiple inline
+            // background boxes cross the clipped body boundary; font emphasis does
+            // not introduce extra SVG rect geometry or alter the text segmentation.
+            fontWeight: 'bold'
           }}
         >
           {highlight.word}
@@ -165,7 +162,7 @@ export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target
           color: '#333333',
           overflow: 'hidden'
         }}>
-          <span>{renderHighlightedText(message, highlights)}</span>
+          <span>{target.kind === 'eink' ? message : renderHighlightedText(message, highlights)}</span>
         </div>
       </div>
 

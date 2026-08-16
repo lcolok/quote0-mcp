@@ -1,10 +1,24 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useDeferredValue, type CSSProperties } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
 import { devicesApi, type Device } from '../api/devices';
 import { useSearchParams, Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ExternalLink, Image as ImageIcon, Send, Search, GripVertical } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Image as ImageIcon,
+  Send,
+  Search,
+  GripVertical,
+  List,
+  Newspaper,
+  SlidersHorizontal,
+  ThumbsDown,
+  ThumbsUp,
+  Sparkles,
+} from 'lucide-react';
 
 interface NewsRecord {
   id: number;
@@ -16,13 +30,23 @@ interface NewsRecord {
   pushedAtUtc?: string | null;
   annotationStatus: 'pending' | 'annotating' | 'completed' | 'skipped';
   isRecent?: boolean;
-  rawContent: any;
-  processedContent: any;
+  rawContent?: any;
+  processedContent?: any;
+  contentOrigin?: {
+    kind?: 'neuromancer' | 'processed' | 'delivery' | string;
+    signature?: string | null;
+    producer?: string | null;
+    jobId?: string | null;
+    layer?: string | null;
+    contractVersion?: string | null;
+  };
 }
 
 function AnnotationPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim());
+  const [mobilePane, setMobilePane] = useState<'list' | 'preview' | 'actions'>('list');
   const [pushTarget, setPushTarget] = useState<{cloud: boolean, esp32: boolean}>({cloud: false, esp32: true});
   // null 表示全部启用的本地墨水屏；从设备管理页跳转时会自动锁定到指定设备。
   const [selectedEinkDeviceIds, setSelectedEinkDeviceIds] = useState<string[] | null>(null);
@@ -87,11 +111,12 @@ function AnnotationPage() {
     };
   }, [leftWidth]);
 
-  // 获取标注总览统计（用于显示真实总数/状态）
+  // 稳定内容主体统计：不再扫描几十万条 delivery JSONB。
   const { data: statisticsData } = useQuery({
-    queryKey: ['statistics'],
-    queryFn: () => apiClient.getStatistics(),
-    refetchInterval: 30000,
+    queryKey: ['review-statistics'],
+    queryFn: () => apiClient.getReviewStatistics(),
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const {
@@ -122,8 +147,8 @@ function AnnotationPage() {
     );
   }, [einkDevices, requestedDeviceId]);
 
-  // 首屏只取一页，避免把多年推送记录的完整 JSON 一次性传到浏览器。
-  const PAGE_SIZE = 100;
+  // 首屏只读轻量 review subject；raw/processed JSON 在选中后才按 id 懒加载。
+  const PAGE_SIZE = 50;
 
   const {
     data: newsData,
@@ -132,13 +157,17 @@ function AnnotationPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['push-history-all'],
-    initialPageParam: 0,
-    queryFn: ({ pageParam = 0 }) =>
-      apiClient.getPushHistory({ limit: PAGE_SIZE, offset: pageParam }),
-    getNextPageParam: (lastPage, pages) =>
-      lastPage.pagination?.hasMore ? pages.length * PAGE_SIZE : undefined,
-    refetchInterval: 30000,
+    queryKey: ['review-subjects', deferredSearchQuery],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => apiClient.getReviewSubjects({
+      limit: PAGE_SIZE,
+      ...(deferredSearchQuery ? { search: deferredSearchQuery } : {}),
+      ...(pageParam ? { cursor: pageParam } : {}),
+    }),
+    getNextPageParam: (lastPage) =>
+      lastPage.pagination?.hasMore ? lastPage.pagination.nextCursor || undefined : undefined,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   // 处理数据并排序
@@ -174,15 +203,16 @@ function AnnotationPage() {
         pushedAtUtc,
         annotationStatus: item.annotationStatus || 'pending',
         isRecent: Date.now() - pushedAtDate.getTime() < 3600000,
-        rawContent: item.rawContent,
-        processedContent: item.processedContent,
+        contentOrigin: item.contentOrigin,
       };
     }).sort((a, b) => b.pushedAt.getTime() - a.pushedAt.getTime());
   }, [allPages]);
 
   const progress = statisticsData?.data?.progress;
   const firstPageTotal = allPages[0]?.pagination?.total;
-  const overallTotal = progress?.total_count ?? firstPageTotal ?? newsList.length;
+  const overallTotal = deferredSearchQuery
+    ? (firstPageTotal ?? newsList.length)
+    : (progress?.total_count ?? firstPageTotal ?? newsList.length);
   const statusCounts = useMemo(() => {
     return newsList.reduce(
       (acc, record) => {
@@ -198,34 +228,48 @@ function AnnotationPage() {
       { pending: 0, completed: 0, skipped: 0 }
     );
   }, [newsList]);
-  const pendingTotal = newsList.length > 0
-    ? statusCounts.pending
-    : (progress?.pending_count ?? 0);
-  const completedTotal = newsList.length > 0
-    ? statusCounts.completed
-    : (progress?.completed_count ?? 0);
-  const skippedTotal = newsList.length > 0
-    ? statusCounts.skipped
-    : (progress?.skipped_count ?? 0);
+  const pendingTotal = progress?.pending_count ?? statusCounts.pending;
+  const completedTotal = progress?.completed_count ?? statusCounts.completed;
+  const skippedTotal = progress?.skipped_count ?? statusCounts.skipped;
 
-  // 根据搜索关键词筛选数据
-  const filteredList = useMemo(() => {
-    if (!searchQuery.trim()) return newsList;
+  // 搜索已移到服务端的稳定主体索引；deferred value 保证输入过程不阻塞交互。
+  const filteredList = newsList;
+  const isSearchPending = searchQuery.trim() !== deferredSearchQuery;
 
-    const query = searchQuery.toLowerCase();
-    return newsList.filter(item =>
-      item.title.toLowerCase().includes(query) ||
-      item.category.toLowerCase().includes(query) ||
-      item.dataSource.toLowerCase().includes(query)
-    );
-  }, [newsList, searchQuery]);
-
-  // 查找选中的记录
+  // 列表只保留轻量摘要；当前条目的大 JSON 按 id 懒加载。
   const selectedRecord = selectedId
     ? filteredList.find(r => r.id === selectedId)
     : filteredList[0];
-
-  const currentRecord = selectedRecord || filteredList[0];
+  const currentRecordSummary = selectedRecord || filteredList[0];
+  const {
+    data: currentDetailData,
+    isFetching: isDetailLoading,
+  } = useQuery({
+    queryKey: ['push-detail', currentRecordSummary?.id],
+    queryFn: () => apiClient.getPushDetail(currentRecordSummary!.id),
+    enabled: Boolean(currentRecordSummary?.id),
+    staleTime: 60_000,
+  });
+  const currentRecord = useMemo(() => {
+    if (!currentRecordSummary) return undefined;
+    const detail = currentDetailData?.data;
+    return {
+      ...currentRecordSummary,
+      imagePath: detail?.image_path || currentRecordSummary.imagePath,
+      rawContent: detail?.raw_content,
+      processedContent: detail?.processed_content,
+      contentOrigin: currentRecordSummary.contentOrigin || {
+        kind: detail?.layer === 'external-renderable' || detail?.job_id === 'renderable-intake'
+          ? 'neuromancer'
+          : 'delivery',
+        signature: detail?.processed_content?.signature,
+        producer: detail?.processed_content?.metadata?.producer,
+        jobId: detail?.job_id,
+        layer: detail?.layer,
+        contractVersion: detail?.processed_content?.metadata?.contractVersion,
+      },
+    };
+  }, [currentRecordSummary, currentDetailData?.data]);
 
   // 格式化时间显示
   const formatTime = (date: Date) => {
@@ -257,8 +301,8 @@ function AnnotationPage() {
       return response.data;
     },
     onSuccess: () => {
-      // 重新获取新闻列表以更新 image_path
-      queryClient.invalidateQueries({ queryKey: ['pending-news'] });
+      queryClient.invalidateQueries({ queryKey: ['review-subjects'] });
+      queryClient.invalidateQueries({ queryKey: ['push-detail', currentRecord?.id] });
     },
   });
 
@@ -271,12 +315,13 @@ function AnnotationPage() {
 
   // 快速标注mutation（点赞/点踩）
   const quickAnnotateMutation = useMutation({
-    mutationFn: (action: 'like' | 'dislike') =>
-      apiClient.quickAnnotate(currentRecord.id, action),
-    onSuccess: (_, action) => {
+    mutationFn: ({ id, action }: { id: number; action: 'like' | 'dislike' }) =>
+      apiClient.quickAnnotate(id, action),
+    onSuccess: (_, { id, action }) => {
       toast.success(action === 'like' ? '👍 已标记为高质量' : '👎 已标记为低质量');
-      queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
-      queryClient.invalidateQueries({ queryKey: ['statistics'] });
+      queryClient.invalidateQueries({ queryKey: ['review-subjects'] });
+      queryClient.invalidateQueries({ queryKey: ['review-statistics'] });
+      queryClient.invalidateQueries({ queryKey: ['push-detail', id] });
 
       // 自动跳转到下一条
       handleNext();
@@ -310,6 +355,7 @@ function AnnotationPage() {
 
   const handleSelectRecord = (record: NewsRecord) => {
     setSelectedId(record.id);
+    setMobilePane('preview');
   };
 
   const handlePrevious = () => {
@@ -332,7 +378,7 @@ function AnnotationPage() {
 
   const handleQuickAnnotate = (action: 'like' | 'dislike') => {
     if (currentRecord && !quickAnnotateMutation.isPending) {
-      quickAnnotateMutation.mutate(action);
+      quickAnnotateMutation.mutate({ id: currentRecord.id, action });
     }
   };
 
@@ -439,11 +485,65 @@ function AnnotationPage() {
   }
 
   const currentIdx = filteredList.findIndex(r => r.id === selectedId);
+  const isNeuromancerEnhanced = currentRecord.contentOrigin?.kind === 'neuromancer'
+    || currentRecord.processedContent?.signature === '神经漫游者'
+    || currentRecord.processedContent?.metadata?.producer === 'external-renderable-agent';
+  const researchReceipt = currentRecord.processedContent?.metadata?.researchReceipt ?? currentRecord.rawContent?.researchReceipt;
+  const researchSources = Array.isArray(researchReceipt?.sources) ? researchReceipt.sources : [];
+  const researchClaims = Array.isArray(researchReceipt?.claims) ? researchReceipt.claims : [];
+  const researchUsage = researchReceipt?.usage;
+  const researchRetrieval = researchReceipt?.retrieval;
+  const provenance = currentRecord.processedContent?.metadata?.provenance ?? currentRecord.rawContent?.provenance;
+  const legacyProvenanceCount = Array.isArray(provenance)
+    ? provenance.length
+    : provenance && typeof provenance === 'object'
+      ? Object.keys(provenance).length
+      : 0;
+  const provenanceCount = researchSources.length || legacyProvenanceCount;
+  const researchRoleLabel: Record<string, string> = {
+    seed: 'Seed',
+    primary: '原始',
+    official: '官方',
+    secondary: '二级来源',
+    syndicated: '转载',
+    community: '社区',
+  };
+  const mobileTabs = [
+    { id: 'list', label: '列表', icon: List },
+    { id: 'preview', label: '预览', icon: Newspaper },
+    { id: 'actions', label: '操作', icon: SlidersHorizontal },
+  ] as const;
 
   return (
-    <div ref={containerRef} className="flex h-[calc(100vh-12rem)] gap-0">
+    <div ref={containerRef} className="flex min-h-0 flex-col gap-3 lg:h-[calc(100dvh-8rem)] lg:flex-row lg:gap-0">
+      <div className="sticky top-0 z-20 grid grid-cols-3 gap-1 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-glass)] p-1.5 shadow-[var(--shadow-soft)] backdrop-blur-xl lg:hidden">
+        {mobileTabs.map((tab) => {
+          const Icon = tab.icon;
+          const active = mobilePane === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setMobilePane(tab.id)}
+              aria-pressed={active}
+              className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-2 text-sm font-semibold transition-[background-color,color,transform,box-shadow] duration-200 ease-[var(--ease-snappy)] active:scale-[0.98] motion-reduce:transform-none ${
+                active
+                  ? 'bg-primary-600 text-white shadow-md shadow-primary-600/20'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'
+              }`}
+            >
+              <Icon className="size-4" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* 第一列：新闻列表 */}
-      <div style={{ width: `${leftWidth}%` }} className="flex flex-col bg-white rounded-lg shadow overflow-hidden">
+      <div
+        style={{ '--panel-width': `${leftWidth}%` } as CSSProperties}
+        className={`${mobilePane === 'list' ? 'flex' : 'hidden'} h-[calc(100dvh-10.5rem)] w-full flex-col overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-1)] shadow-[var(--shadow-soft)] lg:flex lg:h-full lg:w-[var(--panel-width)] lg:rounded-r-none`}
+      >
         {/* 搜索框 */}
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
           <div className="relative">
@@ -471,8 +571,14 @@ function AnnotationPage() {
           <div className="mt-2 text-xs text-gray-600">
             {searchQuery ? (
               <>
-                找到 <span className="font-medium text-primary-600">{filteredList.length}</span> 条结果
-                <span className="ml-1">（已加载 {newsList.length} / 总 {overallTotal}）</span>
+                {isSearchPending ? (
+                  <span className="text-[var(--text-muted)]">正在检索稳定内容主体…</span>
+                ) : (
+                  <>
+                    找到 <span className="font-semibold text-[var(--brand-strong)]">{overallTotal}</span> 条结果
+                    <span className="ml-1 text-[var(--text-muted)]">（当前加载 {newsList.length}）</span>
+                  </>
+                )}
               </>
             ) : (
               <>
@@ -543,23 +649,28 @@ function AnnotationPage() {
                         {/* 状态标签 */}
                         <div className="flex items-center gap-1.5 text-xs mt-2 flex-wrap">
                           {record.annotationStatus === 'pending' && (
-                            <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
-                              🟢 待标注
+                            <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-2)] px-1.5 py-0.5 font-medium text-[var(--text-secondary)]">
+                              <span className="size-1.5 rounded-full bg-[var(--success)]" /> 待标注
                             </span>
                           )}
                           {record.annotationStatus === 'completed' && (
-                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
-                              ✅ 已标注
+                            <span className="rounded-full border border-primary-500/20 bg-[var(--brand-soft)] px-1.5 py-0.5 font-medium text-[var(--brand-strong)]">
+                              已标注
                             </span>
                           )}
                           {record.annotationStatus === 'skipped' && (
-                            <span className="px-1.5 py-0.5 bg-gray-100 text-gray-700 rounded-full font-medium">
-                              ⏭️ 已跳过
+                            <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-3)] px-1.5 py-0.5 font-medium text-[var(--text-muted)]">
+                              已跳过
+                            </span>
+                          )}
+                          {record.contentOrigin?.kind === 'neuromancer' && (
+                            <span className="review-origin-badge">
+                              <Sparkles className="size-3" /> Neuromancer 增强
                             </span>
                           )}
                           {record.isRecent && (
-                            <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-medium">
-                              ⭐ 最新
+                            <span className="rounded-full border border-[color-mix(in_oklab,var(--warning)_28%,transparent)] bg-[var(--warning-soft)] px-1.5 py-0.5 font-medium text-[var(--warning)]">
+                              最新
                             </span>
                           )}
                           <span className="text-gray-500">{record.category}</span>
@@ -588,16 +699,19 @@ function AnnotationPage() {
         )}
       </div>
 
-      {/* 左侧拖动分隔条 */}
+      {/* 左侧拖动分隔条：桌面专属；移动端改为单面板切换。 */}
       <div
         onMouseDown={handleMouseDown('left')}
-        className="w-1 bg-gray-200 hover:bg-primary-500 cursor-col-resize flex items-center justify-center transition-colors"
+        className="hidden w-1 cursor-col-resize items-center justify-center bg-[var(--surface-3)] transition-colors hover:bg-primary-500 lg:flex"
       >
-        <GripVertical className="w-4 h-4 text-gray-400" />
+        <GripVertical className="size-4 text-[var(--text-muted)]" />
       </div>
 
       {/* 第二列：新闻预览 */}
-      <div style={{ width: `${middleWidth}%` }} className="bg-white rounded-lg shadow overflow-y-auto">
+      <div
+        style={{ '--panel-width': `${middleWidth}%` } as CSSProperties}
+        className={`${mobilePane === 'preview' ? 'block' : 'hidden'} h-[calc(100dvh-10.5rem)] w-full overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-1)] shadow-[var(--shadow-soft)] lg:block lg:h-full lg:w-[var(--panel-width)] lg:rounded-none lg:border-x-0`}
+      >
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">新闻预览</h3>
@@ -613,6 +727,36 @@ function AnnotationPage() {
               </a>
             )}
           </div>
+
+          {isNeuromancerEnhanced && (
+            <div className="review-agent-card mb-4 rounded-xl p-3.5">
+              <div className="flex items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--agent-soft)] text-[var(--agent)]">
+                  <Sparkles className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">Neuromancer 研究增强成品</p>
+                    <span className="review-origin-badge">Agent final JSON</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                    神经漫游者负责研究、取舍与成稿；Quote0 仅校验 Renderable contract、排版并推送到墨水屏。
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--text-muted)]">
+                    <span>{currentRecord.contentOrigin?.contractVersion || currentRecord.processedContent?.metadata?.contractVersion || 'renderable contract'}</span>
+                    <span>来源 · {currentRecord.processedContent?.source || currentRecord.dataSource}</span>
+                    <span>{researchSources.length > 0 ? `研究凭证 · ${researchSources.length} 来源 / ${researchClaims.length} 主张` : provenanceCount > 0 ? `研究证据 ${provenanceCount} 项` : '研究来源明细尚未持久化'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isDetailLoading && (
+            <div className="mb-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-muted)]">
+              正在加载当前内容详情…列表本身已可交互。
+            </div>
+          )}
 
           <div className="space-y-4">
             {/* 图片预览区域 - 顶置显示 */}
@@ -673,41 +817,127 @@ function AnnotationPage() {
             {/* 原始RSS数据区域 */}
             {(currentRecord.rawContent || currentRecord.rawContent) && (
               <div className="mt-2">
-                <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
-                  📋 原始RSS数据
+                <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">
+                  {isNeuromancerEnhanced ? 'Renderable 输入快照' : '来源输入'}
                 </label>
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2">
+                <div className="review-source-card space-y-2 rounded-xl p-3.5">
                   <div>
-                    <span className="text-xs font-semibold text-yellow-800">原始标题：</span>
-                    <p className="text-sm text-yellow-900 mt-1">
+                    <span className="text-xs font-semibold text-[var(--warning)]">输入标题</span>
+                    <p className="mt-1 text-sm text-[var(--text-primary)]">
                       {(currentRecord.rawContent || currentRecord.rawContent)?.title}
                     </p>
                   </div>
                   {/* 显示原始正文：优先使用 raw_content.content，回退到 news.description */}
                   {((currentRecord.rawContent || currentRecord.rawContent)?.content || currentRecord.rawContent?.description) && (
                     <div>
-                      <span className="text-xs font-semibold text-yellow-800">
-                        原始摘要/正文：
+                      <span className="text-xs font-semibold text-[var(--warning)]">
+                        输入摘要 / 正文：
                         {(currentRecord.rawContent || currentRecord.rawContent)?.content
                           ? `（${(currentRecord.rawContent || currentRecord.rawContent).content.length} 字符）`
                           : '（RSS摘要）'}
                       </span>
-                      <p className="text-sm text-yellow-900 mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                      <p className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-[var(--text-secondary)]">
                         {(currentRecord.rawContent || currentRecord.rawContent)?.content || currentRecord.rawContent?.description}
                       </p>
                     </div>
                   )}
                   {(currentRecord.rawContent || currentRecord.rawContent)?.description && (
                     <div>
-                      <span className="text-xs font-semibold text-yellow-800">RSS Description：</span>
-                      <p className="text-sm text-yellow-900 mt-1 line-clamp-2">
+                      <span className="text-xs font-semibold text-[var(--warning)]">Description</span>
+                      <p className="mt-1 line-clamp-2 text-sm text-[var(--text-secondary)]">
                         {(currentRecord.rawContent || currentRecord.rawContent).description}
                       </p>
                     </div>
                   )}
-                  <div className="text-xs text-yellow-600">
-                    来源: {(currentRecord.rawContent || currentRecord.rawContent)?.source} | 发布: {(currentRecord.rawContent || currentRecord.rawContent)?.publishTime || '未知'}
+                  <div className="text-xs text-[var(--text-muted)]">
+                    来源 · {(currentRecord.rawContent || currentRecord.rawContent)?.source}　发布时间 · {(currentRecord.rawContent || currentRecord.rawContent)?.publishTime || '未知'}
                   </div>
+                  {isNeuromancerEnhanced && provenanceCount === 0 && (
+                    <p className="border-t border-[var(--border-subtle)] pt-2 text-xs leading-5 text-[var(--text-muted)]">
+                      当前产物只保存最终成品快照；Neuromancer 检索 / crawl 的来源明细尚未随成品持久化，因此这里暂时不能完整回放“增强前 → 增强后”的证据链。
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isNeuromancerEnhanced && researchSources.length > 0 && (
+              <div className="mt-2">
+                <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">
+                  Neuromancer Research Receipt
+                </label>
+                <div className="space-y-3 rounded-xl border border-[color-mix(in_oklab,var(--agent)_22%,var(--border-subtle))] bg-[color-mix(in_oklab,var(--agent)_5%,var(--surface-2))] p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                      <span className="review-origin-badge">{researchReceipt?.schemaVersion || 'research receipt'}</span>
+                      <span>{researchSources.length} 个来源</span>
+                      <span>{researchClaims.length} 个主张</span>
+                      {researchRetrieval?.status && <span>检索 · {researchRetrieval.status}</span>}
+                    </div>
+                    {researchReceipt?.threadId && (
+                      <a
+                        href={`https://profilmai.logic.heiyu.space/c/${researchReceipt.threadId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-[var(--agent)] hover:underline"
+                      >
+                        打开 Straylight thread
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {researchSources.map((source: any) => (
+                      <a
+                        key={source.id}
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-start gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] px-2.5 py-2 text-xs transition-colors hover:border-[color-mix(in_oklab,var(--agent)_35%,var(--border-subtle))]"
+                      >
+                        <span className="mt-0.5 shrink-0 rounded-md bg-[var(--agent-soft)] px-1.5 py-0.5 font-semibold text-[var(--agent)]">
+                          {researchRoleLabel[source.role] || source.role}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-[var(--text-primary)]">{source.title || source.url}</span>
+                          <span className="mt-0.5 block truncate text-[var(--text-muted)]">{source.url}</span>
+                        </span>
+                        <ExternalLink className="mt-0.5 size-3.5 shrink-0 text-[var(--text-muted)]" />
+                      </a>
+                    ))}
+                  </div>
+
+                  {researchClaims.length > 0 && (
+                    <div className="space-y-1.5 border-t border-[var(--border-subtle)] pt-2.5">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">最终主张 → 证据</p>
+                      {researchClaims.map((claim: any, index: number) => (
+                        <div key={`${claim.text}-${index}`} className="rounded-lg bg-[var(--surface-1)] px-2.5 py-2 text-xs">
+                          <p className="leading-5 text-[var(--text-secondary)]">{claim.text}</p>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {(claim.sourceIds || []).map((sourceId: string) => (
+                              <span key={sourceId} className="rounded-md bg-[var(--surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{sourceId}</span>
+                            ))}
+                            <span className="rounded-md bg-[var(--agent-soft)] px-1.5 py-0.5 text-[10px] text-[var(--agent)]">{claim.status}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {(researchUsage || researchRetrieval) && (
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-[var(--border-subtle)] pt-2 text-[11px] text-[var(--text-muted)]">
+                      {researchUsage?.toolCalls !== undefined && <span>工具调用 {researchUsage.toolCalls}</span>}
+                      {researchUsage?.searchRequests !== undefined && <span>搜索 {researchUsage.searchRequests}</span>}
+                      {researchUsage?.crawlRequests !== undefined && <span>Crawl {researchUsage.crawlRequests}</span>}
+                      {researchUsage?.normalizedContextTokens !== undefined && <span>上下文估算 {researchUsage.normalizedContextTokens.toLocaleString()} tokens</span>}
+                      {researchUsage?.providerReportedTokens?.status && (
+                        <span>Provider tokens · {researchUsage.providerReportedTokens.status === 'reported' ? (researchUsage.providerReportedTokens.total ?? 'reported') : researchUsage.providerReportedTokens.status}</span>
+                      )}
+                      {Array.isArray(researchRetrieval?.enginesUsed) && researchRetrieval.enginesUsed.length > 0 && (
+                        <span>引擎 · {researchRetrieval.enginesUsed.join(' / ')}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -715,27 +945,39 @@ function AnnotationPage() {
             {/* 处理后的数据区域 */}
             {(currentRecord.processedContent || currentRecord.processedContent) && (
               <div className="mt-2">
-                <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
-                  ✨ AX优化后的数据
+                <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">
+                  {isNeuromancerEnhanced ? 'Neuromancer 研究增强成品' : '处理后内容'}
                 </label>
-                <div className="bg-green-50 border border-green-200 rounded-lg p-3 space-y-2">
+                <div className={`${isNeuromancerEnhanced ? 'review-agent-card' : 'review-enhanced-card'} space-y-2 rounded-xl p-3.5`}>
                   <div>
-                    <span className="text-xs font-semibold text-green-800">优化标题：</span>
-                    <p className="text-sm text-green-900 mt-1 font-medium">
+                    <span className="text-xs font-semibold text-[var(--agent)]">最终标题</span>
+                    <p className="mt-1 text-sm font-semibold text-[var(--text-primary)]">
                       {(currentRecord.processedContent || currentRecord.processedContent)?.title}
                     </p>
                   </div>
                   {(currentRecord.processedContent || currentRecord.processedContent)?.message && (
                     <div>
-                      <span className="text-xs font-semibold text-green-800">优化内容：</span>
-                      <p className="text-sm text-green-900 mt-1">
+                      <span className="text-xs font-semibold text-[var(--agent)]">最终内容</span>
+                      <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
                         {(currentRecord.processedContent || currentRecord.processedContent).message}
                       </p>
                     </div>
                   )}
                   {(currentRecord.processedContent || currentRecord.processedContent)?.signature && (
-                    <div className="text-xs text-green-600">
-                      处理器: {(currentRecord.processedContent || currentRecord.processedContent).signature}
+                    <div className="text-xs text-[var(--text-muted)]">
+                      产出者 · {(currentRecord.processedContent || currentRecord.processedContent).signature}
+                      {currentRecord.processedContent?.metadata?.contractVersion
+                        ? `　Contract · ${currentRecord.processedContent.metadata.contractVersion}`
+                        : ''}
+                    </div>
+                  )}
+                  {Array.isArray(currentRecord.processedContent?.highlights) && currentRecord.processedContent.highlights.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 border-t border-[var(--border-subtle)] pt-2">
+                      {currentRecord.processedContent.highlights.map((highlight: string) => (
+                        <span key={highlight} className="rounded-full bg-[var(--surface-3)] px-2 py-1 text-[11px] text-[var(--text-secondary)]">
+                          {highlight}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -763,20 +1005,56 @@ function AnnotationPage() {
 
           </div>
         </div>
+
+        {currentRecord.annotationStatus === 'pending' && (
+          <div className="sticky bottom-0 z-10 border-t border-[var(--border-subtle)] bg-[var(--surface-glass)] p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] backdrop-blur-2xl lg:hidden">
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+              <button
+                type="button"
+                onClick={() => handleQuickAnnotate('like')}
+                disabled={quickAnnotateMutation.isPending}
+                className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--success-soft)] px-3 text-sm font-semibold text-[var(--success)] transition-transform active:scale-[0.98] disabled:opacity-50 motion-reduce:transform-none"
+              >
+                <ThumbsUp className="size-4" />
+                高质量
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickAnnotate('dislike')}
+                disabled={quickAnnotateMutation.isPending}
+                className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--danger-soft)] px-3 text-sm font-semibold text-[var(--danger)] transition-transform active:scale-[0.98] disabled:opacity-50 motion-reduce:transform-none"
+              >
+                <ThumbsDown className="size-4" />
+                低质量
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobilePane('actions')}
+                className="grid size-12 place-items-center rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-secondary)] shadow-[var(--shadow-soft)] transition-transform active:scale-[0.96] motion-reduce:transform-none"
+                aria-label="打开更多操作"
+              >
+                <SlidersHorizontal className="size-5" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 右侧拖动分隔条 */}
+      {/* 右侧拖动分隔条：桌面专属。 */}
       <div
         onMouseDown={handleMouseDown('right')}
-        className="w-1 bg-gray-200 hover:bg-primary-500 cursor-col-resize flex items-center justify-center transition-colors"
+        className="hidden w-1 cursor-col-resize items-center justify-center bg-[var(--surface-3)] transition-colors hover:bg-primary-500 lg:flex"
       >
-        <GripVertical className="w-4 h-4 text-gray-400" />
+        <GripVertical className="size-4 text-[var(--text-muted)]" />
       </div>
 
       {/* 第三列：标注和调试信息 */}
-      <div style={{ width: `${100 - leftWidth - middleWidth}%` }} className="flex flex-col gap-4 overflow-y-auto">
+      <div
+        style={{ '--panel-width': `${100 - leftWidth - middleWidth}%` } as CSSProperties}
+        className={`${mobilePane === 'actions' ? 'flex' : 'hidden'} h-[calc(100dvh-10.5rem)] w-full flex-col gap-4 overflow-y-auto lg:flex lg:h-full lg:w-[var(--panel-width)]`}
+      >
         {/* 操作面板 */}
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="review-panel rounded-2xl p-4 sm:p-6 lg:rounded-l-none">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">操作</h3>
 
           <div className="space-y-3">
@@ -786,41 +1064,51 @@ function AnnotationPage() {
                 <button
                   onClick={() => handleQuickAnnotate('like')}
                   disabled={quickAnnotateMutation.isPending}
-                  className="w-full flex items-center justify-center px-6 py-4 text-white bg-green-500 hover:bg-green-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="quality-action quality-action-high min-h-16 disabled:cursor-not-allowed disabled:opacity-50"
                   title="点赞 / 高质量 (快捷键: W)"
                 >
-                  <span className="text-3xl mr-3">👍</span>
-                  <span className="font-medium text-lg">好 / 高质量</span>
-                  <span className="text-sm opacity-75 ml-2">(W)</span>
+                  <span className="grid size-9 place-items-center rounded-lg bg-[var(--surface-1)] shadow-sm">
+                    <ThumbsUp className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="block text-sm font-semibold">高质量</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">内容准确、清晰、值得保留</span>
+                  </span>
+                  <kbd className="rounded-md bg-[var(--surface-3)] px-2 py-1 text-[11px] font-semibold text-[var(--text-muted)]">W</kbd>
                 </button>
                 <button
                   onClick={() => handleQuickAnnotate('dislike')}
                   disabled={quickAnnotateMutation.isPending}
-                  className="w-full flex items-center justify-center px-6 py-4 text-white bg-red-500 hover:bg-red-600 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="quality-action quality-action-low min-h-16 disabled:cursor-not-allowed disabled:opacity-50"
                   title="点踩 / 低质量 (快捷键: S)"
                 >
-                  <span className="text-3xl mr-3">👎</span>
-                  <span className="font-medium text-lg">差 / 低质量</span>
-                  <span className="text-sm opacity-75 ml-2">(S)</span>
+                  <span className="grid size-9 place-items-center rounded-lg bg-[var(--surface-1)] shadow-sm">
+                    <ThumbsDown className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="block text-sm font-semibold">低质量</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">事实、表达或内容价值不足</span>
+                  </span>
+                  <kbd className="rounded-md bg-[var(--surface-3)] px-2 py-1 text-[11px] font-semibold text-[var(--text-muted)]">S</kbd>
                 </button>
                 <button
                   onClick={handleSkip}
-                  className="w-full px-6 py-3 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  className="min-h-11 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                 >
-                  跳过 (Space)
+                  跳过 <span className="ml-1 text-xs text-[var(--text-muted)]">Space</span>
                 </button>
               </>
             )}
 
             {/* 推送工作台：把“登记设备 → 选内容 → 推送”放在同一条路径上 */}
-            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+            <div className="review-enhanced-card rounded-xl p-3.5 text-sm text-[var(--text-primary)]">
               <p className="font-semibold">怎么开始推送</p>
-              <p className="mt-1 text-xs leading-5 text-blue-800">
+              <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
                 左侧选一条新闻 → 选择目标设备 → 点击下方“立即推送”。设备管理页登记的墨水屏会自动出现在这里。
               </p>
             </div>
 
-            <div className="space-y-3 rounded-lg border border-gray-200 p-3">
+            <div className="space-y-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3.5">
               <p className="text-sm font-semibold text-gray-800">推送目标</p>
 
               <label className="flex items-center text-sm text-gray-700">

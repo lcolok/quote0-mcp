@@ -12,6 +12,7 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { startLabelJobWorker } from './label-jobs-worker.js';
 import { startDeviceDeliveryWorker } from './device-delivery-worker.js';
 import { startDeviceHealthAlertWorker } from './device-health-alerts.js';
+import { startResearchCanaryWorker } from './research-canary-worker.js';
 
 const PORT = parseInt(process.env.PORT || '3001');
 const HOST = process.env.HOST || 'localhost';
@@ -48,4 +49,6 @@ if (import.meta.main) {
   startDeviceDeliveryWorker();
   // 健康状态迁移通知独立 outbox worker；Bark 网络失败不阻塞 delivery hot path。
   startDeviceHealthAlertWorker();
+  // Research canary 独立于 producer/device hot path：每日硬上限 + 单并发，且绝不自动推屏。
+  startResearchCanaryWorker();
 }

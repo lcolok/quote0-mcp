@@ -136,6 +136,10 @@ assets/fonts/SmileySans-*
 # Quality evaluation tool - runtime generated reports
 tools/quality-evaluation/reports/*.md
 
+# Annotation Web browser-test artifacts
+annotation-web/test-results/
+annotation-web/playwright-report/
+
 # Lazycat 部署包（构建产物，不入库）
 *.lpk
 lazycat/*.lpk

@@ -27,9 +27,28 @@ mock.module("./image-storage.js", () => ({
 }));
 
 // 在 mock 之后导入被测模块
-const { DevicePushRenderingModule, LocalEinkRenderingModule } = await import(
+const { DevicePushRenderingModule, LocalEinkRenderingModule, toHighlightedWords } = await import(
   "./rendering-modules.js"
 );
+
+describe("toHighlightedWords", () => {
+  it("uses the real positions from the rendered message", () => {
+    const message = "MCP 2026-07-28 规范取消协议会话；请求须带 Mcp-Method 和 Mcp-Name 标头，转为无状态。";
+    const result = toHighlightedWords(message, ["2026-07-28", "Mcp-Method", "Mcp-Name", "无状态"]);
+
+    expect(result?.map((item: any) => ({ word: item.word, start: item.startIndex, end: item.endIndex }))).toEqual([
+      { word: "2026-07-28", start: message.indexOf("2026-07-28"), end: message.indexOf("2026-07-28") + "2026-07-28".length },
+      { word: "Mcp-Method", start: message.indexOf("Mcp-Method"), end: message.indexOf("Mcp-Method") + "Mcp-Method".length },
+      { word: "Mcp-Name", start: message.indexOf("Mcp-Name"), end: message.indexOf("Mcp-Name") + "Mcp-Name".length },
+      { word: "无状态", start: message.indexOf("无状态"), end: message.indexOf("无状态") + "无状态".length },
+    ]);
+  });
+
+  it("drops missing, duplicate, and overlapping highlights instead of rewriting the message", () => {
+    const result = toHighlightedWords("abcdef", ["abc", "bc", "abc", "missing"]);
+    expect(result?.map((item: any) => item.word)).toEqual(["abc"]);
+  });
+});
 
 describe("DevicePushRenderingModule", () => {
   const renderer = new DevicePushRenderingModule();

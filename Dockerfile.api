@@ -16,9 +16,11 @@ COPY package.json bun.lock ./
 COPY assets/ ./assets/
 COPY config/ ./config/
 
-# 安装依赖 (只有依赖变化时才会重新执行)
+# 安装依赖 (只有依赖变化时才会重新执行)。
+# LC03 对 registry.npmjs.org 偶有长尾；与 annotation-web 一样固定镜像源，
+# 同时保留 frozen lockfile，确保远端镜像与本地验证使用完全相同的依赖图。
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --registry=https://registry.npmmirror.com/
 
 # ===================== 阶段3: 应用构建 =====================  
 FROM dependencies as app-build

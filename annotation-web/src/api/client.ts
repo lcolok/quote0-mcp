@@ -154,7 +154,29 @@ class AnnotationApiClient {
   }
 
   /**
-   * 获取推送历史
+   * 获取人工评审主体（轻量、fingerprint 稳定主体、cursor 分页）。
+   * 列表不携带 raw/processed 大 JSON；详情按 id 懒加载。
+   */
+  async getReviewSubjects(params?: {
+    limit?: number;
+    offset?: number;
+    cursor?: string;
+    search?: string;
+  }): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get<ApiResponse<any[]>>(
+      '/api/review/subjects',
+      { params }
+    );
+    return response.data;
+  }
+
+  async getReviewStatistics(): Promise<ApiResponse<AnnotationStatistics>> {
+    const response = await this.client.get<ApiResponse<AnnotationStatistics>>('/api/review/statistics');
+    return response.data;
+  }
+
+  /**
+   * 获取推送历史（Scheduler 等旧页面仍使用 delivery history）。
    */
   async getPushHistory(params?: {
     limit?: number;

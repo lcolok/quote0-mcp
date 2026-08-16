@@ -16,15 +16,33 @@ import {
 } from './modular-architecture.js';
 import { HighlightedWord } from '../services/llm-workflow-engine.js';
 
-function toHighlightedWords(highlights?: string[]): HighlightedWord[] | undefined {
-  if (!highlights) return undefined;
-  return highlights.map((word) => ({
-    word,
-    startIndex: 0,
-    endIndex: word.length,
-    importance: 'medium' as const,
-    category: 'keyword' as const
-  }));
+export function toHighlightedWords(text: string, highlights?: string[]): HighlightedWord[] | undefined {
+  if (!highlights?.length || !text) return undefined;
+
+  const candidates: HighlightedWord[] = [];
+  for (const word of [...new Set(highlights.map((item) => item.trim()).filter(Boolean))]) {
+    const startIndex = text.indexOf(word);
+    if (startIndex < 0) continue;
+    candidates.push({
+      word,
+      startIndex,
+      endIndex: startIndex + word.length,
+      importance: 'medium',
+      category: 'keyword',
+    });
+  }
+  candidates.sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
+
+  const result: HighlightedWord[] = [];
+  let lastEnd = -1;
+  for (const candidate of candidates) {
+    // 重叠高亮会让 SatoriNewsWidget 重复/重排正文片段，因此在边界层去掉。
+    if (candidate.startIndex < lastEnd) continue;
+    result.push(candidate);
+    lastEnd = candidate.endIndex;
+  }
+
+  return result.length ? result : undefined;
 }
 
 /**
@@ -171,7 +189,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: toHighlightedWords(data.highlights)
+        highlights: toHighlightedWords(data.message, data.highlights)
       };
       
       // 渲染组件为图片
@@ -420,7 +438,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: toHighlightedWords(data.highlights) // 转换为HighlightedWord格式
+        highlights: toHighlightedWords(data.message, data.highlights) // 使用正文真实位置，避免高亮重排文本
       };
       
       console.log(`🎨 渲染新闻数据:`, {
@@ -596,7 +614,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: toHighlightedWords(data.highlights)
+        highlights: toHighlightedWords(data.message, data.highlights)
       };
 
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';

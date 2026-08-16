@@ -3,11 +3,12 @@ FROM dev.logic.heiyu.space/library/bun:alpine AS builder
 
 WORKDIR /app
 
-# 复制package.json
-COPY package.json ./
+# 复制依赖清单和锁文件，确保盒子端构建与本地 E2E 使用同一组依赖。
+COPY package.json bun.lock ./
 
-# 安装依赖（用淘宝镜像，LC03 无法访问 registry.npmjs.org）
-RUN bun install --registry=https://registry.npmmirror.com/
+# 安装依赖（用淘宝镜像，LC03 无法访问 registry.npmjs.org）。
+# frozen-lockfile 防止生产镜像在构建时悄悄解析到更新版本。
+RUN bun install --frozen-lockfile --registry=https://registry.npmmirror.com/
 
 # 复制源代码
 COPY . .

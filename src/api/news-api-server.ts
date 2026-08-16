@@ -10,7 +10,7 @@ import { prettyJSON } from 'hono/pretty-json';
 import { validator } from 'hono/validator';
 import type { NewsProcessRequest, NewsProcessResponse } from './news-types.js';
 import { modularNewsPlugin } from '../react-widgets/plugins/modular-news-plugin.js';
-import { processNews } from './news-processing-service.js';
+import { computeNewsFingerprint, processNews } from './news-processing-service.js';
 import { devicePusher } from './device-pusher.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { ensureSchedulerStarted, getSchedulerInstance } from './scheduler-registry.js';
@@ -20,6 +20,7 @@ import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
 import { devicesApp } from './devices-api.js';
 import inventoryApp from './inventory-api.js';
+import researchCanaryApp from './research-canary-api.js';
 import labelsApp from './labels-api.js';
 import labelBatchesApp from './label-batches-api.js';
 import componentLabelsApp from './component-labels-api.js';
@@ -31,6 +32,13 @@ import { labelPrintOrchestrator } from '../react-widgets/core/label-print-orches
 import { thermalLabelRenderer } from '../react-widgets/core/thermal-label-rendering-module.js';
 import { BUILTIN_TARGETS, RenderTarget } from '../react-widgets/core/render-targets.js';
 import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
+import {
+  buildRenderablePushContent,
+  minioImagePathFromRenderedImages,
+  normalizeRenderableDeviceIds,
+  RENDERABLE_NEWS_CONTRACT_VERSION,
+  validateRenderableNews,
+} from './renderable-news-intake.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 import { getDeviceFrame } from './device-frame-cache.js';
 import { isBarkAlertsConfigured } from './device-health-alerts.js';
@@ -38,6 +46,8 @@ import {
   getRssSourceRegistry,
   RECOMMENDED_RSS_SOURCE_IDS,
 } from '../react-widgets/core/data-sources/rss-source-registry.js';
+import { decodeReviewCursor, getStableReviewStatistics, listReviewSubjectSummaries } from './review-subject-store.js';
+import { triageResearchCandidate } from './research-triage.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -303,6 +313,7 @@ app.route('/', devicesApp);
 
 // Inventory API
 app.route('/', inventoryApp);
+app.route('/', researchCanaryApp);
 app.route('/api/labels', labelsApp);
 app.route('/api/label-batches', labelBatchesApp);
 
@@ -350,6 +361,11 @@ app.get('/', (c) => {
     description: '模块化新闻处理API服务',
     endpoints: {
       'POST /api/news/process': '处理新闻请求',
+      'POST /api/news/renderable/push': '接收外部 Agent 成品 JSON，校验、目标感知渲染、推送并写入标注历史',
+      'POST /api/news/research/triage': '确定性判断候选内容是否应进入 bounded Neuromancer Research lane（无外部调用）',
+      'POST /api/news/research/canary/jobs': '对 research-lane 候选创建 Quote0 持久 research_run，并异步 dispatch 到 Straylight /jobs canary',
+      'GET /api/news/research/canary/jobs/:id': '读取 Quote0 持久 research_run 状态/制品',
+      'POST /api/news/research/canary/jobs/:id/reconcile': '从 Straylight job + 持久 thread 对账，校验制品并最多执行一次 no-tools finalization retry',
       'GET /api/news/sources': '获取可用RSS源',
       'GET /api/news/scheduler/jobs': '获取所有调度任务',
       'POST /api/news/scheduler/jobs': '创建调度任务',
@@ -445,6 +461,155 @@ app.post('/api/news/process',
     }
   }
 );
+
+/**
+ * Research lane 的确定性门禁。
+ *
+ * 这里只做 selection/budget，不调用 Straylight/Neuromancer，也不修改内容或 DB。
+ * 自动 dispatch 必须复用该结果，避免 rich + low-risk 内容误入高成本 Research lane。
+ */
+app.post('/api/news/research/triage', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null) as {
+      seed?: { title?: unknown; content?: unknown; source?: unknown; link?: unknown; category?: unknown };
+      manual?: unknown;
+      conflict?: unknown;
+    } | null;
+    if (!body?.seed || typeof body.seed.title !== 'string' || !body.seed.title.trim()) {
+      return c.json({ success: false, error: 'seed.title 不能为空' }, 400);
+    }
+
+    const decision = triageResearchCandidate({
+      seed: {
+        title: body.seed.title,
+        ...(typeof body.seed.content === 'string' ? { content: body.seed.content } : {}),
+        ...(typeof body.seed.source === 'string' ? { source: body.seed.source } : {}),
+        ...(typeof body.seed.link === 'string' ? { link: body.seed.link } : {}),
+        ...(typeof body.seed.category === 'string' ? { category: body.seed.category } : {}),
+      },
+      manual: body.manual === true,
+      conflict: body.conflict === true,
+    });
+
+    return c.json({ success: true, data: decision });
+  } catch (error) {
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'Research triage 失败' }, 400);
+  }
+});
+
+/**
+ * 外部 Agent 成品 JSON → Quote0 纯渲染/推送/标注历史。
+ *
+ * 内容编辑权属于 Neuromancer 等外部 Agent；Quote0 在这里仅负责：
+ * schema/layout fail-closed 校验、target-aware render、设备推送、review SSoT 记账。
+ */
+app.post('/api/news/renderable/push', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null) as {
+      data?: unknown;
+      deviceIds?: unknown;
+    } | null;
+    const validation = validateRenderableNews(body?.data);
+    if (!validation.ok) {
+      return c.json({
+        success: false,
+        error: 'RenderableDataItem 校验失败',
+        errors: validation.errors,
+        contractVersion: RENDERABLE_NEWS_CONTRACT_VERSION,
+      }, 422);
+    }
+
+    const deviceIds = normalizeRenderableDeviceIds(body?.deviceIds);
+    if (body && Object.prototype.hasOwnProperty.call(body, 'deviceIds') && deviceIds?.length === 0) {
+      return c.json({ success: false, error: 'deviceIds 必须是至少包含一台设备的字符串数组' }, 400);
+    }
+
+    const data = validation.data;
+    const fingerprint = computeNewsFingerprint({
+      title: data.title,
+      link: data.link,
+      // 外部 Agent 的 publishTime 可能是生成时间；不让版面修订改变审阅主体身份。
+      source: data.source,
+      category: data.category,
+      fallback: `renderable:${data.id}`,
+    });
+
+    const pushResult = await renderAndPushLocalEinkByTarget(data, deviceIds);
+    const imagePath = minioImagePathFromRenderedImages(pushResult.renderedImages);
+    if (!imagePath) {
+      // 渲染失败时绝不能制造一个“已索引但没有预览图”的 review subject。
+      // 把渲染反馈交回外部 Agent 修稿；只有真实可审阅制品才进入 Annotation SSoT。
+      return c.json({
+        success: false,
+        error: 'RenderableDataItem 渲染失败，未写入标注历史',
+        errors: pushResult.pushResults
+          .filter((item) => !item.ok)
+          .map((item) => item.error || item.errorCode || item.deviceId || item.device),
+        contractVersion: RENDERABLE_NEWS_CONTRACT_VERSION,
+        review: { indexed: false },
+      }, 422);
+    }
+    const { rawContent, processedContent } = buildRenderablePushContent(data);
+
+    // Annotation / Review 页以 news_push_log 为审阅证据源；直推若不记账，屏上有图但 /annotate 永远找不到。
+    await postgres.initialize();
+    await postgres.recordPushResult({
+      jobId: 'renderable-intake',
+      fingerprint,
+      title: data.title,
+      link: data.link,
+      source: data.source,
+      category: data.category,
+      metadata: {
+        contractVersion: RENDERABLE_NEWS_CONTRACT_VERSION,
+        producer: 'external-renderable-agent',
+        renderableId: data.id,
+      },
+      result: {
+        status: pushResult.status,
+        succeeded: pushResult.succeeded,
+        failed: pushResult.failed,
+        devices: pushResult.pushResults,
+      },
+      rawContent,
+      processedContent,
+      imagePath,
+      layer: 'external-renderable',
+      isFallback: false,
+      strategySnapshot: {
+        mode: 'agent-final-json',
+        contractVersion: RENDERABLE_NEWS_CONTRACT_VERSION,
+      },
+    });
+
+    return c.json({
+      success: pushResult.ok,
+      data: {
+        fingerprint,
+        contractVersion: RENDERABLE_NEWS_CONTRACT_VERSION,
+        renderable: data,
+        imagePath,
+        push: {
+          status: pushResult.status,
+          succeeded: pushResult.succeeded,
+          failed: pushResult.failed,
+          devices: pushResult.pushResults,
+          renderedImages: pushResult.renderedImages,
+        },
+        review: {
+          indexed: true,
+          searchTitle: data.title,
+        },
+      },
+    }, pushResult.ok ? 200 : 502);
+  } catch (error) {
+    console.error('❌ Renderable intake 推送失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Renderable intake 推送失败',
+    }, 500);
+  }
+});
 
 /**
  * 调度任务管理
@@ -880,7 +1045,109 @@ app.get('/api/rss/list', async (c) => {
 
 // ==================== 调度器管理API ====================
 
-// 获取推送历史记录
+/**
+ * 人工评审轻量列表。
+ *
+ * 与历史 `/api/scheduler/push-history` 不同，这里以稳定 fingerprint 为主体，
+ * 先在 news_push_stats 上分页，再只读取当前页主体的最新 delivery。
+ * 默认不返回 raw/processed 大 JSON；选中一条后继续使用 detail API 按 id 懒加载。
+ */
+app.get('/api/review/subjects', async (c) => {
+  try {
+    await postgres.initialize();
+    const client = await postgres.getClient();
+    try {
+      const parsedLimit = Number.parseInt(c.req.query('limit') || '50', 10);
+      const parsedOffset = Number.parseInt(c.req.query('offset') || '0', 10);
+      const limit = Math.min(200, Math.max(1, Number.isNaN(parsedLimit) ? 50 : parsedLimit));
+      const offset = Math.max(0, Number.isNaN(parsedOffset) ? 0 : parsedOffset);
+      const cursor = c.req.query('cursor');
+      if (cursor && !decodeReviewCursor(cursor)) {
+        return c.json({ success: false, error: '无效的分页游标' }, 400);
+      }
+
+      const result = await listReviewSubjectSummaries(client, {
+        limit,
+        offset,
+        cursor,
+        search: c.req.query('search'),
+        // 保持旧 Pagination.total 契约；主体 count 在 ~10k stats 表上仅需数毫秒。
+        includeTotal: true,
+      });
+
+      const records = result.rows.map((row) => {
+        const pushedAt = row.pushed_at ? new Date(row.pushed_at) : null;
+        const origin = row.layer === 'external-renderable' || row.job_id === 'renderable-intake'
+          ? 'neuromancer'
+          : row.signature || row.producer
+            ? 'processed'
+            : 'delivery';
+        return {
+          id: row.id,
+          fingerprint: row.fingerprint,
+          title: row.title || '未知标题',
+          originalTitle: row.original_title || row.title,
+          imagePath: row.image_path,
+          pushedAt: pushedAt ? formatToChinaTime(pushedAt) : null,
+          pushedAtUtc: pushedAt ? pushedAt.toISOString() : null,
+          pushedAtEpoch: pushedAt ? pushedAt.getTime() : null,
+          category: row.category || 'unknown',
+          dataSource: row.source || row.job_id || 'unknown',
+          annotationStatus: row.annotation_status || 'pending',
+          contentOrigin: {
+            kind: origin,
+            signature: row.signature,
+            producer: row.producer,
+            jobId: row.job_id,
+            layer: row.layer,
+            contractVersion: row.contract_version,
+          },
+        };
+      });
+
+      return c.json({
+        success: true,
+        data: records,
+        pagination: {
+          total: result.total ?? 0,
+          limit,
+          offset,
+          hasMore: result.hasMore,
+          nextCursor: result.nextCursor,
+        },
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('获取评审主体失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取评审主体失败',
+    }, 500);
+  }
+});
+
+/** 稳定内容主体统计，避免扫描 delivery JSONB。 */
+app.get('/api/review/statistics', async (c) => {
+  try {
+    await postgres.initialize();
+    const client = await postgres.getClient();
+    try {
+      return c.json({ success: true, data: await getStableReviewStatistics(client) });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('获取评审统计失败:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : '获取评审统计失败',
+    }, 500);
+  }
+});
+
+// 获取推送历史记录（兼容旧调用方；评审 UI 应使用 /api/review/subjects）
 app.get('/api/scheduler/push-history', async (c) => {
   try {
     await postgres.initialize();

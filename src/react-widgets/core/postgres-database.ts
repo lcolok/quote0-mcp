@@ -121,6 +121,24 @@ export class PostgresDatabase {
    */
   private getMigrationStatements(): string[] {
     return [
+      // v1.21.62: Research R1 Phase A/B 分离。既有 v1.21.61 research_runs 需要保留所有
+      // Straylight thread 引用和确定性 evidence packet，不能只记当前 thread。
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb`,
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS evidence_snapshot TEXT`,
+      // v1.21.65: inventory auto-canary provenance. Keep the trigger and source inventory id
+      // in Quote0 domain state so the worker can enforce daily caps/idempotency without
+      // scraping Straylight or overloading input_snapshot with control-plane metadata.
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS trigger VARCHAR(32) NOT NULL DEFAULT 'manual'`,
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS source_inventory_id INTEGER REFERENCES content_inventory(id) ON DELETE SET NULL`,
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'research_runs_trigger_check') THEN
+          ALTER TABLE research_runs ADD CONSTRAINT research_runs_trigger_check
+            CHECK (trigger IN ('manual', 'inventory-auto'));
+        END IF;
+      END $$`,
+      `CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL`,
       // v1.21.20: component_labels 加 widget_id 并入主键(code,target_id,widget_id)。
       // 之前 code 命名空间在 component-code/component-value 两种 widget 间共享，
       // 理论上存在撞键后返回错误 widget 渲染结果的风险；加 widget_id 从结构上杜绝。
@@ -1034,6 +1052,42 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_inventory_state ON content_inventory(state, created_at);
       CREATE INDEX IF NOT EXISTS idx_inventory_replay ON content_inventory(state, last_pushed_at) WHERE state='pushed';
       CREATE INDEX IF NOT EXISTS idx_inventory_producer ON content_inventory(producer_job_id);
+
+      -- Quote0 Research 领域状态：Straylight thread/run 只是执行侧引用，
+      -- seed/triage/result 必须由 Quote0 自己持久化，避免 /jobs 进程内状态丢失后失去领域审计链。
+      CREATE TABLE IF NOT EXISTS research_runs (
+        id UUID PRIMARY KEY,
+        mode VARCHAR(40) NOT NULL,
+        fingerprint VARCHAR(128) NOT NULL,
+        idempotency_key VARCHAR(200) NOT NULL UNIQUE,
+        state VARCHAR(24) NOT NULL DEFAULT 'queued'
+          CHECK (state IN ('queued', 'running', 'waiting_user', 'completed', 'invalid', 'failed', 'cancelled')),
+        policy_version VARCHAR(80) NOT NULL,
+        agent_id VARCHAR(80) NOT NULL,
+        trigger VARCHAR(32) NOT NULL DEFAULT 'manual'
+          CHECK (trigger IN ('manual', 'inventory-auto')),
+        source_inventory_id INTEGER REFERENCES content_inventory(id) ON DELETE SET NULL,
+        input_snapshot JSONB NOT NULL,
+        triage JSONB NOT NULL,
+        straylight_job_id VARCHAR(128),
+        straylight_job_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        straylight_thread_id VARCHAR(128),
+        straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        evidence_snapshot TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        result_artifact JSONB,
+        runtime_receipt JSONB,
+        validation_errors JSONB,
+        error TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_research_runs_state ON research_runs(state, created_at);
+      CREATE INDEX IF NOT EXISTS idx_research_runs_fingerprint ON research_runs(fingerprint, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_research_runs_thread ON research_runs(straylight_thread_id) WHERE straylight_thread_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL;
 
       -- job_role 列：producer / consumer / mixed
       ALTER TABLE news_scheduler_jobs
