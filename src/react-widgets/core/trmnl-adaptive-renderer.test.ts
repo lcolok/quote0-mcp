@@ -5,6 +5,7 @@ import {
   TRMNL_FRAMEWORK_VERSION,
   buildTrmnlAdaptiveHtml,
   deriveTrmnlTargetProfile,
+  isTrmnlFrameworkAssetUrl,
 } from './trmnl-adaptive-renderer.js';
 import {
   EINK_296X128_TARGET,
@@ -64,6 +65,10 @@ describe('TRMNL adaptive HTML', () => {
     expect(TRMNL_FRAMEWORK_JS_URL).toContain('/js/3.2.0/');
     expect(TRMNL_FRAMEWORK_CSS_URL).not.toContain('latest');
     expect(TRMNL_FRAMEWORK_JS_URL).not.toContain('latest');
+    expect(isTrmnlFrameworkAssetUrl(TRMNL_FRAMEWORK_CSS_URL)).toBe(true);
+    expect(isTrmnlFrameworkAssetUrl(TRMNL_FRAMEWORK_JS_URL)).toBe(true);
+    expect(isTrmnlFrameworkAssetUrl('https://trmnl.com/fonts/TRMNL16-Regular.woff2')).toBe(true);
+    expect(isTrmnlFrameworkAssetUrl('https://example.com/untrusted.css')).toBe(false);
   });
 
   test('keeps the exact same markup contract while geometry comes from RenderTarget', () => {
