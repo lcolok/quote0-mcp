@@ -6,8 +6,6 @@ import type { RenderTarget } from './render-targets.js';
 export const TRMNL_FRAMEWORK_VERSION = '3.2.0';
 export const TRMNL_FRAMEWORK_CSS_URL = `https://trmnl.com/css/${TRMNL_FRAMEWORK_VERSION}/plugins.min.css`;
 export const TRMNL_FRAMEWORK_JS_URL = `https://trmnl.com/js/${TRMNL_FRAMEWORK_VERSION}/plugins.min.js`;
-const TRMNL_ASSET_ORIGIN = 'https://trmnl.com';
-const TRMNL_ASSET_USER_AGENT = 'Mozilla/5.0 Quote0-TRMNL-Renderer/1.0';
 
 const DEFAULT_CJK_FONT_PATH = path.join(
   'assets',
@@ -31,18 +29,10 @@ export interface TrmnlTargetProfile {
   screenClasses: string[];
 }
 
-export interface TrmnlAssetCacheMetrics {
-  entries: number;
-  bytes: number;
-  networkFetches: number;
-  cacheHits: number;
-}
-
 export interface TrmnlRenderMetrics {
   frameworkVersion: string;
   frameworkBuild: string | null;
   renderMs: number;
-  assetCache: TrmnlAssetCacheMetrics;
   terminalizeStats: unknown;
   terminalizeStatsHistory: unknown[];
   viewport: { width: number; height: number };
@@ -85,74 +75,6 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-interface CachedTrmnlAsset {
-  body: Buffer;
-  contentType: string;
-}
-
-const trmnlAssetCache = new Map<string, Promise<CachedTrmnlAsset>>();
-let trmnlAssetBytes = 0;
-let trmnlAssetNetworkFetches = 0;
-let trmnlAssetCacheHits = 0;
-
-export function isTrmnlFrameworkAssetUrl(url: string): boolean {
-  return (
-    url === TRMNL_FRAMEWORK_CSS_URL ||
-    url === TRMNL_FRAMEWORK_JS_URL ||
-    url.startsWith(`${TRMNL_ASSET_ORIGIN}/fonts/`)
-  );
-}
-
-export function getTrmnlAssetCacheMetrics(): TrmnlAssetCacheMetrics {
-  return {
-    entries: trmnlAssetCache.size,
-    bytes: trmnlAssetBytes,
-    networkFetches: trmnlAssetNetworkFetches,
-    cacheHits: trmnlAssetCacheHits,
-  };
-}
-
-async function loadTrmnlFrameworkAsset(url: string, timeoutMs: number): Promise<CachedTrmnlAsset> {
-  const existing = trmnlAssetCache.get(url);
-  if (existing) {
-    trmnlAssetCacheHits += 1;
-    return existing;
-  }
-
-  const pending = (async () => {
-    trmnlAssetNetworkFetches += 1;
-    const response = await fetch(url, {
-      headers: { 'user-agent': TRMNL_ASSET_USER_AGENT },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!response.ok) {
-      throw new Error(`TRMNL asset fetch failed: ${response.status} ${url}`);
-    }
-    const body = Buffer.from(await response.arrayBuffer());
-    const asset = {
-      body,
-      contentType: response.headers.get('content-type')?.split(';')[0] || 'application/octet-stream',
-    };
-    trmnlAssetBytes += body.length;
-    return asset;
-  })();
-  trmnlAssetCache.set(url, pending);
-
-  try {
-    return await pending;
-  } catch (error) {
-    trmnlAssetCache.delete(url);
-    throw error;
-  }
-}
-
-async function warmCoreTrmnlAssets(timeoutMs: number): Promise<void> {
-  await Promise.all([
-    loadTrmnlFrameworkAsset(TRMNL_FRAMEWORK_CSS_URL, timeoutMs),
-    loadTrmnlFrameworkAsset(TRMNL_FRAMEWORK_JS_URL, timeoutMs),
-  ]);
 }
 
 /**
@@ -395,32 +317,6 @@ export class TrmnlAdaptiveRenderer {
     const startedAt = performance.now();
 
     try {
-      // Fetch pinned TRMNL assets once in the Quote0 process, then satisfy all
-      // browser requests from memory. This keeps the official asset URLs/relative
-      // font resolution intact while removing per-render CDN latency and variance.
-      await warmCoreTrmnlAssets(timeoutMs);
-      await page.setRequestInterception(true);
-      page.on('request', (request) => {
-        void (async () => {
-          const url = request.url();
-          if (!isTrmnlFrameworkAssetUrl(url)) {
-            await request.continue();
-            return;
-          }
-          try {
-            const asset = await loadTrmnlFrameworkAsset(url, timeoutMs);
-            await request.respond({
-              status: 200,
-              contentType: asset.contentType,
-              headers: { 'cache-control': 'public, max-age=31536000, immutable' },
-              body: asset.body,
-            });
-          } catch {
-            await request.abort('failed');
-          }
-        })();
-      });
-
       await page.setViewport({
         width: target.widthPx,
         height: target.heightPx,
@@ -511,7 +407,6 @@ export class TrmnlAdaptiveRenderer {
           frameworkVersion: TRMNL_FRAMEWORK_VERSION,
           frameworkBuild: runtimeMetrics.frameworkBuild,
           renderMs,
-          assetCache: getTrmnlAssetCacheMetrics(),
           terminalizeStats: runtimeMetrics.terminalizeStats,
           terminalizeStatsHistory: runtimeMetrics.terminalizeStatsHistory,
           viewport: { width: target.widthPx, height: target.heightPx },
