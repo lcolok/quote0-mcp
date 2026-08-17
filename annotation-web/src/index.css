@@ -38,6 +38,9 @@
   --border-strong: rgba(31, 36, 44, 0.18);
   --brand-soft: #eef1ff;
   --brand-strong: #526dcc;
+  --selection-bg: #eef2ff;
+  --selection-hover-bg: #e7ecff;
+  --selection-border: #7088dc;
   --success: #278463;
   --success-soft: #edf7f3;
   --danger: #b94f52;
@@ -66,6 +69,9 @@ html.dark {
   --border-strong: rgba(235, 239, 245, 0.15);
   --brand-soft: rgba(122, 145, 226, 0.13);
   --brand-strong: #91a7f2;
+  --selection-bg: #1b2130;
+  --selection-hover-bg: #20283a;
+  --selection-border: #91a7f2;
   --success: #67b99a;
   --success-soft: rgba(70, 151, 119, 0.12);
   --danger: #e18a8d;
@@ -203,6 +209,32 @@ a {
 }
 
 /* Review console semantic surfaces: low-saturation by design. */
+.review-list-item {
+  border-inline-start: 3px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  transition:
+    background-color 150ms var(--ease-snappy),
+    border-color 150ms var(--ease-snappy);
+}
+
+.review-list-item:hover {
+  background: var(--surface-2);
+}
+
+.review-list-item-selected {
+  border-inline-start-color: var(--selection-border);
+  background: var(--selection-bg);
+}
+
+.review-list-item-selected:hover {
+  background: var(--selection-hover-bg);
+}
+
+.review-list-item-title {
+  color: var(--text-primary);
+}
+
 .review-panel {
   border: 1px solid var(--border-subtle);
   background: var(--surface-1);

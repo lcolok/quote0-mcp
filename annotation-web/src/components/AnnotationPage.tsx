@@ -611,8 +611,9 @@ function AnnotationPage() {
                   <div
                     key={record.id}
                     onClick={() => handleSelectRecord(record)}
-                    className={`p-4 cursor-pointer transition-colors hover:bg-gray-50 ${
-                      isSelected ? 'bg-primary-50 border-l-4 border-primary-600' : ''
+                    aria-current={isSelected ? 'true' : undefined}
+                    className={`review-list-item p-4 cursor-pointer ${
+                      isSelected ? 'review-list-item-selected' : ''
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -639,9 +640,7 @@ function AnnotationPage() {
                       {/* 内容 */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2 mb-1">
-                          <h3 className={`text-sm font-medium line-clamp-2 ${
-                            isSelected ? 'text-primary-900' : 'text-gray-900'
-                          }`}>
+                          <h3 className="review-list-item-title text-sm font-medium line-clamp-2">
                             {record.title}
                           </h3>
                         </div>

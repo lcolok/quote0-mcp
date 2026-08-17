@@ -213,4 +213,28 @@ test('desktop keeps the three-column review workspace', async ({ page }, testInf
   await expect(page.locator('[class*="cursor-col-resize"]')).toHaveCount(2);
   await expectNoDocumentOverflow(page, 1440);
   await page.screenshot({ path: 'test-results/annotation-desktop-light.png', fullPage: true });
+
+  // 回归用户截图：暗色模式的当前项不能泄漏浅色 primary-50/primary-900。
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  const currentItem = page
+    .getByRole('heading', { name: 'MCP 新规范取消会话' })
+    .first()
+    .locator('xpath=ancestor::div[contains(@class, "cursor-pointer")][1]');
+  await currentItem.click();
+  await page.mouse.move(1200, 48);
+  await expect.poll(
+    () => currentItem.evaluate((element) => getComputedStyle(element).backgroundColor),
+    { timeout: 1_000 },
+  ).toBe('rgb(27, 33, 48)');
+  const selectedStyle = await currentItem.evaluate((element) => {
+    const title = element.querySelector('h3');
+    const style = getComputedStyle(element);
+    return {
+      borderLeftColor: style.borderLeftColor,
+      titleColor: title ? getComputedStyle(title).color : '',
+    };
+  });
+  expect(selectedStyle.borderLeftColor).toBe('rgb(145, 167, 242)');
+  expect(selectedStyle.titleColor).toBe('rgb(240, 242, 245)');
 });
