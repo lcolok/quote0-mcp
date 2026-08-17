@@ -49,6 +49,10 @@
     "check": "bunx tsx scripts/check-services.ts",
     "seed:memo": "bunx tsx scripts/seed-memo.ts",
     "check:base-images": "bunx tsx scripts/check-manifest-base-images.ts",
+    "version:check": "bun scripts/check-release-version.ts",
+    "version:check:ref": "bun scripts/check-release-version.ts --require-release-ref",
+    "version:check:remote": "bun scripts/check-release-version.ts --require-remote",
+    "release:gate": "bun run check:base-images && bun run version:check && bun run test:gate",
     "status": "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}' --filter name=quote0"
   },
   "keywords": [

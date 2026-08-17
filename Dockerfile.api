@@ -41,6 +41,10 @@ RUN echo "Build revision: ${BUILD_REVISION}"
 COPY ax-framework/ ./ax-framework/
 COPY docker/ ./docker/
 COPY scripts/ ./scripts/
+# Embed the release envelope that this news-api image was built from. Runtime
+# health/version endpoints read this copy, so a pinned old image keeps its true
+# component identity when a later app release only rebuilds another service.
+COPY lazycat/lzc-manifest.yml ./lazycat/lzc-manifest.yml
 
 # 设置时区
 ENV TZ=Asia/Shanghai

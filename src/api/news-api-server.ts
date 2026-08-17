@@ -49,6 +49,7 @@ import {
 } from '../react-widgets/core/data-sources/rss-source-registry.js';
 import { decodeReviewCursor, getStableReviewStatistics, listReviewSubjectSummaries } from './review-subject-store.js';
 import { triageResearchCandidate } from './research-triage.js';
+import { NEWS_API_RELEASE_VERSION } from './release-version.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -359,7 +360,7 @@ const RSS_SOURCES: Record<string, RSSSourceInfo> = Object.fromEntries(
 app.get('/', (c) => {
   return c.json({
     service: 'Modular News API',
-    version: '1.0.0',
+    version: NEWS_API_RELEASE_VERSION,
     description: '模块化新闻处理API服务',
     endpoints: {
       'POST /api/news/process': '处理新闻请求',
@@ -821,7 +822,7 @@ app.get('/api/health', (c) => {
     status: 'healthy',
     timestamp: formatToChinaTime(new Date()),
     service: 'Modular News API',
-    version: '1.0.0',
+    version: NEWS_API_RELEASE_VERSION,
     timezone: 'Asia/Shanghai (CST)'
   });
 });
@@ -855,7 +856,7 @@ app.get('/api/health/modules', async (c) => {
 app.get('/api/docs', (c) => {
   return c.json({
     title: 'Modular News API 文档',
-    version: '1.0.0',
+    version: NEWS_API_RELEASE_VERSION,
     baseUrl: '/api',
     endpoints: {
       'POST /news/process': {
