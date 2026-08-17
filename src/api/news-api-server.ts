@@ -21,6 +21,7 @@ import { llmProvidersApp } from './llm-providers-api.js';
 import { devicesApp } from './devices-api.js';
 import inventoryApp from './inventory-api.js';
 import researchCanaryApp from './research-canary-api.js';
+import trmnlCanaryApp from './trmnl-canary-api.js';
 import labelsApp from './labels-api.js';
 import labelBatchesApp from './label-batches-api.js';
 import componentLabelsApp from './component-labels-api.js';
@@ -314,6 +315,7 @@ app.route('/', devicesApp);
 // Inventory API
 app.route('/', inventoryApp);
 app.route('/', researchCanaryApp);
+app.route('/', trmnlCanaryApp);
 app.route('/api/labels', labelsApp);
 app.route('/api/label-batches', labelBatchesApp);
 

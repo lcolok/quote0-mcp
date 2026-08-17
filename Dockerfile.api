@@ -6,6 +6,15 @@ FROM dev.logic.heiyu.space/library/node:22-slim-bun as base-runtime
 
 WORKDIR /app
 
+# TRMNL Framework fidelity renderer uses the same browser-backed path as the
+# existing Puppeteer renderer. Make Chromium an explicit image capability
+# instead of relying on the stale manifest path alone.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # ===================== 阶段2: 依赖安装 =====================
 FROM base-runtime as dependencies
 
@@ -19,7 +28,6 @@ COPY config/ ./config/
 # 安装依赖 (只有依赖变化时才会重新执行)。
 # LC03 对 registry.npmjs.org 偶有长尾；与 annotation-web 一样固定镜像源，
 # 同时保留 frozen lockfile，确保远端镜像与本地验证使用完全相同的依赖图。
-ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN bun install --frozen-lockfile --registry=https://registry.npmmirror.com/
 
 # ===================== 阶段3: 应用构建 =====================  
