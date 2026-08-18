@@ -6,7 +6,7 @@ import { NEWS_API_RELEASE_VERSION, loadReleaseVersion, parseReleaseVersion } fro
 
 describe('news-api release identity', () => {
   test('current checkout reports the manifest release instead of the legacy 1.0.0', () => {
-    expect(NEWS_API_RELEASE_VERSION).toBe('1.21.78');
+    expect(NEWS_API_RELEASE_VERSION).toBe('1.21.81');
     expect(NEWS_API_RELEASE_VERSION).not.toBe('1.0.0');
   });
 

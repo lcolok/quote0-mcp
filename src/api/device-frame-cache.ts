@@ -11,11 +11,14 @@
 
 import { createHash } from 'crypto';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
+import { crc32Hex } from './eink-converter.js';
+import { notifyDeviceFrameUpdated } from './device-frame-watch.js';
 
 export interface DeviceFrame {
   device_id: string;
   frame_data: Buffer;
   frame_id: string;
+  frame_crc32: string | null;
   width: number;
   height: number;
   plane_count: number;
@@ -26,6 +29,7 @@ export interface DeviceFrameRow {
   device_id: string;
   frame_data: Buffer | null;
   frame_id: string | null;
+  frame_crc32: string | null;
   width: number;
   height: number;
   plane_count: number;
@@ -49,16 +53,27 @@ export async function upsertDeviceFrame(params: {
 }): Promise<void> {
   const db = getPostgresDatabase();
   const frameId = computeFrameId(params.bitmap);
+  const frameCrc32 = crc32Hex(params.bitmap);
   const planeCount = 1; // 当前只支持单平面
 
   await db.getPool().query(
-    `INSERT INTO device_frames (device_id, frame_data, frame_id, width, height, plane_count, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, now())
+    `INSERT INTO device_frames (device_id, frame_data, frame_id, frame_crc32, width, height, plane_count, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (device_id)
-     DO UPDATE SET frame_data = $2, frame_id = $3, width = $4, height = $5,
-                   plane_count = $6, updated_at = now()`,
-    [params.deviceId, params.bitmap, frameId, params.width, params.height, planeCount],
+     DO UPDATE SET frame_data = $2, frame_id = $3, frame_crc32 = $4, width = $5, height = $6,
+                   plane_count = $7, updated_at = now()`,
+    [params.deviceId, params.bitmap, frameId, frameCrc32, params.width, params.height, planeCount],
   );
+
+  // Long-poll wakeup is a delivery optimization, not part of frame durability.
+  // The DB upsert is already committed; a transient LISTEN/NOTIFY failure must
+  // never make the producer believe the frame itself was lost.
+  notifyDeviceFrameUpdated(params.deviceId, frameId).catch((error) => {
+    console.warn(
+      `E-Ink frame notify failed device=${params.deviceId} frame=${frameId}:`,
+      error instanceof Error ? error.message : error,
+    );
+  });
 }
 
 /**
@@ -67,7 +82,7 @@ export async function upsertDeviceFrame(params: {
 export async function getDeviceFrame(deviceId: string): Promise<DeviceFrameRow | null> {
   const db = getPostgresDatabase();
   const r = await db.getPool().query(
-    `SELECT device_id, frame_data, frame_id, width, height, plane_count, updated_at
+    `SELECT device_id, frame_data, frame_id, frame_crc32, width, height, plane_count, updated_at
      FROM device_frames WHERE device_id = $1`,
     [deviceId],
   );

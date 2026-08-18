@@ -1270,17 +1270,39 @@ export class PostgresDatabase {
 
       CREATE INDEX IF NOT EXISTS label_batch_items_batch_idx ON label_batch_items(batch_id);
 
-      -- 拉模式帧缓存（Phase A）：每台 display 设备最新一帧 bitmap
+      -- 拉模式帧缓存：每台 display 设备 latest-wins 的 bitmap SSoT。
       CREATE TABLE IF NOT EXISTS device_frames (
           device_id TEXT PRIMARY KEY,
           frame_data BYTEA NOT NULL,
           frame_id TEXT NOT NULL,
+          frame_crc32 TEXT,
           width INTEGER NOT NULL,
           height INTEGER NOT NULL,
           plane_count INTEGER NOT NULL DEFAULT 1,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE device_frames ADD COLUMN IF NOT EXISTS frame_crc32 TEXT;
       CREATE INDEX IF NOT EXISTS idx_device_frames_updated ON device_frames(updated_at);
+
+      -- Cloud Pull application ACK：MQTT/HTTP 层收到 bytes 不等于 E-Ink 真正完成刷新，
+      -- 因此每个 frame 单独留“displayed/failed”证据。重复 ACK 幂等 upsert。
+      CREATE TABLE IF NOT EXISTS device_frame_acks (
+          id BIGSERIAL PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          frame_id TEXT NOT NULL,
+          frame_crc32 TEXT NOT NULL,
+          result TEXT NOT NULL CHECK (result IN ('displayed','failed')),
+          refresh_ms INTEGER,
+          firmware TEXT,
+          rssi INTEGER,
+          free_heap INTEGER,
+          current_match BOOLEAN NOT NULL DEFAULT FALSE,
+          crc_verified BOOLEAN,
+          acked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          UNIQUE (device_id, frame_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_frame_acks_device_time
+          ON device_frame_acks(device_id, acked_at DESC);
 
     `;
   }

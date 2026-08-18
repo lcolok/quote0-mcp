@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.78
+version: 1.21.81
 
 # 应用名称
 name: Quote0 新闻服务
@@ -38,10 +38,11 @@ application:
   public_path:
     - /api/component-labels
     - /api/component-label-batches
-    # 2026-08-05：拉模式墨水屏板端（ESP32-S3 deep sleep 醒-拉-刷-睡）经域名直拉帧。
-    # 端点自身有 push_devices token 的 Bearer 鉴权（无 token 401），非裸奔；
-    # 只放行此单一路径，禁止扩大到 /api 全放开。
+    # E-Ink 公网设备协议：frame 支持 legacy immediate GET + v2 long-poll；ACK 只在
+    # physical panel refresh 完成后发送。两端点都使用 push_devices 的 device token
+    # 自鉴权；仅精确放行这两个路径，禁止扩大到整个 /api。
     - /api/eink/frame
+    - /api/eink/ack
 
   # 多入口配置
   entries:
@@ -207,7 +208,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.14-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.78
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.81
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1

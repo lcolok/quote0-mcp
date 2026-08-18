@@ -44,6 +44,10 @@ import {
 } from './renderable-news-intake.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 import { getDeviceFrame } from './device-frame-cache.js';
+import { ensureDeviceFrameListener, waitForDeviceFrameUpdate } from './device-frame-watch.js';
+import { parseDisplayAckPayload, parseLongPollWaitMs } from './eink-pull-protocol.js';
+import { recordDisplayAck } from './device-frame-ack.js';
+import { crc32Hex } from './eink-converter.js';
 import { isBarkAlertsConfigured } from './device-health-alerts.js';
 import {
   getRssSourceRegistry,
@@ -2226,16 +2230,13 @@ app.get('/api/devices/runtime', async (c) => {
 });
 
 // ============================================================
-// GET /api/eink/frame — 拉模式帧缓存端点（Phase A，双栈并存）
-// 设备主动轮询拉取最新帧 bitmap，与现有推送路径并存。
+// E-Ink Cloud Pull v2 — immediate GET 兼容 + PostgreSQL event-driven long-poll
 // ============================================================
 app.get('/api/eink/frame', async (c) => {
   const deviceId = c.req.query('device_id');
-  if (!deviceId) {
-    return c.json({ success: false, error: 'device_id 必填' }, 400);
-  }
+  if (!deviceId) return c.json({ success: false, error: 'device_id 必填' }, 400);
 
-  // 鉴权：token 可从 query 或 Authorization header 传入（对齐现有 push 机制）
+  // 鉴权保持 Phase A 契约不变：query token → Authorization Bearer。
   const db = getPostgresDatabase();
   let row: any;
   try {
@@ -2243,26 +2244,16 @@ app.get('/api/eink/frame', async (c) => {
   } catch {
     return c.json({ success: false, error: '查询设备失败' }, 500);
   }
-  if (!row) {
-    return c.body(null, 404);
-  }
-  // 仅 display 类设备（eink-local / eink-cloud）
-  if (row.kind !== 'eink-local' && row.kind !== 'eink-cloud') {
-    return c.body(null, 404);
-  }
+  if (!row || (row.kind !== 'eink-local' && row.kind !== 'eink-cloud')) return c.body(null, 404);
 
-  // token 验：query token 优先 → Authorization Bearer → 无 token 时设备也未设 token 则放行
   const authHeader = c.req.header('Authorization');
   let presentedToken = c.req.query('token') || '';
-  if (!presentedToken && authHeader?.startsWith('Bearer ')) {
-    presentedToken = authHeader.slice(7);
-  }
+  if (!presentedToken && authHeader?.startsWith('Bearer ')) presentedToken = authHeader.slice(7);
   const deviceToken = row.token || '';
   if (deviceToken && presentedToken !== deviceToken) {
     return c.json({ success: false, error: 'Unauthorized' }, 401);
   }
 
-  // 遥测头（可选，记录日志）
   const telemetry = {
     frameId: c.req.header('X-Frame-Id') || undefined,
     firmware: c.req.header('X-Firmware') || undefined,
@@ -2275,29 +2266,114 @@ app.get('/api/eink/frame', async (c) => {
     console.log(`📡 设备 ${deviceId} 遥测:`, JSON.stringify(telemetry));
   }
 
-  // 读帧缓存
-  const frame = await getDeviceFrame(deviceId);
-  if (!frame || !frame.frame_data) {
-    return c.body(null, 204);
+  const requestFrameId = (c.req.header('X-Frame-Id') || '').trim().toLowerCase();
+  const waitMs = parseLongPollWaitMs(c.req.query('wait'));
+  let listenerReady = false;
+  if (waitMs > 0) {
+    try {
+      // LISTEN 必须先于首次读 SSoT，配合 listener 的 latestObservedFrame
+      // 关闭 read→wait 注册窗口里的竞态。
+      await ensureDeviceFrameListener();
+      listenerReady = true;
+    } catch (error) {
+      console.warn('E-Ink long-poll listener unavailable, falling back to immediate GET:',
+        error instanceof Error ? error.message : error);
+    }
   }
 
-  // 去重：请求头 X-Frame-Id 与当前帧指纹一致 → 304
-  const requestFrameId = c.req.header('X-Frame-Id');
-  if (requestFrameId && requestFrameId === frame.frame_id) {
-    c.header('X-Frame-Id', frame.frame_id!);
-    return c.body(null, 304);
+  let frame = await getDeviceFrame(deviceId);
+  const unchanged = Boolean(frame?.frame_data && requestFrameId && requestFrameId === frame.frame_id);
+  const noFrame = !frame?.frame_data;
+
+  if (listenerReady && waitMs > 0 && (unchanged || noFrame)) {
+    const waitStarted = Date.now();
+    const afterFrameId = frame?.frame_id || requestFrameId || '';
+    const waitResult = await waitForDeviceFrameUpdate({
+      deviceId,
+      afterFrameId,
+      timeoutMs: waitMs,
+      signal: c.req.raw.signal,
+    });
+    // 无论 notification/timeout/error，都重新读一次 SSoT；即使 NOTIFY 丢失，
+    // timeout 边界也不会错过已经提交的最新帧。
+    frame = await getDeviceFrame(deviceId);
+    c.header('X-Poll-Wait-Ms', String(Date.now() - waitStarted));
+    c.header('X-Poll-Result', waitResult);
   }
 
-  // 200：返回帧数据
-  const refreshSec = parseInt(process.env.EINK_FRAME_REFRESH_SEC || '60', 10);
-  c.header('Content-Type', 'application/octet-stream');
-  c.header('X-Frame-Id', frame.frame_id!);
-  c.header('X-Refresh-Sec', String(refreshSec));
-  // frame_data 可能是 Buffer 或 pg 返回的 bytea hex——统一转 Buffer
+  c.header('X-Pull-Protocol', 'quote0-pull-v2');
+  if (!frame?.frame_data) return c.body(null, 204);
+
   const frameData = Buffer.isBuffer(frame.frame_data)
     ? frame.frame_data
     : Buffer.from(frame.frame_data as any, 'hex');
+  const frameCrc32 = (frame.frame_crc32 || crc32Hex(frameData)).toLowerCase();
+  c.header('X-Frame-Id', frame.frame_id!);
+  c.header('X-Frame-CRC32', frameCrc32);
+
+  // 旧设备不传 wait，或 long-poll 超时且帧仍未变化，都沿用 304 语义。
+  if (requestFrameId && requestFrameId === frame.frame_id) return c.body(null, 304);
+
+  const refreshSec = parseInt(process.env.EINK_FRAME_REFRESH_SEC || '60', 10);
+  c.header('Content-Type', 'application/octet-stream');
+  c.header('X-Refresh-Sec', String(refreshSec));
   return c.body(new Uint8Array(frameData));
+});
+
+// 显式 application ACK：只有面板刷新完成后设备才调用这里。HTTP/MQTT 层的
+// ACK 不能替代这条证据。
+app.post('/api/eink/ack', async (c) => {
+  const deviceId = c.req.query('device_id');
+  if (!deviceId) return c.json({ success: false, error: 'device_id 必填' }, 400);
+
+  const db = getPostgresDatabase();
+  let row: any;
+  try {
+    row = await db.getPushDeviceById(deviceId);
+  } catch {
+    return c.json({ success: false, error: '查询设备失败' }, 500);
+  }
+  if (!row || (row.kind !== 'eink-local' && row.kind !== 'eink-cloud')) return c.body(null, 404);
+
+  const authHeader = c.req.header('Authorization');
+  let presentedToken = c.req.query('token') || '';
+  if (!presentedToken && authHeader?.startsWith('Bearer ')) presentedToken = authHeader.slice(7);
+  const deviceToken = row.token || '';
+  if (deviceToken && presentedToken !== deviceToken) {
+    return c.json({ success: false, error: 'Unauthorized' }, 401);
+  }
+
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    return c.json({ success: false, error: '无效 JSON' }, 400);
+  }
+  const parsed = parseDisplayAckPayload(rawBody);
+  if (!parsed.ok || !parsed.value) {
+    return c.json({ success: false, error: parsed.error || 'ACK payload 非法' }, 400);
+  }
+
+  const recorded = await recordDisplayAck(deviceId, parsed.value);
+  if (parsed.value.result === 'displayed' && recorded.currentMatch && recorded.crcVerified === false) {
+    return c.json({
+      success: false,
+      code: 'frame_crc_mismatch',
+      frame_id: recorded.frameId,
+      server_frame_id: recorded.serverFrameId,
+      current_match: true,
+      crc_verified: false,
+    }, 409);
+  }
+
+  return c.json({
+    success: true,
+    frame_id: recorded.frameId,
+    server_frame_id: recorded.serverFrameId,
+    current_match: recorded.currentMatch,
+    crc_verified: recorded.crcVerified,
+    acked_at: recorded.ackedAt.toISOString(),
+  });
 });
 
 // 错误处理
