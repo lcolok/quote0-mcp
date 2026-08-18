@@ -847,6 +847,28 @@ export class PostgresDatabase {
           updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- Adaptive Layout A/B 人工评审：按 news subject × target × layout engine 固化最新偏好。
+      -- 与 quality_annotations 分表，避免把“内容好坏”和“物理布局偏好”混成一个标签。
+      CREATE TABLE IF NOT EXISTS adaptive_layout_reviews (
+          id BIGSERIAL PRIMARY KEY,
+          news_id INTEGER NOT NULL REFERENCES news_push_log(id) ON DELETE CASCADE,
+          target_id TEXT NOT NULL,
+          layout_engine TEXT NOT NULL,
+          primary_renderer TEXT NOT NULL,
+          adaptive_renderer TEXT NOT NULL,
+          choice TEXT NOT NULL CHECK (choice IN ('primary', 'adaptive', 'tie')),
+          information_retention INTEGER CHECK (information_retention BETWEEN 1 AND 5),
+          readability INTEGER CHECK (readability BETWEEN 1 AND 5),
+          space_usage INTEGER CHECK (space_usage BETWEEN 1 AND 5),
+          physical_confidence INTEGER CHECK (physical_confidence BETWEEN 1 AND 5),
+          note TEXT,
+          annotator TEXT NOT NULL DEFAULT 'human',
+          metrics_snapshot JSONB,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          UNIQUE(news_id, target_id, layout_engine)
+      );
+
       -- LLM调用缓存表（prompt-hash 缓存，避免重复调用 LLM）
       CREATE TABLE IF NOT EXISTS llm_call_cache (
           cache_key VARCHAR(64) PRIMARY KEY,
@@ -898,6 +920,8 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_qa_score_latest ON quality_annotations(overall_score) WHERE is_latest = true;
       CREATE INDEX IF NOT EXISTS idx_qa_category_latest ON quality_annotations(category) WHERE is_latest = true;
       CREATE INDEX IF NOT EXISTS idx_qa_annotator ON quality_annotations(annotator, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_layout_reviews_target ON adaptive_layout_reviews(target_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_layout_reviews_choice ON adaptive_layout_reviews(choice, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_llm_cache_expires ON llm_call_cache(expires_at);
       CREATE INDEX IF NOT EXISTS idx_llm_cache_model_lasthit ON llm_call_cache(model, last_hit_at DESC);
       CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_status ON scheduler_run_history(push_status);

@@ -21,9 +21,31 @@ import { join } from 'path';
 import { RenderOptions } from '../types.js';
 import { EINK_TARGET } from './render-targets.js';
 
+export type SatoriBaseFontSize = 8 | 10 | 12;
+
 export interface SatoriRenderOptions extends RenderOptions {
   width?: number;
   height?: number;
+  /** 仅传本次布局实际使用的像素字体，避免把全部字体重复交给 Satori。 */
+  fontBaseSizes?: SatoriBaseFontSize[];
+}
+
+export interface SatoriPipelineMetrics {
+  initializedWarm: boolean;
+  initMs: number;
+  satoriMs: number;
+  resvgInitMs: number;
+  resvgRenderMs: number;
+  resvgMs: number;
+  totalMs: number;
+  fontCount: number;
+  fontBytes: number;
+  svgChars: number;
+}
+
+export interface SatoriRenderResult {
+  pngBuffer: Buffer;
+  metrics: SatoriPipelineMetrics;
 }
 
 /**
@@ -40,6 +62,7 @@ export class SatoriRenderer {
   private fontBuffers: Map<number, ArrayBuffer> = new Map();
   private fonts: Array<{ name: string; data: ArrayBuffer; weight: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900; style: 'normal' | 'italic' }> = [];
   private initialized = false;
+  private initializePromise: Promise<void> | null = null;
 
   /**
    * 获取像素字体映射
@@ -90,63 +113,63 @@ export class SatoriRenderer {
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    if (this.initializePromise) return this.initializePromise;
 
-    console.log('🎨 初始化 Satori 渲染器...');
-    // 防御：避免任何重复 initialize 导致字体数组/缓存累积
-    this.fonts = [];
-    this.fontBuffers.clear();
-    
-    const fontsPath = join(process.cwd(), 'assets/fonts');
-    const fontFiles = {
-      8: 'fusion-pixel-8px-monospaced-zh_hans.otf.ttf',
-      10: 'fusion-pixel-10px-monospaced-zh_hans.otf.ttf',
-      12: 'fusion-pixel-12px-monospaced-zh_hans.otf.ttf'
-    };
+    this.initializePromise = (async () => {
+      console.log('🎨 初始化 Satori 渲染器...');
+      // 防御：避免任何重复 initialize 导致字体数组/缓存累积
+      this.fonts = [];
+      this.fontBuffers.clear();
 
-    // 加载所有字体文件
-    for (const [size, fileName] of Object.entries(fontFiles)) {
-      try {
-        const fontPath = join(fontsPath, fileName);
-        const buffer = await readFile(fontPath);
-        this.fontBuffers.set(parseInt(size), buffer.buffer as ArrayBuffer);
-        console.log(`✅ 加载字体: ${fileName} (${size}px)`);
-      } catch (error) {
-        console.warn(`⚠️ 加载字体失败 ${fileName}:`, error);
+      const fontsPath = join(process.cwd(), 'assets/fonts');
+      const fontFiles = {
+        8: 'fusion-pixel-8px-monospaced-zh_hans.otf.ttf',
+        10: 'fusion-pixel-10px-monospaced-zh_hans.otf.ttf',
+        12: 'fusion-pixel-12px-monospaced-zh_hans.otf.ttf'
+      };
+
+      for (const [size, fileName] of Object.entries(fontFiles)) {
+        try {
+          const fontPath = join(fontsPath, fileName);
+          const buffer = await readFile(fontPath);
+          this.fontBuffers.set(parseInt(size), buffer.buffer as ArrayBuffer);
+          console.log(`✅ 加载字体: ${fileName} (${size}px)`);
+        } catch (error) {
+          console.warn(`⚠️ 加载字体失败 ${fileName}:`, error);
+        }
       }
-    }
 
-    // 获取默认字体 (12px)
-    const defaultFontBuffer = this.fontBuffers.get(12);
-    if (!defaultFontBuffer) {
-      throw new Error('无法加载默认字体文件');
-    }
+      const defaultFontBuffer = this.fontBuffers.get(12);
+      if (!defaultFontBuffer) throw new Error('无法加载默认字体文件');
 
-    // 注册字体 - 为每个原生尺寸创建字体族
-    const nativeSizes = [8, 10, 12];
-    
-    for (const size of nativeSizes) {
-      const fontBuffer = this.fontBuffers.get(size);
-      if (fontBuffer) {
-        // 注册原生尺寸字体
-        this.fonts.push({
-          name: `FusionPixelFont-${size}px`,
-          data: fontBuffer,
-          weight: 400,
-          style: 'normal'
-        });
+      for (const size of [8, 10, 12]) {
+        const fontBuffer = this.fontBuffers.get(size);
+        if (fontBuffer) {
+          this.fonts.push({
+            name: `FusionPixelFont-${size}px`,
+            data: fontBuffer,
+            weight: 400,
+            style: 'normal'
+          });
+        }
       }
+
+      this.fonts.push({
+        name: 'FusionPixelFont',
+        data: defaultFontBuffer,
+        weight: 400,
+        style: 'normal'
+      });
+
+      this.initialized = true;
+      console.log('✅ Satori 渲染器初始化完成');
+    })();
+
+    try {
+      await this.initializePromise;
+    } finally {
+      this.initializePromise = null;
     }
-
-    // 注册默认字体族（使用 12px）
-    this.fonts.push({
-      name: 'FusionPixelFont',
-      data: defaultFontBuffer,
-      weight: 400,
-      style: 'normal'
-    });
-
-    this.initialized = true;
-    console.log('✅ Satori 渲染器初始化完成');
   }
 
   /**
@@ -156,38 +179,78 @@ export class SatoriRenderer {
     component: ReactElement,
     options: SatoriRenderOptions = {}
   ): Promise<Buffer> {
+    return (await this.renderToImageWithMetrics(component, options)).pngBuffer;
+  }
+
+  async renderToImageWithMetrics(
+    component: ReactElement,
+    options: SatoriRenderOptions = {},
+  ): Promise<SatoriRenderResult> {
+    const totalStartedAt = performance.now();
+    const initializedWarm = this.initialized;
+    const initStartedAt = performance.now();
     await this.initialize();
+    const initMs = performance.now() - initStartedAt;
 
     const {
       width = EINK_TARGET.widthPx,
       height = EINK_TARGET.heightPx,
-      format = 'png',
-      backgroundColor = '#FFFFFF'
+      backgroundColor = '#FFFFFF',
+      fontBaseSizes,
     } = options;
 
+    const requestedSizes = fontBaseSizes?.length ? new Set(fontBaseSizes) : undefined;
+    const fonts = requestedSizes
+      ? this.fonts.filter((font) => {
+          const match = font.name.match(/^FusionPixelFont-(8|10|12)px$/);
+          return match ? requestedSizes.has(Number(match[1]) as SatoriBaseFontSize) : false;
+        })
+      : this.fonts;
+    if (fonts.length === 0) throw new Error('Satori font subset resolved to zero fonts');
+
     try {
-      // 使用 satori 将 JSX 转换为 SVG
+      const satoriStartedAt = performance.now();
       const svg = await satori(component, {
         width,
         height,
-        fonts: this.fonts,
-        // 像素字体需要禁用字体平滑
-        embedFont: true
+        fonts,
+        embedFont: true,
       });
+      const satoriMs = performance.now() - satoriStartedAt;
 
-      // 使用 resvg-js 将 SVG 转换为 PNG
+      const resvgStartedAt = performance.now();
       const resvg = new Resvg(svg, {
         background: backgroundColor,
+        // Satori 已 embedFont=true；默认扫描宿主系统字体会让每张图额外耗时秒级。
+        font: { loadSystemFonts: false },
         fitTo: {
           mode: 'width',
-          value: width
-        }
+          value: width,
+        },
       });
-
+      const resvgInitMs = performance.now() - resvgStartedAt;
+      const resvgRenderStartedAt = performance.now();
       const pngData = resvg.render();
-      const pngBuffer = pngData.asPng();
+      const pngBuffer = Buffer.from(pngData.asPng());
+      const resvgRenderMs = performance.now() - resvgRenderStartedAt;
+      const resvgMs = performance.now() - resvgStartedAt;
 
-      return Buffer.from(pngBuffer);
+      const round2 = (value: number) => Math.round(value * 100) / 100;
+      return {
+        pngBuffer,
+        metrics: {
+          initializedWarm,
+          initMs: round2(initMs),
+          satoriMs: round2(satoriMs),
+          resvgInitMs: round2(resvgInitMs),
+          resvgRenderMs: round2(resvgRenderMs),
+          resvgMs: round2(resvgMs),
+          totalMs: round2(performance.now() - totalStartedAt),
+          fontCount: fonts.length,
+          fontBytes: fonts.reduce((sum, font) => sum + font.data.byteLength, 0),
+          svgChars: svg.length,
+        },
+      };
     } catch (error) {
       console.error('Satori 渲染失败:', error);
       throw error;

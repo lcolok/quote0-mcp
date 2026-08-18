@@ -13,6 +13,8 @@ import { startLabelJobWorker } from './label-jobs-worker.js';
 import { startDeviceDeliveryWorker } from './device-delivery-worker.js';
 import { startDeviceHealthAlertWorker } from './device-health-alerts.js';
 import { startResearchCanaryWorker } from './research-canary-worker.js';
+import { EINK_TARGET } from '../react-widgets/core/render-targets.js';
+import { trmnlAdaptiveRenderer } from '../react-widgets/core/trmnl-adaptive-renderer.js';
 
 const PORT = parseInt(process.env.PORT || '3001');
 const HOST = process.env.HOST || 'localhost';
@@ -51,4 +53,20 @@ if (import.meta.main) {
   startDeviceHealthAlertWorker();
   // Research canary 独立于 producer/device hot path：每日硬上限 + 单并发，且绝不自动推屏。
   startResearchCanaryWorker();
+
+  // TRMNL 仍只是 canary；生产权威保持 Current/Satori。生产环境异步预热
+  // pinned Framework + Chromium Page，失败只记录日志，不影响 API 健康或真实推屏。
+  const trmnlPrewarmEnabled = process.env.NODE_ENV === 'production'
+    && (process.env.TRMNL_PREWARM_ENABLED || 'true').toLowerCase() !== 'false';
+  if (trmnlPrewarmEnabled) {
+    setTimeout(() => {
+      void trmnlAdaptiveRenderer.prewarm(EINK_TARGET, { timeoutMs: 30_000 }).then((metrics) => {
+        console.log(
+          `🔥 TRMNL canary 预热完成: ${metrics.renderMs}ms source=${metrics.assetSource} framework=${metrics.frameworkLoadMs}ms terminalize=${metrics.terminalizeMs}ms`,
+        );
+      }).catch((error) => {
+        console.warn('⚠️ TRMNL canary 预热失败（不影响 Current/Satori）:', error);
+      });
+    }, 500);
+  }
 }
