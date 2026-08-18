@@ -4,8 +4,11 @@
  * work and the contract can be unit-tested without starting the API server.
  */
 
-export const DEFAULT_LONG_POLL_WAIT_SEC = 20;
-export const MAX_LONG_POLL_WAIT_SEC = 25;
+// LazyCat ingress currently closes upstream requests at ~10.3s. Keep a
+// deliberate safety margin: event delivery remains immediate via NOTIFY; this
+// cap only controls how often an unchanged device renews its waiting request.
+export const DEFAULT_LONG_POLL_WAIT_SEC = 8;
+export const MAX_LONG_POLL_WAIT_SEC = 8;
 
 export function parseLongPollWaitMs(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === '') return 0; // legacy immediate GET

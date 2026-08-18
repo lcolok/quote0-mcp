@@ -8,14 +8,15 @@ describe('parseLongPollWaitMs', () => {
     expect(parseLongPollWaitMs('0')).toBe(0);
   });
 
-  it('seconds are converted to milliseconds', () => {
-    expect(parseLongPollWaitMs('20')).toBe(20_000);
+  it('safe waits are converted to milliseconds', () => {
+    expect(parseLongPollWaitMs('5')).toBe(5_000);
     expect(parseLongPollWaitMs('0.5')).toBe(500);
   });
 
   it('invalid/negative values fall back to immediate and long waits are clamped', () => {
     expect(parseLongPollWaitMs('-1')).toBe(0);
     expect(parseLongPollWaitMs('wat')).toBe(0);
+    expect(parseLongPollWaitMs('20')).toBe(MAX_LONG_POLL_WAIT_SEC * 1000);
     expect(parseLongPollWaitMs('999')).toBe(MAX_LONG_POLL_WAIT_SEC * 1000);
   });
 });
