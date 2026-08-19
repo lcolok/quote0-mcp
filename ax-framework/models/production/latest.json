@@ -1,36 +1,25 @@
 {
-  "timestamp": "2025-08-24T09:17:05.189Z",
-  "version": "1.0.0",
+  "timestamp": "2026-08-12T00:00:00.000Z",
+  "version": "prompt-profile-v2",
   "programs": {
     "titleProgram": {
-      "instruction": "将新闻内容优化为简洁标题，严格控制在20字符以内，突出核心事件和关键实体",
+      "instruction": "将新闻内容改写为准确、简洁的标题，严格控制在20字符以内，不得补充输入中没有的事实",
       "demos": [
         {
           "input": {
-            "newsContent": "英伟达和富士通宣布合作开发下一代超级计算机..."
+            "newsContent": "标题：开源项目发布2.0版本。内容：该项目今天发布2.0版本，新增离线模式并修复数据同步问题。"
           },
           "output": {
-            "optimizedTitle": "英伟达富士通合作富岳"
-          },
-          "score": 0.95
+            "optimizedTitle": "开源项目2.0发布"
+          }
         },
         {
           "input": {
-            "newsContent": "百度计划将其自动驾驶出租车服务扩展到海外市场..."
+            "newsContent": "标题：研究团队公开新数据集。内容：团队公开一个包含一万条中文问答的数据集，采用开放许可证。"
           },
           "output": {
-            "optimizedTitle": "百度自驾出租车出海"
-          },
-          "score": 0.92
-        },
-        {
-          "input": {
-            "newsContent": "OpenAI发布最新研究报告称，其GPT-5模型在多项基准测试中超越了人类专家水平..."
-          },
-          "output": {
-            "optimizedTitle": "GPT-5超越人类专家"
-          },
-          "score": 0.94
+            "optimizedTitle": "万条中文问答数据集开放"
+          }
         }
       ],
       "modelConfig": {
@@ -39,53 +28,48 @@
         "maxTokens": 100
       },
       "stats": {
-        "trained": true,
-        "version": "1.0.0",
-        "accuracy": 0.94,
-        "compliance": 0.98
+        "trained": false,
+        "version": "prompt-profile-v2",
+        "exampleCount": 2,
+        "validated": false
       }
     },
     "summaryProgram": {
-      "instruction": "将新闻内容提炼为200字符以内的精炼摘要，保留核心信息，适合水墨屏快速阅读",
+      "instruction": "将新闻内容提炼为200字符以内的摘要，只保留输入中明确出现的事实",
       "demos": [
         {
           "input": {
-            "newsContent": "英伟达和富士通宣布合作开发下一代超级计算机..."
+            "newsContent": "标题：开源项目发布2.0版本。内容：该项目今天发布2.0版本，新增离线模式并修复数据同步问题。"
           },
           "output": {
-            "summary": "英伟达与富士通合作开发\"富岳NEXT\"超算，采用Grace Hopper架构，性能提升10倍，2027年投用。"
-          },
-          "score": 0.91
+            "summary": "该开源项目发布2.0版本，新增离线模式并修复数据同步问题。"
+          }
         },
         {
           "input": {
-            "newsContent": "百度计划将其自动驾驶出租车服务扩展到海外市场..."
+            "newsContent": "标题：研究团队公开新数据集。内容：团队公开一个包含一万条中文问答的数据集，采用开放许可证。"
           },
           "output": {
-            "summary": "百度将自动驾驶出租车服务扩展至新加坡，基于Apollo平台，已在中国运营两年，服务超100万次。"
-          },
-          "score": 0.89
+            "summary": "研究团队公开包含一万条中文问答的数据集，并采用开放许可证。"
+          }
         }
       ],
       "modelConfig": {
-        "temperature": 0.5,
+        "temperature": 0.3,
         "topP": 0.9,
         "maxTokens": 512
       },
       "stats": {
-        "trained": true,
-        "version": "1.0.0",
-        "accuracy": 0.89,
-        "compliance": 0.95
+        "trained": false,
+        "version": "prompt-profile-v2",
+        "exampleCount": 2,
+        "validated": false
       }
     }
   },
   "metadata": {
-    "trainedAt": "2025-08-24T09:17:05.191Z",
-    "framework": "ax-llm",
-    "optimizationType": "BootstrapFewShot",
-    "trainingDuration": 45000,
-    "totalExamplesTested": 24,
-    "finalPerformance": 0.91
+    "createdAt": "2026-08-12T00:00:00.000Z",
+    "profileType": "curated-few-shot",
+    "source": "repository-reviewed"
   }
 }

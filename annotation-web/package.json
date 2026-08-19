@@ -1,7 +1,7 @@
 {
   "name": "annotation-web",
   "version": "1.0.0",
-  "description": "AX质量评估器 - 新闻标注Web应用",
+  "description": "Quote0 内容评审与发布工作台",
   "type": "module",
   "scripts": {
     "dev": "vite",

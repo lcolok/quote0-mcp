@@ -18,7 +18,7 @@ async function testSatoriRenderer() {
     const testData = {
       title: 'AI技术突破：新型语言模型在多个基准测试中表现优异',
       message: '研究人员最近发布了一款新型语言模型，该模型在多项基准测试中取得了显著进步。这一突破可能会改变我们对人工智能能力的认知，并为未来的AI应用开辟新的可能性。',
-      signature: 'AI优化·Q95',
+      signature: 'AI编辑·Prompt Profile',
       source: 'RSS智能',
       publishTime: new Date().toISOString(),
       category: 'technology'

@@ -1,12 +1,12 @@
 /**
- * 标注系统API - 为AX质量评估器提供人工标注功能
- * 优化版：直接使用news_push_log作为单一数据源
+ * 内容评审 API。
+ * fingerprint 是稳定评审主体；news_push_log 仅保留为具体投递证据。
  */
 
 import { Hono } from 'hono';
 import { validator } from 'hono/validator';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
-import type { Client } from 'pg';
+import { decodeReviewCursor, getReviewStatistics, listReviewSubjects, type ReviewStatus } from './review-store.js';
 
 // 类型定义
 interface NewsItem {
@@ -27,6 +27,7 @@ interface NewsItem {
 interface QualityAnnotation {
   id?: number;
   news_id: number;
+  fingerprint?: string;
   overall_score: number;
   category: 'high' | 'medium' | 'low';
   should_filter: boolean;
@@ -41,7 +42,7 @@ interface QualityAnnotation {
   difficulty?: 'easy' | 'medium' | 'hard';
   confidence?: number;
 
-  // 新增：优化后的内容（用于训练）
+  // 人工参考改写（用于离线评估，不触发自动训练）
   optimized_title?: string;      // 优化后的标题
   optimized_summary?: string;    // 优化后的摘要
   optimized_content?: string;    // 优化后的正文（可选）
@@ -52,85 +53,66 @@ const app = new Hono();
 const postgres = getPostgresDatabase();
 
 /**
- * 获取待标注新闻列表（直接从push_log）
+ * 获取稳定内容主体列表。默认仅返回轻量投影，正文请按 id 获取详情。
  */
 app.get('/api/annotation/news', async (c) => {
   try {
-    const status = c.req.query('status') || 'pending';
-    const limit = Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10);
-    const offset = Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10);
-    const category = c.req.query('category');
+    const requestedStatus = c.req.query('status') || 'pending';
+    if (requestedStatus !== 'pending' && requestedStatus !== 'completed') {
+      return c.json({ success: false, error: 'status 必须是 pending 或 completed' }, 400);
+    }
+    const status = requestedStatus as ReviewStatus;
+    const parsedLimit = parseInt(c.req.query('limit') || '50', 10);
+    const parsedOffset = parseInt(c.req.query('offset') || '0', 10);
+    const limit = Math.min(200, Math.max(1, Number.isNaN(parsedLimit) ? 50 : parsedLimit));
+    const offset = Math.max(0, Number.isNaN(parsedOffset) ? 0 : parsedOffset);
+    const cursor = c.req.query('cursor');
+    const includeContent = c.req.query('includeContent') === 'true';
+    if (cursor && !decodeReviewCursor(cursor)) {
+      return c.json({ success: false, error: '无效的分页游标' }, 400);
+    }
 
     const client = await postgres.getClient();
     try {
-      // 按 fingerprint 去重，取每个 fingerprint 最新的 push_log
-      let innerQuery = `
-        SELECT DISTINCT ON (npl.fingerprint)
-          npl.id,
-          npl.raw_content->>'title' as title,
-          npl.raw_content->>'source' as source,
-          npl.processed_content->>'message' as description,
-          npl.raw_content->>'link' as link,
-          COALESCE(
-            (npl.raw_content->>'publishTime')::timestamp,
-            npl.pushed_at
-          ) as publish_time,
-          COALESCE(nps.category, 'technology') as category,
-          npl.image_path,
-          npl.annotation_status,
-          npl.fingerprint,
-          npl.raw_content,
-          npl.processed_content
-        FROM news_push_log npl
-        LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
-        WHERE npl.annotation_status = $1
-          AND npl.raw_content->>'title' IS NOT NULL
-          AND npl.raw_content->>'title' != ''
-          AND npl.fingerprint IS NOT NULL
-      `;
+      const result = await listReviewSubjects(client, {
+        status,
+        limit,
+        offset,
+        cursor,
+        category: c.req.query('category'),
+        search: c.req.query('search'),
+        includeContent,
+        includeTotal: c.req.query('includeTotal') === 'true' || !cursor,
+      });
 
-      const params: any[] = [status];
-
-      if (category) {
-        innerQuery += ` AND nps.category = $${params.length + 1}`;
-        params.push(category);
-      }
-
-      innerQuery += ` ORDER BY npl.fingerprint, npl.pushed_at DESC`;
-
-      const query = `SELECT * FROM (${innerQuery}) AS sub ORDER BY sub.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(limit, offset);
-
-      const result = await client.query<NewsItem>(query, params);
-
-      // 获取去重后的总数
-      let countQuery = `
-        SELECT COUNT(DISTINCT npl.fingerprint)
-        FROM news_push_log npl
-        LEFT JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
-        WHERE npl.annotation_status = $1
-          AND npl.raw_content->>'title' IS NOT NULL
-          AND npl.raw_content->>'title' != ''
-          AND npl.fingerprint IS NOT NULL
-      `;
-      const countParams: any[] = [status];
-
-      if (category) {
-        countQuery += ' AND nps.category = $2';
-        countParams.push(category);
-      }
-
-      const countResult = await client.query(countQuery, countParams);
-      const total = parseInt(countResult.rows[0].count, 10);
+      const rows: NewsItem[] = result.rows.map((row) => ({
+        id: row.id,
+        title: row.title || '未知标题',
+        source: row.source || row.job_id || 'unknown',
+        description: includeContent
+          ? row.processed_content?.message || row.raw_content?.description
+          : undefined,
+        link: row.link || undefined,
+        publish_time: row.pushed_at ? new Date(row.pushed_at).toISOString() : undefined,
+        category: row.category || 'technology',
+        image_path: row.image_path || undefined,
+        annotation_status: row.annotation_status,
+        fingerprint: row.fingerprint,
+        ...(includeContent ? {
+          raw_content: row.raw_content,
+          processed_content: row.processed_content,
+        } : {}),
+      }));
 
       return c.json({
         success: true,
-        data: result.rows,
+        data: rows,
         pagination: {
-          total,
+          ...(result.total === undefined ? {} : { total: result.total }),
           limit,
           offset,
-          hasMore: offset + result.rows.length < total
+          hasMore: result.hasMore,
+          nextCursor: result.nextCursor,
         }
       });
     } finally {
@@ -169,7 +151,7 @@ app.get('/api/annotation/news/:id', async (c) => {
           COALESCE(nps.category, 'technology') as category,
           npl.image_path,
           npl.annotation_status,
-          npl.raw_content->>'fingerprint' as fingerprint,
+          npl.fingerprint,
           npl.raw_content,
           npl.processed_content
         FROM news_push_log npl
@@ -186,10 +168,15 @@ app.get('/api/annotation/news/:id', async (c) => {
 
       const news = newsResult.rows[0];
 
-      // 获取最新标注（如果有）
+      // 评审决策按稳定 fingerprint 读取；news_id 仅为兼容兜底。
       const annotationResult = await client.query<QualityAnnotation>(
-        'SELECT * FROM quality_annotations WHERE news_id = $1 AND is_latest = true',
-        [id]
+        `SELECT *
+         FROM quality_annotations
+         WHERE is_latest = true
+           AND (fingerprint = $1 OR (fingerprint IS NULL AND news_id = $2))
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+        [news.fingerprint, id]
       );
 
       return c.json({
@@ -250,17 +237,43 @@ app.post('/api/annotation/news/:id/annotate',
       try {
         await client.query('BEGIN');
 
-        // 插入标注
+        const subjectResult = await client.query<{ fingerprint: string }>(
+          `SELECT npl.fingerprint
+           FROM news_push_log npl
+           JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
+           WHERE npl.id = $1
+           FOR UPDATE OF nps`,
+          [newsId]
+        );
+        if (!subjectResult.rows[0]?.fingerprint) {
+          await client.query('ROLLBACK');
+          return c.json({ success: false, error: '新闻不存在或缺少稳定内容标识' }, 404);
+        }
+        const fingerprint = subjectResult.rows[0].fingerprint;
+
+        await client.query(
+          `UPDATE quality_annotations
+           SET is_latest = false, updated_at = CURRENT_TIMESTAMP
+           WHERE fingerprint = $1 AND is_latest = true`,
+          [fingerprint]
+        );
+
+        // news_id 固定本次评审所见的证据；fingerprint 固定评审主体。
         const result = await client.query<QualityAnnotation>(`
           INSERT INTO quality_annotations (
-            news_id, overall_score, category, should_filter,
+            news_id, fingerprint, version, overall_score, category, should_filter,
             news_value, practicality, density, timeliness, universality,
             reason, tags, annotator, difficulty, confidence,
             optimized_title, optimized_summary, optimized_content
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          ) VALUES (
+            $1, $2,
+            (SELECT COALESCE(MAX(version), 0) + 1 FROM quality_annotations WHERE fingerprint = $2),
+            $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+          )
           RETURNING *
         `, [
           newsId,
+          fingerprint,
           annotation.overall_score,
           annotation.category,
           annotation.should_filter,
@@ -279,14 +292,14 @@ app.post('/api/annotation/news/:id/annotate',
           annotation.optimized_content
         ]);
 
-        // 按 fingerprint 批量更新所有同源 push_log
+        // 兼容旧消费者的状态字段；权威状态来自 quality_annotations。
         const r = await client.query(
           `UPDATE news_push_log
            SET annotation_status = 'completed'
-           WHERE fingerprint = (SELECT fingerprint FROM news_push_log WHERE id = $1)
+           WHERE fingerprint = $1
              AND annotation_status = 'pending'
            RETURNING id`,
-          [newsId]
+          [fingerprint]
         );
         console.log(`✅ 批量更新 ${r.rowCount} 条同 fingerprint 的 push_log`);
 
@@ -320,6 +333,10 @@ app.post('/api/annotation/news/:id/quick', async (c) => {
     const newsId = parseInt(c.req.param('id'), 10);
     const { action } = await c.req.json() as { action: 'like' | 'dislike' };
 
+    if (action !== 'like' && action !== 'dislike') {
+      return c.json({ success: false, error: 'action 必须是 like 或 dislike' }, 400);
+    }
+
     // 快速标注映射
     const mapping = {
       like: {
@@ -342,15 +359,41 @@ app.post('/api/annotation/news/:id/quick', async (c) => {
     try {
       await client.query('BEGIN');
 
+      const subjectResult = await client.query<{ fingerprint: string }>(
+        `SELECT npl.fingerprint
+         FROM news_push_log npl
+         JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
+         WHERE npl.id = $1
+         FOR UPDATE OF nps`,
+        [newsId]
+      );
+      if (!subjectResult.rows[0]?.fingerprint) {
+        await client.query('ROLLBACK');
+        return c.json({ success: false, error: '新闻不存在或缺少稳定内容标识' }, 404);
+      }
+      const fingerprint = subjectResult.rows[0].fingerprint;
+
+      await client.query(
+        `UPDATE quality_annotations
+         SET is_latest = false, updated_at = CURRENT_TIMESTAMP
+         WHERE fingerprint = $1 AND is_latest = true`,
+        [fingerprint]
+      );
+
       // 插入标注
       const result = await client.query<QualityAnnotation>(`
         INSERT INTO quality_annotations (
-          news_id, overall_score, category, should_filter,
+          news_id, fingerprint, version, overall_score, category, should_filter,
           reason, annotator
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+        ) VALUES (
+          $1, $2,
+          (SELECT COALESCE(MAX(version), 0) + 1 FROM quality_annotations WHERE fingerprint = $2),
+          $3, $4, $5, $6, $7
+        )
         RETURNING *
       `, [
         newsId,
+        fingerprint,
         annotationData.overall_score,
         annotationData.category,
         annotationData.should_filter,
@@ -362,10 +405,10 @@ app.post('/api/annotation/news/:id/quick', async (c) => {
       const r = await client.query(
         `UPDATE news_push_log
          SET annotation_status = 'completed'
-         WHERE fingerprint = (SELECT fingerprint FROM news_push_log WHERE id = $1)
+         WHERE fingerprint = $1
            AND annotation_status = 'pending'
          RETURNING id`,
-        [newsId]
+        [fingerprint]
       );
       console.log(`✅ 批量更新 ${r.rowCount} 条同 fingerprint 的 push_log`);
 
@@ -509,13 +552,19 @@ app.delete('/api/annotation/annotations/:id', async (c) => {
     try {
       await client.query('BEGIN');
 
-      // 获取news_id用于重置状态
-      const newsIdResult = await client.query(
-        'SELECT news_id FROM quality_annotations WHERE id = $1',
+      const annotationResult = await client.query<{
+        news_id: number;
+        fingerprint: string | null;
+        is_latest: boolean;
+      }>(
+        `SELECT qa.news_id, COALESCE(qa.fingerprint, npl.fingerprint) AS fingerprint, qa.is_latest
+         FROM quality_annotations qa
+         LEFT JOIN news_push_log npl ON npl.id = qa.news_id
+         WHERE qa.id = $1`,
         [annotationId]
       );
 
-      if (newsIdResult.rows.length === 0) {
+      if (annotationResult.rows.length === 0) {
         await client.query('ROLLBACK');
         return c.json({
           success: false,
@@ -523,16 +572,31 @@ app.delete('/api/annotation/annotations/:id', async (c) => {
         }, 404);
       }
 
-      const newsId = newsIdResult.rows[0].news_id;
+      const deleted = annotationResult.rows[0];
 
       // 删除标注
       await client.query('DELETE FROM quality_annotations WHERE id = $1', [annotationId]);
 
-      // 重置push_log状态为pending
-      await client.query(
-        'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
-        ['pending', newsId]
-      );
+      if (deleted.is_latest && deleted.fingerprint) {
+        const restored = await client.query(
+          `UPDATE quality_annotations
+           SET is_latest = true, updated_at = CURRENT_TIMESTAMP
+           WHERE id = (
+             SELECT id FROM quality_annotations
+             WHERE fingerprint = $1
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+           )
+           RETURNING id`,
+          [deleted.fingerprint]
+        );
+        if (restored.rows.length === 0) {
+          await client.query(
+            `UPDATE news_push_log SET annotation_status = 'pending' WHERE fingerprint = $1`,
+            [deleted.fingerprint]
+          );
+        }
+      }
 
       await client.query('COMMIT');
 
@@ -556,7 +620,7 @@ app.delete('/api/annotation/annotations/:id', async (c) => {
 });
 
 /**
- * 导出训练样本
+ * 导出可追溯评审样本（用于离线评估，不会自动进入生产配置）
  */
 app.get('/api/annotation/samples/export', async (c) => {
   try {
@@ -569,6 +633,8 @@ app.get('/api/annotation/samples/export', async (c) => {
       // 直接查询导出样本（包含优化内容）
       let query = `
         SELECT
+          qa.news_id,
+          COALESCE(qa.fingerprint, npl.fingerprint) AS fingerprint,
           npl.raw_content->>'title' as original_title,
           npl.raw_content->>'link' as link,
           npl.raw_content->>'description' as original_description,
@@ -607,7 +673,7 @@ app.get('/api/annotation/samples/export', async (c) => {
       client.release();
     }
   } catch (error) {
-    console.error('❌ 导出训练样本失败:', error);
+    console.error('❌ 导出评审样本失败:', error);
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : '未知错误'
@@ -616,33 +682,14 @@ app.get('/api/annotation/samples/export', async (c) => {
 });
 
 /**
- * 清空所有待标注新闻数据（将状态重置为pending）
+ * 兼容旧客户端。待评审状态现在由“是否存在最新决策”派生，不再批量改写投递日志。
  */
 app.delete('/api/annotation/news/pending', async (c) => {
-  try {
-    const client = await postgres.getClient();
-    try {
-      // 不删除数据，只重置状态
-      const result = await client.query(
-        `UPDATE news_push_log SET annotation_status = 'pending' WHERE annotation_status != 'completed' RETURNING id`
-      );
-
-      return c.json({
-        success: true,
-        data: {
-          resetCount: result.rowCount || 0
-        }
-      });
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error('❌ 重置待标注数据失败:', error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误'
-    }, 500);
-  }
+  return c.json({
+    success: true,
+    data: { resetCount: 0 },
+    message: '待评审状态由稳定内容决策自动计算，无需重置投递日志',
+  });
 });
 
 /**
@@ -652,47 +699,11 @@ app.get('/api/annotation/statistics', async (c) => {
   try {
     const client = await postgres.getClient();
     try {
-      // 进度统计
-      const progressResult = await client.query(`
-        SELECT
-          COUNT(*)::INTEGER as total_count,
-          COUNT(*) FILTER (WHERE annotation_status = 'pending')::INTEGER as pending_count,
-          COUNT(*) FILTER (WHERE annotation_status = 'completed')::INTEGER as completed_count,
-          COUNT(*) FILTER (WHERE annotation_status = 'skipped')::INTEGER as skipped_count,
-          ROUND(
-            100.0 * COUNT(*) FILTER (WHERE annotation_status = 'completed') / NULLIF(COUNT(*), 0),
-            1
-          )::FLOAT as completion_rate
-        FROM news_push_log
-        WHERE raw_content->>'title' IS NOT NULL
-          AND raw_content->>'title' != ''
-      `);
-
-      // 质量分布
-      const distributionResult = await client.query(`
-        SELECT
-          qa.category as quality_level,
-          COUNT(*)::INTEGER as count,
-          ROUND(AVG(qa.overall_score)::numeric, 1)::FLOAT as avg_score,
-          MIN(qa.overall_score)::INTEGER as min_score,
-          MAX(qa.overall_score)::INTEGER as max_score
-        FROM quality_annotations qa
-        WHERE qa.is_latest = true
-        GROUP BY qa.category
-        ORDER BY
-          CASE qa.category
-            WHEN 'high' THEN 1
-            WHEN 'medium' THEN 2
-            WHEN 'low' THEN 3
-          END
-      `);
+      const statistics = await getReviewStatistics(client);
 
       return c.json({
         success: true,
-        data: {
-          progress: progressResult.rows[0],
-          qualityDistribution: distributionResult.rows
-        }
+        data: statistics
       });
     } finally {
       client.release();
@@ -726,7 +737,10 @@ app.get('/api/annotation/history', async (c) => {
     const params: any[] = [];
 
     if (newsId) {
-      query += ' WHERE qa.news_id = $1';
+      query += ` WHERE (
+        qa.fingerprint = (SELECT fingerprint FROM news_push_log WHERE id = $1)
+        OR (qa.fingerprint IS NULL AND qa.news_id = $1)
+      )`;
       params.push(parseInt(newsId, 10));
     }
 
@@ -772,16 +786,39 @@ app.post('/api/annotation/batch', async (c) => {
       const results: QualityAnnotation[] = [];
 
       for (const annotation of annotations) {
+        const subjectResult = await client.query<{ fingerprint: string }>(
+          `SELECT npl.fingerprint
+           FROM news_push_log npl
+           JOIN news_push_stats nps ON nps.fingerprint = npl.fingerprint
+           WHERE npl.id = $1
+           FOR UPDATE OF nps`,
+          [annotation.news_id]
+        );
+        const fingerprint = subjectResult.rows[0]?.fingerprint;
+        if (!fingerprint) throw new Error(`新闻 ${annotation.news_id} 不存在或缺少稳定内容标识`);
+
+        await client.query(
+          `UPDATE quality_annotations
+           SET is_latest = false, updated_at = CURRENT_TIMESTAMP
+           WHERE fingerprint = $1 AND is_latest = true`,
+          [fingerprint]
+        );
+
         const result = await client.query<QualityAnnotation>(`
           INSERT INTO quality_annotations (
-            news_id, overall_score, category, should_filter,
+            news_id, fingerprint, version, overall_score, category, should_filter,
             news_value, practicality, density, timeliness, universality,
             reason, tags, annotator, difficulty, confidence,
             optimized_title, optimized_summary, optimized_content
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          ) VALUES (
+            $1, $2,
+            (SELECT COALESCE(MAX(version), 0) + 1 FROM quality_annotations WHERE fingerprint = $2),
+            $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+          )
           RETURNING *
         `, [
           annotation.news_id,
+          fingerprint,
           annotation.overall_score,
           annotation.category,
           annotation.should_filter,
@@ -802,8 +839,10 @@ app.post('/api/annotation/batch', async (c) => {
 
         // 更新状态
         await client.query(
-          'UPDATE news_push_log SET annotation_status = $1 WHERE id = $2',
-          ['completed', annotation.news_id]
+          `UPDATE news_push_log
+           SET annotation_status = 'completed'
+           WHERE fingerprint = $1 AND annotation_status = 'pending'`,
+          [fingerprint]
         );
 
         results.push(result.rows[0]);

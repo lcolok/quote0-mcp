@@ -1,6 +1,5 @@
 /**
- * AX模型热重载管理器
- * 监控模型文件变化，自动重新加载，实现零停机更新
+ * 提示配置热重载管理器（历史类名保留）
  */
 
 import { watch, FSWatcher } from 'fs';
@@ -39,7 +38,7 @@ export class ModelHotReloadManager extends EventEmitter {
       // 检查文件是否存在
       await access(this.modelPath);
 
-      // 首次加载模型
+      // 首次加载提示配置
       await this.reloadModel();
 
       // 启动文件监控
@@ -49,7 +48,7 @@ export class ModelHotReloadManager extends EventEmitter {
         }
       });
 
-      console.log(`🔥 模型热重载已启动: ${this.modelPath}`);
+      console.log(`🔥 提示配置热重载已启动: ${this.modelPath}`);
       this.emit('started', { modelPath: this.modelPath });
     } catch (error) {
       console.error(`❌ 热重载启动失败:`, error);
@@ -64,7 +63,7 @@ export class ModelHotReloadManager extends EventEmitter {
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
-      console.log('🛑 模型热重载已停止');
+      console.log('🛑 提示配置热重载已停止');
       this.emit('stopped');
     }
   }
@@ -89,7 +88,7 @@ export class ModelHotReloadManager extends EventEmitter {
    */
   private async reloadModel(): Promise<void> {
     if (this.isReloading) {
-      console.log('⏳ 模型正在重载中，跳过此次请求');
+      console.log('⏳ 提示配置正在重载中，跳过此次请求');
       return;
     }
 
@@ -97,7 +96,7 @@ export class ModelHotReloadManager extends EventEmitter {
     const startTime = Date.now();
 
     try {
-      console.log(`🔄 开始重载模型: ${this.modelPath}`);
+      console.log(`🔄 开始重载提示配置: ${this.modelPath}`);
 
       // 读取模型文件
       const fileContent = await readFile(this.modelPath, 'utf-8');
@@ -108,20 +107,20 @@ export class ModelHotReloadManager extends EventEmitter {
 
       if (success) {
         const duration = Date.now() - startTime;
-        console.log(`✅ 模型重载成功 (耗时 ${duration}ms)`);
+        console.log(`✅ 提示配置重载成功 (耗时 ${duration}ms)`);
 
         const event: ModelReloadEvent = {
           timestamp: new Date().toISOString(),
-          version: modelData.metadata?.version || 'unknown',
+          version: modelData.version || modelData.metadata?.version || 'unknown',
           success: true
         };
 
         this.emit('reloaded', event);
       } else {
-        throw new Error('模型加载回调返回失败');
+        throw new Error('提示配置加载回调返回失败');
       }
     } catch (error) {
-      console.error(`❌ 模型重载失败:`, error);
+      console.error(`❌ 提示配置重载失败:`, error);
 
       const event: ModelReloadEvent = {
         timestamp: new Date().toISOString(),

@@ -42,7 +42,11 @@ class AnnotationApiClient {
     status?: 'pending' | 'annotating' | 'completed' | 'skipped';
     limit?: number;
     offset?: number;
+    cursor?: string;
     category?: string;
+    search?: string;
+    includeContent?: boolean;
+    includeTotal?: boolean;
   }): Promise<ApiResponse<NewsRawData[]>> {
     const response = await this.client.get<ApiResponse<NewsRawData[]>>('/api/annotation/news', {
       params,
@@ -123,7 +127,7 @@ class AnnotationApiClient {
   }
 
   /**
-   * 导出训练样本
+   * 导出可追溯评审样本
    */
   async exportSamples(params?: {
     minScore?: number;
@@ -159,7 +163,12 @@ class AnnotationApiClient {
   async getPushHistory(params?: {
     limit?: number;
     offset?: number;
+    cursor?: string;
     search?: string;
+    category?: string;
+    status?: 'pending' | 'completed';
+    includeContent?: boolean;
+    includeTotal?: boolean;
   }): Promise<ApiResponse<any[]>> {
     const response = await this.client.get<ApiResponse<any[]>>(
       '/api/scheduler/push-history',

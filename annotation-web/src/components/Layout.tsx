@@ -31,7 +31,7 @@ function Layout() {
     { to: '/dashboard', icon: LayoutDashboard, label: '仪表板' },
     { to: '/annotate', icon: FileEdit, label: '开始标注' },
     { to: '/export', icon: Download, label: '导出样本' },
-    { to: '/training', icon: Zap, label: 'AX训练' },
+    { to: '/evaluation', icon: Zap, label: '评估与配置' },
     { to: '/scheduler', icon: Calendar, label: '调度器' },
     { to: '/jobs', icon: Settings2, label: '任务管理' },
     { to: '/sources', icon: Settings, label: 'RSS源管理' },
@@ -74,10 +74,10 @@ function Layout() {
             <div className="flex items-center justify-between">
               <div className="flex-1 min-w-0">
                 <h2 className="text-lg font-bold text-gray-900 truncate">
-                  新闻质量标注
+                  内容评审与发布
                 </h2>
                 <p className="text-xs text-gray-500 truncate">
-                  AX Framework
+                  Review Console
                 </p>
               </div>
               <button
@@ -135,10 +135,10 @@ function Layout() {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">
-                  新闻质量标注系统
+                  内容评审与发布工作台
                 </h1>
                 <p className="text-sm text-gray-500 mt-1">
-                  构建高质量训练样本集
+                  评审稳定内容、验证提示配置并管理投递
                 </p>
               </div>
             </div>
@@ -154,7 +154,7 @@ function Layout() {
         <footer className="bg-white border-t border-gray-200 mt-auto">
           <div className="px-4 sm:px-6 lg:px-8 py-4">
             <p className="text-center text-sm text-gray-500">
-              AX Quality Annotation System - v1.0
+              Quote0 Review & Delivery Console
             </p>
           </div>
         </footer>

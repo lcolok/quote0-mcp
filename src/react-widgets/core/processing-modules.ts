@@ -19,6 +19,12 @@ import {
 const DEFAULT_MODULE_HEALTH_TIMEOUT_MS = Number(process.env.MODULE_HEALTH_TIMEOUT_MS ?? '5000');
 const LLM_HEALTH_TIMEOUT_MS = Math.min(DEFAULT_MODULE_HEALTH_TIMEOUT_MS, 4000);
 
+function calculateLengthCompliance(title: string, summary: string, titleLimit: number, summaryLimit: number): number {
+  const titleOk = Array.from(title).length <= titleLimit;
+  const summaryOk = Array.from(summary).length <= summaryLimit;
+  return (Number(titleOk) + Number(summaryOk)) / 2;
+}
+
 type EndpointCheckResult = {
   reachable: boolean;
   status?: number;
@@ -219,13 +225,11 @@ export class PassThroughProcessingModule extends BaseProcessingModule {
       originalContent: rawData.content,
       processedContent: rawData.content,
       summary: rawData.content.length > 100 ? rawData.content.substring(0, 100) + '...' : rawData.content,
-      qualityScore: 1.0,
       processingMetadata: {
         processor: this.name,
         model: 'passthrough',
         processedAt: new Date().toISOString(),
-        processingTime,
-        confidence: 1.0
+        processingTime
       },
       rawData
     };
@@ -284,7 +288,13 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
     // 多端点 fallback 链：active 优先，失败后按 llm_fallback_chain 顺序重试同一条新闻。
     const candidates = await getLLMConfigCandidates(getPostgresDatabase());
 
-    let out: { optimizedTitle: string; processedContent: string; model: string };
+    let out: {
+      optimizedTitle: string;
+      processedContent: string;
+      model: string;
+      maxTitleLength: number;
+      maxContentLength: number;
+    };
     let usedProvider = 'unknown';
     let usedModel = 'unknown';
     try {
@@ -362,7 +372,7 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
             await this.llmCache.set(contentCacheKey, processedContent);
           }
         }
-        return { optimizedTitle, processedContent, model: cfg.model };
+        return { optimizedTitle, processedContent, model: cfg.model, maxTitleLength, maxContentLength };
       });
       out = r.result;
       usedProvider = r.used.providerSlug;
@@ -376,6 +386,13 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
     
     console.log(`✅ 基础LLM处理完成: "${out.optimizedTitle}" (耗时${processingTime}ms)`);
     
+    const constraintCompliance = calculateLengthCompliance(
+      out.optimizedTitle,
+      out.processedContent,
+      out.maxTitleLength,
+      out.maxContentLength,
+    );
+
     return {
       id: rawData.id,
       originalTitle: rawData.title,
@@ -383,7 +400,7 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
       originalContent: rawData.content,
       processedContent: out.processedContent,
       summary: out.processedContent,
-      qualityScore: 0.85, // 基础处理质量分数
+      qualityScore: constraintCompliance,
       processingMetadata: {
         processor: this.name,
         model: out.model,
@@ -391,7 +408,7 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
         llm_model: usedModel,
         processedAt: new Date().toISOString(),
         processingTime,
-        confidence: 0.85
+        qualityMetric: 'constraint-compliance'
       },
       rawData
     };
@@ -492,12 +509,15 @@ export class BasicLLMProcessingModule extends BaseProcessingModule {
 }
 
 /**
- * AX优化处理模块
+ * Versioned few-shot prompt-profile processor.
+ *
+ * `ax-optimized` remains a registry alias so existing scheduler rows continue
+ * to run, but this class does not claim AX training or measured quality.
  */
-export class AxOptimizedProcessingModule extends BaseProcessingModule {
-  name = 'AX优化处理器';
-  version = '1.0.0';
-  description = '使用AX框架进行高级内容优化，支持预训练模型和few-shot学习';
+export class PromptProfileProcessingModule extends BaseProcessingModule {
+  name = '提示配置处理器';
+  version = '2.0.0';
+  description = '使用可版本化的 few-shot 提示配置处理内容；质量需由独立评估验证';
 
   private processorInstance: any = null;
   private hotReloadManager: any = null;
@@ -510,82 +530,82 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
   
   private async initializeProcessor(configOverride?: { apiKey: string; baseURL: string; model: string }) {
     const eff = configOverride ?? this.config;
-    if (this.processorInstance && !configOverride) {
+    const isActiveConfig = eff.apiKey === this.config.apiKey
+      && eff.baseURL === this.config.baseURL
+      && eff.model === this.config.model;
+    if (this.processorInstance && isActiveConfig) {
       return this.processorInstance;
     }
     
-    // 详细配置检查
-    console.log('🔍 AX处理器配置检查...');
+    console.log('🔍 提示配置处理器检查...');
     const configReport = this.validateConfigurationWith(eff);
     if (!configReport.isValid) {
-      const errorMsg = `AX处理器配置错误: ${configReport.errors.join(', ')}`;
+      const errorMsg = `提示配置处理器配置错误: ${configReport.errors.join(', ')}`;
       console.error(`❌ ${errorMsg}`);
       throw new Error(errorMsg);
     }
-    console.log('✅ AX处理器配置检查通过');
+    console.log('✅ 提示配置处理器配置检查通过');
     
     try {
-      // 检查核心依赖
-      console.log('📦 检查AX处理器依赖...');
-      const { AxOptimizedNewsProcessorSimplified } = await import('../services/ax-optimized-news-processor-simplified.js');
+      const { PromptProfileNewsProcessor } = await import('../services/ax-optimized-news-processor-simplified.js');
       
-      const proc = new AxOptimizedNewsProcessorSimplified({
+      const proc = new PromptProfileNewsProcessor({
         apiKey: eff.apiKey,
         baseURL: eff.baseURL,
         model: eff.model,
         pool: this.pool
       });
       
-      // 尝试加载预训练模型
-      console.log('📚 尝试加载AX预训练模型...');
-      const loadSuccess = await proc.loadOptimizationArtifacts('ax-framework/models/production/latest.json');
+      console.log('📚 加载版本化提示配置...');
+      const loadSuccess = await proc.loadPromptProfile('ax-framework/models/production/latest.json');
 
       if (!loadSuccess) {
-        console.log('⚡ 预训练模型未找到，使用基础数据进行快速训练...');
+        console.log('⚡ 提示配置文件未找到，从内置示例创建未验证配置...');
 
         try {
-          // 导入训练数据并进行快速训练
+          // 兼容旧数据格式：这里只抽取 few-shot 示例，不执行训练。
           const { trainingData } = await import('../../../ax-framework/compiled/ax-training-data.js');
 
           if (!trainingData || !Array.isArray(trainingData) || trainingData.length === 0) {
-            throw new Error('训练数据为空或格式不正确');
+            throw new Error('提示示例为空或格式不正确');
           }
 
           const sampleData = trainingData.slice(0, 3);
-          console.log(`📊 使用 ${sampleData.length} 条样本数据进行快速训练...`);
+          console.log(`📎 使用 ${sampleData.length} 条样本创建提示配置...`);
 
-          await proc.quickTrain(sampleData);
-          console.log('✅ 快速训练完成');
+          proc.createProfileFromExamples(sampleData);
+          console.log('✅ 提示配置创建完成（未产生质量指标）');
         } catch (trainingError) {
-          throw new Error(`快速训练失败: ${trainingError instanceof Error ? trainingError.message : '训练数据加载错误'}`);
+          throw new Error(`提示配置创建失败: ${trainingError instanceof Error ? trainingError.message : '示例加载错误'}`);
         }
       } else {
-        console.log('✅ 预训练模型加载成功');
+        console.log('✅ 提示配置加载成功');
 
-        // 启动热重载监控（仅 active 实例）
-        if (!configOverride) await this.startHotReload();
+        // Active 实例会被缓存并监听配置文件；fallback 跳仍保持隔离。
       }
 
-      // 仅 active 路径缓存单例，fallback 每跳重建不缓存（避免串配置）
-      if (!configOverride) this.processorInstance = proc;
+      if (isActiveConfig) {
+        this.processorInstance = proc;
+        if (loadSuccess && !this.hotReloadManager) await this.startHotReload();
+      }
       return proc;
       
     } catch (error) {
-      console.error('❌ AX处理器初始化失败:', error);
+      console.error('❌ 提示配置处理器初始化失败:', error);
       
       // 详细错误分类
       if (error instanceof Error) {
         if (error.message.includes('训练数据')) {
-          throw new Error(`AX处理器训练数据错误: ${error.message} (请检查 ax-framework/compiled/ax-training-data.js 文件)`);
+          throw new Error(`提示配置示例错误: ${error.message} (请检查 ax-framework/compiled/ax-training-data.js 文件)`);
         } else if (error.message.includes('模型')) {
-          throw new Error(`AX处理器模型错误: ${error.message} (请检查 ax-framework/models/production/latest.json 文件)`);
+          throw new Error(`提示配置文件错误: ${error.message} (请检查 ax-framework/models/production/latest.json 文件)`);
         } else if (error.message.includes('Cannot resolve module')) {
-          throw new Error(`AX处理器依赖缺失: ${error.message} (请检查 ax-framework 目录结构)`);
+          throw new Error(`提示配置处理器依赖缺失: ${error.message}`);
         } else {
-          throw new Error(`AX处理器初始化失败: ${error.message}`);
+          throw new Error(`提示配置处理器初始化失败: ${error.message}`);
         }
       } else {
-        throw new Error('AX处理器初始化失败: 未知错误类型');
+        throw new Error('提示配置处理器初始化失败: 未知错误类型');
       }
     }
   }
@@ -624,12 +644,13 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
   
   async processData(rawData: RawDataItem, params: ProcessingParams): Promise<ProcessedDataItem> {
     const startTime = Date.now();
-    console.log(`🧠 AX优化处理: ${rawData.title}`);
+    console.log(`🧠 提示配置处理: ${rawData.title}`);
     
     // 动态读取最新 LLM 配置，若变更则重置处理器实例
     try {
       const cfg = await getActiveLLMConfig(getPostgresDatabase());
       if (cfg.baseUrl !== this.config.baseURL || cfg.apiKey !== this.config.apiKey || cfg.model !== this.config.model) {
+        this.stopHotReload();
         this.config = { baseURL: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model };
         this.processorInstance = null;
       }
@@ -651,19 +672,19 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
           baseURL: cfg.baseUrl,
           model: cfg.model,
         });
-        return await processor.processNewsWithOptimizedProgram(originalContent2);
+        return await processor.processNewsWithPromptProfile(originalContent2);
       });
       result = r.result;
       usedProvider = r.used.providerSlug;
       usedModel = r.used.model;
     } catch (error) {
-      console.error('AX优化处理失败:', error);
-      throw new Error(`AX优化处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      console.error('提示配置处理失败:', error);
+      throw new Error(`提示配置处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
 
     const processingTime = Date.now() - startTime;
     
-    console.log(`✅ AX优化处理完成: "${result.title}" (耗时${processingTime}ms)`);
+    console.log(`✅ 提示配置处理完成: "${result.title}" (耗时${processingTime}ms)`);
     
     return {
       id: rawData.id,
@@ -672,7 +693,7 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       originalContent: rawData.content,
       processedContent: result.body,
       summary: result.body,
-      qualityScore: 0.95, // AX优化的高质量分数
+      qualityScore: result.constraintCompliance,
       processingMetadata: {
         processor: this.name,
         model: usedModel,
@@ -680,7 +701,8 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
         llm_model: usedModel,
         processedAt: new Date().toISOString(),
         processingTime,
-        confidence: 0.95
+        qualityMetric: 'constraint-compliance',
+        profileVersion: result.profileVersion
       },
       rawData
     };
@@ -707,7 +729,7 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       additionalInfo.configErrors = configReport.errors;
       return {
         healthy: false,
-        message: `AX处理器配置错误: ${configReport.errors.join(', ')}`,
+        message: `提示配置处理器配置错误: ${configReport.errors.join(', ')}`,
         lastChecked: timestamp,
         responseTime: 0,
         modelStatus: 'error',
@@ -738,13 +760,13 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
 
     let message: string;
     if (isHealthy && !modelExists) {
-      message = `AX处理器端点可访问 (HTTP ${endpointCheck.status ?? '未知'})，未检测到模型文件，将按需执行快速训练`;
+      message = `提示配置处理器端点可访问 (HTTP ${endpointCheck.status ?? '未知'})，未检测到配置文件`;
     } else if (isHealthy) {
-      message = `AX处理器就绪 (HTTP ${endpointCheck.status ?? '未知'})`;
+      message = `提示配置处理器就绪 (HTTP ${endpointCheck.status ?? '未知'})`;
     } else if (endpointCheck.timedOut) {
-      message = `AX处理器端点在 ${LLM_HEALTH_TIMEOUT_MS}ms 内未响应`;
+      message = `提示配置处理器端点在 ${LLM_HEALTH_TIMEOUT_MS}ms 内未响应`;
     } else {
-      message = `AX处理器健康检查失败: ${endpointCheck.message ?? '未知原因'}`;
+      message = `提示配置处理器健康检查失败: ${endpointCheck.message ?? '未知原因'}`;
     }
 
     return {
@@ -769,22 +791,21 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       this.hotReloadManager = new ModelHotReloadManager(
         modelPath,
         async (modelData) => {
-          // 热重载回调：将新模型加载到处理器中
-          return this.processorInstance.loadFromModelData(modelData);
+          return this.processorInstance?.loadFromModelData(modelData) ?? false;
         }
       );
 
       // 监听热重载事件
       this.hotReloadManager.on('reloaded', (event: any) => {
-        console.log(`🔥 模型已热重载: 版本 ${event.version} at ${event.timestamp}`);
+        console.log(`🔥 提示配置已热重载: 版本 ${event.version} at ${event.timestamp}`);
       });
 
       this.hotReloadManager.on('reload-failed', (event: any) => {
-        console.error(`❌ 模型热重载失败: ${event.error}`);
+        console.error(`❌ 提示配置热重载失败: ${event.error}`);
       });
 
       await this.hotReloadManager.start();
-      console.log('🔥 AX模型热重载已启用 - 模型更新将自动生效，无需重启服务');
+      console.log('🔥 提示配置热重载已启用');
     } catch (error) {
       console.warn('⚠️  热重载功能启动失败，将使用手动重载模式:', error);
     }
@@ -810,23 +831,26 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
   getSupportedParams(): ProcessingParamDefinition[] {
     return [
       {
-        name: 'usePretrainedModel',
+        name: 'usePromptProfile',
         type: 'boolean',
         required: false,
         defaultValue: true,
-        description: '是否使用预训练模型'
+        description: '是否使用版本化提示配置'
       },
       {
-        name: 'quickTrainSamples',
+        name: 'profileExampleLimit',
         type: 'number',
         required: false,
         defaultValue: 3,
-        description: '快速训练使用的样本数量',
+        description: '配置文件缺失时最多使用的 few-shot 示例数量',
         validation: (value: number) => value > 0 && value <= 10
       }
     ];
   }
 }
+
+/** @deprecated Use PromptProfileProcessingModule. */
+export class AxOptimizedProcessingModule extends PromptProfileProcessingModule {}
 
 /**
  * 处理模块注册表
@@ -923,8 +947,10 @@ export class ProcessingRegistry {
         // 注册基础LLM处理模块（带缓存）
         this.register('basic-llm', new BasicLLMProcessingModule(llmConfig, pool));
         
-        // 注册AX优化处理模块
-        this.register('ax-optimized', new AxOptimizedProcessingModule(llmConfig, pool));
+        // 新名称用于新任务；旧键仅作为持久化配置的兼容别名。
+        const promptProfileModule = new PromptProfileProcessingModule(llmConfig, pool);
+        this.register('prompt-profile', promptProfileModule);
+        this.register('ax-optimized', promptProfileModule);
         
         console.log('🤖 LLM处理模块初始化完成（自动读取.env配置）');
       } else {

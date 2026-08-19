@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
@@ -16,13 +16,14 @@ interface NewsRecord {
   pushedAtUtc?: string | null;
   annotationStatus: 'pending' | 'annotating' | 'completed' | 'skipped';
   isRecent?: boolean;
-  rawContent: any;
-  processedContent: any;
+  rawContent?: any;
+  processedContent?: any;
 }
 
 function AnnotationPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim());
   const [pushTarget, setPushTarget] = useState<{cloud: boolean, esp32: boolean}>({cloud: false, esp32: true});
   // null 表示全部启用的本地墨水屏；从设备管理页跳转时会自动锁定到指定设备。
   const [selectedEinkDeviceIds, setSelectedEinkDeviceIds] = useState<string[] | null>(null);
@@ -91,7 +92,8 @@ function AnnotationPage() {
   const { data: statisticsData } = useQuery({
     queryKey: ['statistics'],
     queryFn: () => apiClient.getStatistics(),
-    refetchInterval: 30000,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
   });
 
   const {
@@ -101,7 +103,8 @@ function AnnotationPage() {
   } = useQuery({
     queryKey: ['devices'],
     queryFn: () => devicesApi.getDevices(),
-    refetchInterval: 30000,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
   });
 
   const einkDevices = useMemo(
@@ -123,7 +126,7 @@ function AnnotationPage() {
   }, [einkDevices, requestedDeviceId]);
 
   // 首屏只取一页，避免把多年推送记录的完整 JSON 一次性传到浏览器。
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = 50;
 
   const {
     data: newsData,
@@ -132,13 +135,18 @@ function AnnotationPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['push-history-all'],
-    initialPageParam: 0,
-    queryFn: ({ pageParam = 0 }) =>
-      apiClient.getPushHistory({ limit: PAGE_SIZE, offset: pageParam }),
-    getNextPageParam: (lastPage, pages) =>
-      lastPage.pagination?.hasMore ? pages.length * PAGE_SIZE : undefined,
-    refetchInterval: 30000,
+    queryKey: ['push-history-all', deferredSearchQuery],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      apiClient.getPushHistory({
+        limit: PAGE_SIZE,
+        ...(deferredSearchQuery ? { search: deferredSearchQuery } : {}),
+        ...(pageParam ? { cursor: pageParam } : {}),
+      }),
+    getNextPageParam: (lastPage) =>
+      lastPage.pagination?.hasMore ? lastPage.pagination.nextCursor || undefined : undefined,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
   });
 
   // 处理数据并排序
@@ -198,17 +206,11 @@ function AnnotationPage() {
       { pending: 0, completed: 0, skipped: 0 }
     );
   }, [newsList]);
-  const pendingTotal = newsList.length > 0
-    ? statusCounts.pending
-    : (progress?.pending_count ?? 0);
-  const completedTotal = newsList.length > 0
-    ? statusCounts.completed
-    : (progress?.completed_count ?? 0);
-  const skippedTotal = newsList.length > 0
-    ? statusCounts.skipped
-    : (progress?.skipped_count ?? 0);
+  const pendingTotal = progress?.pending_count ?? statusCounts.pending;
+  const completedTotal = progress?.completed_count ?? statusCounts.completed;
+  const skippedTotal = progress?.skipped_count ?? statusCounts.skipped;
 
-  // 根据搜索关键词筛选数据
+  // 服务端会跨全部稳定内容主体搜索；这里保留本地过滤以消除切换查询时的短暂闪烁。
   const filteredList = useMemo(() => {
     if (!searchQuery.trim()) return newsList;
 
@@ -225,7 +227,23 @@ function AnnotationPage() {
     ? filteredList.find(r => r.id === selectedId)
     : filteredList[0];
 
-  const currentRecord = selectedRecord || filteredList[0];
+  const currentRecordSummary = selectedRecord || filteredList[0];
+  const { data: currentDetailData } = useQuery({
+    queryKey: ['push-detail', currentRecordSummary?.id],
+    queryFn: () => apiClient.getPushDetail(currentRecordSummary!.id),
+    enabled: Boolean(currentRecordSummary?.id),
+    staleTime: 60000,
+  });
+  const currentRecord = useMemo(() => {
+    if (!currentRecordSummary) return undefined;
+    const detail = currentDetailData?.data;
+    return {
+      ...currentRecordSummary,
+      imagePath: detail?.image_path || currentRecordSummary.imagePath,
+      rawContent: detail?.raw_content,
+      processedContent: detail?.processed_content,
+    };
+  }, [currentRecordSummary, currentDetailData?.data]);
 
   // 格式化时间显示
   const formatTime = (date: Date) => {
@@ -258,7 +276,8 @@ function AnnotationPage() {
     },
     onSuccess: () => {
       // 重新获取新闻列表以更新 image_path
-      queryClient.invalidateQueries({ queryKey: ['pending-news'] });
+      queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
+      queryClient.invalidateQueries({ queryKey: ['push-detail', currentRecord?.id] });
     },
   });
 
@@ -271,12 +290,13 @@ function AnnotationPage() {
 
   // 快速标注mutation（点赞/点踩）
   const quickAnnotateMutation = useMutation({
-    mutationFn: (action: 'like' | 'dislike') =>
-      apiClient.quickAnnotate(currentRecord.id, action),
-    onSuccess: (_, action) => {
+    mutationFn: ({ id, action }: { id: number; action: 'like' | 'dislike' }) =>
+      apiClient.quickAnnotate(id, action),
+    onSuccess: (_, { id, action }) => {
       toast.success(action === 'like' ? '👍 已标记为高质量' : '👎 已标记为低质量');
       queryClient.invalidateQueries({ queryKey: ['push-history-all'] });
       queryClient.invalidateQueries({ queryKey: ['statistics'] });
+      queryClient.invalidateQueries({ queryKey: ['push-detail', id] });
 
       // 自动跳转到下一条
       handleNext();
@@ -313,14 +333,14 @@ function AnnotationPage() {
   };
 
   const handlePrevious = () => {
-    const currentIdx = filteredList.findIndex(r => r.id === selectedId);
+    const currentIdx = filteredList.findIndex(r => r.id === currentRecord?.id);
     if (currentIdx > 0) {
       setSelectedId(filteredList[currentIdx - 1].id);
     }
   };
 
   const handleNext = () => {
-    const currentIdx = filteredList.findIndex(r => r.id === selectedId);
+    const currentIdx = filteredList.findIndex(r => r.id === currentRecord?.id);
     if (currentIdx >= 0 && currentIdx < filteredList.length - 1) {
       setSelectedId(filteredList[currentIdx + 1].id);
     }
@@ -332,7 +352,7 @@ function AnnotationPage() {
 
   const handleQuickAnnotate = (action: 'like' | 'dislike') => {
     if (currentRecord && !quickAnnotateMutation.isPending) {
-      quickAnnotateMutation.mutate(action);
+      quickAnnotateMutation.mutate({ id: currentRecord.id, action });
     }
   };
 
@@ -438,7 +458,7 @@ function AnnotationPage() {
     );
   }
 
-  const currentIdx = filteredList.findIndex(r => r.id === selectedId);
+  const currentIdx = filteredList.findIndex(r => r.id === currentRecord?.id);
 
   return (
     <div ref={containerRef} className="flex h-[calc(100vh-12rem)] gap-0">
@@ -671,7 +691,7 @@ function AnnotationPage() {
             )}
 
             {/* 原始RSS数据区域 */}
-            {(currentRecord.rawContent || currentRecord.rawContent) && (
+            {currentRecord.rawContent && (
               <div className="mt-2">
                 <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
                   📋 原始RSS数据
@@ -680,62 +700,62 @@ function AnnotationPage() {
                   <div>
                     <span className="text-xs font-semibold text-yellow-800">原始标题：</span>
                     <p className="text-sm text-yellow-900 mt-1">
-                      {(currentRecord.rawContent || currentRecord.rawContent)?.title}
+                      {currentRecord.rawContent.title}
                     </p>
                   </div>
                   {/* 显示原始正文：优先使用 raw_content.content，回退到 news.description */}
-                  {((currentRecord.rawContent || currentRecord.rawContent)?.content || currentRecord.rawContent?.description) && (
+                  {(currentRecord.rawContent.content || currentRecord.rawContent.description) && (
                     <div>
                       <span className="text-xs font-semibold text-yellow-800">
                         原始摘要/正文：
-                        {(currentRecord.rawContent || currentRecord.rawContent)?.content
-                          ? `（${(currentRecord.rawContent || currentRecord.rawContent).content.length} 字符）`
+                        {currentRecord.rawContent.content
+                          ? `（${currentRecord.rawContent.content.length} 字符）`
                           : '（RSS摘要）'}
                       </span>
                       <p className="text-sm text-yellow-900 mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap">
-                        {(currentRecord.rawContent || currentRecord.rawContent)?.content || currentRecord.rawContent?.description}
+                        {currentRecord.rawContent.content || currentRecord.rawContent.description}
                       </p>
                     </div>
                   )}
-                  {(currentRecord.rawContent || currentRecord.rawContent)?.description && (
+                  {currentRecord.rawContent.description && (
                     <div>
                       <span className="text-xs font-semibold text-yellow-800">RSS Description：</span>
                       <p className="text-sm text-yellow-900 mt-1 line-clamp-2">
-                        {(currentRecord.rawContent || currentRecord.rawContent).description}
+                        {currentRecord.rawContent.description}
                       </p>
                     </div>
                   )}
                   <div className="text-xs text-yellow-600">
-                    来源: {(currentRecord.rawContent || currentRecord.rawContent)?.source} | 发布: {(currentRecord.rawContent || currentRecord.rawContent)?.publishTime || '未知'}
+                    来源: {currentRecord.rawContent.source} | 发布: {currentRecord.rawContent.publishTime || '未知'}
                   </div>
                 </div>
               </div>
             )}
 
             {/* 处理后的数据区域 */}
-            {(currentRecord.processedContent || currentRecord.processedContent) && (
+            {currentRecord.processedContent && (
               <div className="mt-2">
                 <label className="text-xs font-medium text-gray-500 uppercase mb-2 block">
-                  ✨ AX优化后的数据
+                  ✨ 处理后的内容
                 </label>
                 <div className="bg-green-50 border border-green-200 rounded-lg p-3 space-y-2">
                   <div>
                     <span className="text-xs font-semibold text-green-800">优化标题：</span>
                     <p className="text-sm text-green-900 mt-1 font-medium">
-                      {(currentRecord.processedContent || currentRecord.processedContent)?.title}
+                      {currentRecord.processedContent.title}
                     </p>
                   </div>
-                  {(currentRecord.processedContent || currentRecord.processedContent)?.message && (
+                  {currentRecord.processedContent.message && (
                     <div>
                       <span className="text-xs font-semibold text-green-800">优化内容：</span>
                       <p className="text-sm text-green-900 mt-1">
-                        {(currentRecord.processedContent || currentRecord.processedContent).message}
+                        {currentRecord.processedContent.message}
                       </p>
                     </div>
                   )}
-                  {(currentRecord.processedContent || currentRecord.processedContent)?.signature && (
+                  {currentRecord.processedContent.signature && (
                     <div className="text-xs text-green-600">
-                      处理器: {(currentRecord.processedContent || currentRecord.processedContent).signature}
+                      处理器: {currentRecord.processedContent.signature}
                     </div>
                   )}
                 </div>
@@ -747,7 +767,7 @@ function AnnotationPage() {
                 <span className="font-medium">分类:</span> {currentRecord.category || '未知'}
               </div>
               <div>
-                <span className="font-medium">数据源:</span> {currentRecord.dataSource || currentRecord.dataSource}
+                <span className="font-medium">数据源:</span> {currentRecord.dataSource}
               </div>
               <div className="col-span-2">
                 <span className="font-medium">推送时间:</span>{' '}

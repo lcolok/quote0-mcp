@@ -116,7 +116,7 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
       'rss-enhanced': '✨ 增强工作流RSS - 多步骤AI处理，支持关键词高亮和严格约束',
       'rss-ax': '🔥 AX框架RSS - 基于AX框架的智能内容生成，支持XML结构化和迭代优化',
       'rss-ax-inspired': '⚡ AX风格RSS - 声明式工作流，智能迭代优化，支持自定义API',
-      'ax-optimized': '🧠 AX完整优化 - 自动学习训练，few-shot优化，中间产物生成，生产级部署',
+      'ax-optimized': '🧠 提示配置处理（旧兼容键）- 版本化 few-shot 配置，不代表模型训练',
       api: '🌐 新闻API - 从第三方新闻服务获取实时新闻'
     };
     return descriptions[source] || '未知数据源';
@@ -426,45 +426,38 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
     }
   }
 
-  /**
-   * 使用AX完整优化处理器处理RSS数据
-   * 包含自动学习训练、few-shot优化、中间产物生成
-   */
+  /** 使用版本化 prompt profile 处理 RSS；方法名为兼容旧调用保留。 */
   private async getAxOptimizedData(params: NewsDataParams): Promise<NewsData> {
-    console.log('🧠 启动AX完整优化处理器...');
+    console.log('🧠 启动提示配置处理器（ax-optimized 兼容键）...');
     
     try {
-      // 1. 动态导入简化版AxOptimizedNewsProcessor
-      const { AxOptimizedNewsProcessorSimplified } = await import('../services/ax-optimized-news-processor-simplified.js');
+      const { PromptProfileNewsProcessor } = await import('../services/ax-optimized-news-processor-simplified.js');
       
-      // 2. 初始化AX优化处理器（使用最新配置）
+      // 初始化提示配置处理器（使用最新 LLM 端点）
       let activeCfg2 = getFallbackLLMConfig();
       try {
         activeCfg2 = await getActiveLLMConfig(getPostgresDatabase());
       } catch (e) { /* use fallback */ }
-      const processor = new AxOptimizedNewsProcessorSimplified({
+      const processor = new PromptProfileNewsProcessor({
         apiKey: activeCfg2.apiKey,
         baseURL: activeCfg2.baseUrl,
         model: activeCfg2.model
       });
       
-      // 3. 尝试加载预训练的优化产物
-      console.log('📚 尝试加载预训练模型...');
-      const loadSuccess = await processor.loadOptimizationArtifacts('ax-framework/models/production/latest.json');
+      console.log('📚 尝试加载版本化提示配置...');
+      const loadSuccess = await processor.loadPromptProfile('ax-framework/models/production/latest.json');
       
       if (!loadSuccess) {
-        // 如果没有预训练模型，使用基础训练数据进行快速训练
-        console.log('⚡ 预训练模型未找到，使用基础数据进行训练...');
+        console.log('⚡ 提示配置未找到，使用内置示例创建未验证配置...');
         
         // 导入基础训练数据
         const { trainingData } = await import('../../../ax-framework/compiled/ax-training-data.js');
-        const sampleData = trainingData.slice(0, 3); // 使用前3个样本进行快速训练
+        const sampleData = trainingData.slice(0, 3);
         
-        console.log(`🔄 开始快速训练 (${sampleData.length} 个样本)...`);
-        await processor.quickTrain(sampleData);
-        console.log('✅ 快速训练完成');
+        processor.createProfileFromExamples(sampleData);
+        console.log(`✅ 已创建提示配置（${sampleData.length} 个示例；未产生质量指标）`);
       } else {
-        console.log('✅ 预训练模型加载成功');
+        console.log('✅ 提示配置加载成功');
       }
       
       // 4. 获取RSS数据并处理
@@ -480,29 +473,28 @@ class NewsDataProvider implements WidgetDataProvider<NewsData> {
         Math.max(0, Math.min(params.index, feed.items.length - 1)) : 0;
       
       const item = feed.items[targetIndex];
-      console.log(`📰 选择第${targetIndex + 1}条新闻进行AX优化处理: ${item.title}`);
+      console.log(`📰 选择第${targetIndex + 1}条新闻进行提示配置处理: ${item.title}`);
 
       // 6. 准备新闻内容
       const originalContent = `标题: ${item.title}\n内容: ${item.content || item.summary || '无内容'}`;
       
-      // 7. 使用优化后的程序处理内容
-      const processedContent = await processor.processNewsWithOptimizedProgram(originalContent);
+      const processedContent = await processor.processNewsWithPromptProfile(originalContent);
 
       // 8. 转换为NewsData格式
       return {
         title: processedContent.title,
         message: processedContent.body,
-        signature: `AI训练·${processedContent.footer}`,
-        source: 'Solidot AX Optimized',
+        signature: `AI编辑·${processedContent.profileVersion}`,
+        source: 'Solidot Prompt Profile',
         publishTime: item.pubDate || new Date().toISOString(),
         category: '科技',
         link: item.link || undefined
-        // AX优化版支持完整功能，未来可扩展highlights
+        // 兼容旧数据源键；实际处理由版本化提示配置完成。
       };
 
     } catch (error) {
-      console.error('❌ AX优化处理失败:', error);
-      throw new Error(`AX优化处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      console.error('❌ 提示配置处理失败:', error);
+      throw new Error(`提示配置处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
 

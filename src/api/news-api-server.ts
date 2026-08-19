@@ -34,6 +34,7 @@ import { renderAndPushLocalEinkByTarget } from './target-aware-eink.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 import { getDeviceFrame } from './device-frame-cache.js';
 import { isBarkAlertsConfigured } from './device-health-alerts.js';
+import { decodeReviewCursor, listReviewSubjects, type ReviewStatus } from './review-store.js';
 
 // 时间格式化工具函数
 function formatToChinaTime(input: Date | string): string {
@@ -948,125 +949,75 @@ app.get('/api/scheduler/push-history', async (c) => {
   try {
     await postgres.initialize();
     const client = await postgres.getClient();
+    try {
+      const parsedLimit = parseInt(c.req.query('limit') || '50', 10);
+      const parsedOffset = parseInt(c.req.query('offset') || '0', 10);
+      const limit = Math.min(200, Math.max(1, Number.isNaN(parsedLimit) ? 50 : parsedLimit));
+      const offset = Math.max(0, Number.isNaN(parsedOffset) ? 0 : parsedOffset);
+      const cursor = c.req.query('cursor');
+      if (cursor && !decodeReviewCursor(cursor)) {
+        return c.json({ success: false, error: '无效的分页游标' }, 400);
+      }
+      const requestedStatus = c.req.query('status');
+      const status = requestedStatus === 'pending' || requestedStatus === 'completed'
+        ? requestedStatus as ReviewStatus
+        : undefined;
+      const includeContent = c.req.query('includeContent') === 'true';
+      const includeTotal = c.req.query('includeTotal') === 'true' || !cursor;
 
-    const limit = Number.isNaN(parseInt(c.req.query('limit') || '50', 10)) ? 50 : parseInt(c.req.query('limit') || '50', 10);
-    const offset = Number.isNaN(parseInt(c.req.query('offset') || '0', 10)) ? 0 : parseInt(c.req.query('offset') || '0', 10);
-    const search = c.req.query('search') || '';
-
-    const params: any[] = [];
-    let paramCount = 0;
-
-    let searchCondition = '';
-    if (search) {
-      paramCount++;
-      searchCondition = ` AND (
-        raw_content->>'title' ILIKE $${paramCount}
-        OR processed_content->>'title' ILIKE $${paramCount}
-        OR processed_content->>'message' ILIKE $${paramCount}
-      )`;
-      params.push(`%${search}%`);
-    }
-
-    const limitParam = paramCount + 1;
-    const offsetParam = paramCount + 2;
-
-    const query = `
-      WITH latest_ids AS MATERIALIZED (
-        SELECT DISTINCT ON (fingerprint) id
-        FROM news_push_log
-        WHERE fingerprint IS NOT NULL
-        ${searchCondition}
-        ORDER BY fingerprint, pushed_at DESC
-      ), deduped AS (
-        SELECT DISTINCT ON (fingerprint)
-          log.id,
-          log.raw_content,
-          log.processed_content,
-          log.image_path,
-          log.pushed_at,
-          log.pushed_at AT TIME ZONE 'UTC' AS pushed_at_utc,
-          log.job_id,
-          log.annotation_status
-        FROM news_push_log AS log
-        INNER JOIN latest_ids ON latest_ids.id = log.id
-        ORDER BY fingerprint, pushed_at DESC
-      ), without_fingerprint AS (
-        SELECT
-          id,
-          raw_content,
-          processed_content,
-          image_path,
-          pushed_at,
-          pushed_at AT TIME ZONE 'UTC' AS pushed_at_utc,
-          job_id,
-          annotation_status
-        FROM news_push_log
-        WHERE fingerprint IS NULL
-        ${searchCondition}
-      ), combined AS (
-        SELECT * FROM deduped
-        UNION ALL
-        SELECT * FROM without_fingerprint
-      )
-      SELECT * FROM combined
-      ORDER BY pushed_at DESC
-      LIMIT $${limitParam} OFFSET $${offsetParam}
-    `;
-    const queryParams = [...params, limit, offset];
-
-    const result = await client.query(query, queryParams);
-
-    // 获取总数（去重后）
-    const countQuery = `
-      SELECT COUNT(*) FROM (
-        SELECT fingerprint AS k
-        FROM news_push_log
-        WHERE fingerprint IS NOT NULL
-        ${searchCondition}
-        GROUP BY fingerprint
-        UNION ALL
-        SELECT NULL AS k
-        FROM news_push_log
-        WHERE fingerprint IS NULL
-        ${searchCondition}
-      ) t
-    `;
-    const countResult = await client.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-
-    client.release();
-
-    const records = result.rows.map(row => {
-      const pushedAtUtcDate = row.pushed_at_utc ? new Date(row.pushed_at_utc) : null;
-      const pushedAtLocal = pushedAtUtcDate ? formatToChinaTime(pushedAtUtcDate) : null;
-      return {
-        id: row.id,
-        title: row.processed_content?.title || row.raw_content?.title || '未知标题',
-        originalTitle: row.raw_content?.title,
-        summary: row.processed_content?.message || row.raw_content?.description,
-        imagePath: row.image_path,
-        publishTime: row.raw_content?.publishTime,
-        pushedAt: pushedAtLocal,
-        pushedAtUtc: pushedAtUtcDate ? pushedAtUtcDate.toISOString() : null,
-        pushedAtEpoch: pushedAtUtcDate ? pushedAtUtcDate.getTime() : null,
-        category: row.raw_content?.category || row.processed_content?.category || 'unknown',
-        dataSource: row.raw_content?.source || row.processed_content?.source || row.job_id || 'unknown',
-        annotationStatus: row.annotation_status || 'pending',
-        rawContent: row.raw_content,
-        processedContent: row.processed_content,
-      };
-    });
-
-    return c.json({
-      success: true,
-      data: records,
-      pagination: {
-        total,
+      const result = await listReviewSubjects(client, {
         limit,
         offset,
-        hasMore: offset + limit < total
-      }
-    });
+        cursor,
+        search: c.req.query('search'),
+        category: c.req.query('category'),
+        status,
+        includeContent,
+        includeTotal,
+      });
+
+      const records = result.rows.map((row) => {
+        const pushedAtUtcDate = row.pushed_at_utc ? new Date(row.pushed_at_utc) : null;
+        const pushedAtLocal = pushedAtUtcDate ? formatToChinaTime(pushedAtUtcDate) : null;
+        return {
+          id: row.id,
+          fingerprint: row.fingerprint,
+          title: row.title || '未知标题',
+          originalTitle: row.original_title || row.title,
+          summary: includeContent
+            ? row.processed_content?.message || row.raw_content?.description
+            : undefined,
+          imagePath: row.image_path,
+          publishTime: includeContent ? row.raw_content?.publishTime : undefined,
+          pushedAt: pushedAtLocal,
+          pushedAtUtc: pushedAtUtcDate ? pushedAtUtcDate.toISOString() : null,
+          pushedAtEpoch: pushedAtUtcDate ? pushedAtUtcDate.getTime() : null,
+          category: row.category || 'unknown',
+          dataSource: row.source || row.job_id || 'unknown',
+          annotationStatus: row.annotation_status,
+          annotationId: row.annotation_id,
+          overallScore: row.overall_score,
+          ...(includeContent ? {
+            rawContent: row.raw_content,
+            processedContent: row.processed_content,
+          } : {}),
+        };
+      });
+
+      return c.json({
+        success: true,
+        data: records,
+        pagination: {
+          ...(result.total === undefined ? {} : { total: result.total }),
+          limit,
+          offset,
+          hasMore: result.hasMore,
+          nextCursor: result.nextCursor,
+        },
+      });
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error('获取推送历史失败:', error);
     return c.json({

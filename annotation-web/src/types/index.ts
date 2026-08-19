@@ -14,7 +14,7 @@ export interface NewsRawData {
   created_at: string;
   updated_at: string;
   raw_content?: any; // 原始RSS数据
-  processed_content?: any; // AX优化后的数据
+  processed_content?: any; // 处理后的内容（详情接口按需返回）
 }
 
 // 质量维度
@@ -48,7 +48,7 @@ export interface QualityAnnotation {
   created_at?: string;
   updated_at?: string;
 
-  // 新增：优化后的内容（用于训练）
+  // 人工改写建议（可用于离线评估）
   optimized_title?: string;      // 优化后的标题
   optimized_summary?: string;    // 优化后的摘要
   optimized_content?: string;    // 优化后的正文（可选）
@@ -62,10 +62,11 @@ export interface NewsWithAnnotation {
 
 // 分页信息
 export interface Pagination {
-  total: number;
+  total?: number;
   limit: number;
   offset: number;
   hasMore: boolean;
+  nextCursor?: string | null;
 }
 
 // API响应
@@ -119,7 +120,7 @@ export interface ImportRSSRequest {
   startIndex?: number;
 }
 
-// 训练样本导出
+// 兼容旧类型名的评审样本导出结构
 export interface TrainingSample {
   id: number;
   input: {
@@ -136,7 +137,7 @@ export interface TrainingSample {
     dimensions: QualityDimensions;
     tags: string[];
 
-    // 新增：优化后的内容（AX训练目标）
+    // 人工改写建议
     optimizedTitle?: string;     // 优化后的标题
     optimizedSummary?: string;   // 优化后的摘要
     optimizedContent?: string;   // 优化后的正文

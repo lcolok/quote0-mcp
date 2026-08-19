@@ -122,8 +122,8 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
     let signature = '';
     const processorName = processedData.processingMetadata?.processor || 'unknown';
     
-    if (processorName.includes('AX')) {
-      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+    if (processorName.includes('提示配置') || processorName.includes('AX')) {
+      signature = `AI编辑·${processedData.processingMetadata?.model || 'LLM'}`;
     } else if (processorName.includes('LLM')) {
       signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
     } else {
@@ -368,8 +368,8 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
     let signature = '';
     const processorName = processedData.processingMetadata?.processor || 'unknown';
     
-    if (processorName.includes('AX')) {
-      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+    if (processorName.includes('提示配置') || processorName.includes('AX')) {
+      signature = `AI编辑·${processedData.processingMetadata?.model || 'LLM'}`;
     } else if (processorName.includes('LLM')) {
       signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
     } else {
@@ -545,8 +545,8 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
 
     let signature = '';
     const processorName = processedData.processingMetadata?.processor || 'unknown';
-    if (processorName.includes('AX')) {
-      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+    if (processorName.includes('提示配置') || processorName.includes('AX')) {
+      signature = `AI编辑·${processedData.processingMetadata?.model || 'LLM'}`;
     } else if (processorName.includes('LLM')) {
       signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
     } else {

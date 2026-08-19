@@ -37,7 +37,7 @@ function ExportPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `training-samples-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `review-samples-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -62,9 +62,9 @@ function ExportPage() {
       {/* 左侧：控制面板 */}
       <div className="w-1/3 space-y-6 overflow-y-auto pr-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">导出训练样本</h2>
+          <h2 className="text-2xl font-bold text-gray-900">导出评审样本</h2>
           <p className="text-gray-600 mt-1">
-            导出标注数据为AX框架训练样本格式
+            导出可追溯样本，用于离线评估或人工检查
           </p>
         </div>
 
@@ -157,8 +157,9 @@ function ExportPage() {
           <h3 className="text-sm font-semibold text-blue-900 mb-2">导出格式说明</h3>
           <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
             <li>✨ <strong>三层数据结构</strong>: original (原始) → processed (LLM) → optimized (人工)</li>
-            <li>📊 <strong>训练优先级</strong>: 人工优化 &gt; LLM处理 &gt; 原始内容</li>
-            <li>🎯 <strong>输入输出分离</strong>: 输入使用original，输出优先使用optimized</li>
+            <li>📊 <strong>证据层级</strong>: 人工改写、LLM处理和原始内容分别保留</li>
+            <li>🎯 <strong>评估用途</strong>: 输入使用 original，人工改写可作为参考答案</li>
+            <li>🧪 导出样本不会自动成为生产提示示例，需先划分独立留出集</li>
             <li>💾 建议定期备份导出的样本集</li>
           </ul>
         </div>

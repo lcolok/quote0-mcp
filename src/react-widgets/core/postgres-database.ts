@@ -517,6 +517,49 @@ export class PostgresDatabase {
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_device_health_alerts_one_pending_target
          ON device_health_alerts(device_id, to_health)
          WHERE state IN ('pending','leased','retry_wait')`,
+      // v1.22.0: 人工评审从 delivery row 迁移到稳定 fingerprint 主体。
+      `ALTER TABLE quality_annotations ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(64)`,
+      `ALTER TABLE quality_annotations ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`,
+      `UPDATE quality_annotations AS qa
+         SET fingerprint = npl.fingerprint
+        FROM news_push_log AS npl
+       WHERE qa.news_id = npl.id
+         AND qa.fingerprint IS NULL`,
+      `WITH versioned_review_decisions AS (
+         SELECT id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY fingerprint
+                  ORDER BY created_at, id
+                ) AS decision_version
+           FROM quality_annotations
+          WHERE fingerprint IS NOT NULL
+       )
+       UPDATE quality_annotations AS qa
+          SET version = versioned.decision_version
+         FROM versioned_review_decisions AS versioned
+        WHERE qa.id = versioned.id
+          AND qa.version IS DISTINCT FROM versioned.decision_version`,
+      `WITH ranked_review_decisions AS (
+         SELECT id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY fingerprint
+                  ORDER BY created_at DESC, id DESC
+                ) AS row_number
+           FROM quality_annotations
+          WHERE fingerprint IS NOT NULL AND is_latest = true
+       )
+       UPDATE quality_annotations AS qa
+          SET is_latest = false, updated_at = CURRENT_TIMESTAMP
+         FROM ranked_review_decisions AS ranked
+        WHERE qa.id = ranked.id AND ranked.row_number > 1`,
+      `CREATE INDEX IF NOT EXISTS idx_push_stats_review_order
+         ON news_push_stats(last_pushed_at DESC, fingerprint DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_qa_fingerprint_latest
+         ON quality_annotations(fingerprint, created_at DESC, id DESC)
+         WHERE is_latest = true`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_one_latest_per_fingerprint
+         ON quality_annotations(fingerprint)
+         WHERE is_latest = true AND fingerprint IS NOT NULL`,
     ];
   }
 
@@ -792,10 +835,11 @@ export class PostgresDatabase {
           metadata JSONB
       );
 
-      -- 人工标注表（AX 训练 ground truth 来源；annotation-api.ts 使用）
+      -- 人工内容评审决策。news_id 保留为证据快照，fingerprint 是稳定评审主体。
       CREATE TABLE IF NOT EXISTS quality_annotations (
           id SERIAL PRIMARY KEY,
           news_id INTEGER NOT NULL REFERENCES news_push_log(id) ON DELETE CASCADE,
+          fingerprint VARCHAR(64),
 
           -- 核心评分
           overall_score INTEGER NOT NULL CHECK (overall_score BETWEEN 0 AND 100),
@@ -816,12 +860,13 @@ export class PostgresDatabase {
           difficulty VARCHAR(10) CHECK (difficulty IS NULL OR difficulty IN ('easy', 'medium', 'hard')),
           confidence INTEGER,
 
-          -- AX 训练 ground truth
+          -- 人工改写建议（可用于独立离线评估，不能直接当作训练效果）
           optimized_title TEXT,
           optimized_summary TEXT,
           optimized_content TEXT,
 
           -- 版本管理
+          version INTEGER NOT NULL DEFAULT 1,
           is_latest BOOLEAN NOT NULL DEFAULT true,
 
           -- 时间戳
@@ -857,7 +902,6 @@ export class PostgresDatabase {
       ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS strategy_snapshot JSONB;
       ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS raw_content JSONB;
       ALTER TABLE news_push_log ADD COLUMN IF NOT EXISTS processed_content JSONB;
-
       -- 创建索引
       CREATE INDEX IF NOT EXISTS idx_news_cache_key ON news_cache(cache_key);
       CREATE INDEX IF NOT EXISTS idx_news_cache_source ON news_cache(source, category, index_num);
@@ -871,6 +915,7 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_image_cache_expires ON image_cache(expires_at);
       CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_enabled ON news_scheduler_jobs(enabled);
       CREATE INDEX IF NOT EXISTS idx_push_stats_last ON news_push_stats(last_pushed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_push_stats_review_order ON news_push_stats(last_pushed_at DESC, fingerprint DESC);
       CREATE INDEX IF NOT EXISTS idx_push_stats_count ON news_push_stats(push_count, last_pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_log_job ON news_push_log(job_id, pushed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_push_log_fingerprint ON news_push_log(fingerprint, pushed_at DESC);
@@ -880,6 +925,8 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_qa_score_latest ON quality_annotations(overall_score) WHERE is_latest = true;
       CREATE INDEX IF NOT EXISTS idx_qa_category_latest ON quality_annotations(category) WHERE is_latest = true;
       CREATE INDEX IF NOT EXISTS idx_qa_annotator ON quality_annotations(annotator, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_qa_fingerprint_latest ON quality_annotations(fingerprint, created_at DESC, id DESC) WHERE is_latest = true;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_one_latest_per_fingerprint ON quality_annotations(fingerprint) WHERE is_latest = true AND fingerprint IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_llm_cache_expires ON llm_call_cache(expires_at);
       CREATE INDEX IF NOT EXISTS idx_llm_cache_model_lasthit ON llm_call_cache(model, last_hit_at DESC);
       CREATE INDEX IF NOT EXISTS idx_scheduler_run_history_status ON scheduler_run_history(push_status);

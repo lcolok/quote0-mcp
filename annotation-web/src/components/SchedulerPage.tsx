@@ -15,7 +15,7 @@ interface PushRecord {
   id: number;
   title: string;
   originalTitle: string;
-  summary: string;
+  summary?: string;
   imagePath: string | null;
   publishTime: string;
   pushedAt: string;
@@ -23,8 +23,8 @@ interface PushRecord {
   pushedAtEpoch?: number | null;
   category: string;
   dataSource: string;
-  rawContent: any;
-  processedContent: any;
+  rawContent?: any;
+  processedContent?: any;
 }
 
 function SchedulerPage() {
@@ -43,11 +43,12 @@ function SchedulerPage() {
         limit,
         offset: page * limit,
       }),
-    refetchInterval: 10000, // 每10秒刷新
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
   });
 
-  // 查询选中记录的详情（保留用于未来扩展）
-  useQuery({
+  // 列表只取轻量投影，选中后再按需加载正文 JSON。
+  const { data: selectedDetailData } = useQuery({
     queryKey: ['push-detail', selectedId],
     queryFn: () => apiClient.getPushDetail(selectedId!),
     enabled: !!selectedId,
@@ -67,7 +68,16 @@ function SchedulerPage() {
 
   const records: PushRecord[] = historyData?.data || [];
   const pagination = historyData?.pagination;
-  const selectedRecord = records.find(r => r.id === selectedId);
+  const totalRecords = pagination?.total ?? records.length;
+  const selectedSummary = records.find(r => r.id === selectedId);
+  const selectedRecord = selectedSummary
+    ? {
+        ...selectedSummary,
+        rawContent: selectedDetailData?.data?.raw_content,
+        processedContent: selectedDetailData?.data?.processed_content,
+        imagePath: selectedDetailData?.data?.image_path || selectedSummary.imagePath,
+      }
+    : undefined;
 
   const parseCstString = (value: string): Date => {
     const normalized = value
@@ -118,7 +128,7 @@ function SchedulerPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="搜索标题或摘要..."
+              placeholder="搜索标题、来源或分类..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -129,7 +139,7 @@ function SchedulerPage() {
           </div>
           {pagination && (
             <div className="mt-2 text-xs text-gray-600">
-              共 {pagination.total} 条推送记录
+              共 {totalRecords} 条内容记录
             </div>
           )}
         </div>
@@ -195,9 +205,9 @@ function SchedulerPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-gray-600 line-clamp-2 mb-2">
-                          {record.summary}
-                        </p>
+                        {record.summary && (
+                          <p className="text-xs text-gray-600 line-clamp-2 mb-2">{record.summary}</p>
+                        )}
                         <div className="flex items-center gap-3 text-xs text-gray-500">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
@@ -217,7 +227,7 @@ function SchedulerPage() {
         </div>
 
         {/* 分页 */}
-        {pagination && pagination.total > limit && (
+        {pagination && totalRecords > limit && (
           <div className="p-4 border-t border-gray-200 flex items-center justify-between flex-shrink-0">
             <button
               onClick={() => setPage(p => Math.max(0, p - 1))}
@@ -227,7 +237,7 @@ function SchedulerPage() {
               上一页
             </button>
             <span className="text-sm text-gray-600">
-              第 {page + 1} / {Math.ceil(pagination.total / limit)} 页
+              第 {page + 1} / {Math.ceil(totalRecords / limit)} 页
             </span>
             <button
               onClick={() => setPage(p => p + 1)}
@@ -283,7 +293,7 @@ function SchedulerPage() {
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
                     <Sparkles className="w-4 h-4 text-primary-600" />
-                    优化后的内容
+                    处理后的内容
                   </div>
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
                     <div>
