@@ -23,7 +23,7 @@ const NAV_ITEMS = [
   { to: '/dashboard', icon: LayoutDashboard, label: '仪表板', hint: '运行总览' },
   { to: '/annotate', icon: FileEdit, label: '开始标注', hint: '内容评审' },
   { to: '/export', icon: Download, label: '导出样本', hint: '反馈样本' },
-  { to: '/training', icon: Zap, label: 'AX训练', hint: '历史实验' },
+  { to: '/evaluation', icon: Zap, label: '评估与配置', hint: '质量门禁' },
   { to: '/scheduler', icon: Calendar, label: '调度器', hint: '自动任务' },
   { to: '/jobs', icon: Settings2, label: '任务管理', hint: '执行状态' },
   { to: '/sources', icon: Settings, label: 'RSS源管理', hint: '信源治理' },

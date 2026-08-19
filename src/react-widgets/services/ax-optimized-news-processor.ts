@@ -3,8 +3,8 @@ import { getActiveLLMConfig, getFallbackLLMConfig } from '../core/llm-config.js'
 import { getPostgresDatabase } from '../core/postgres-database.js';
 
 /**
- * 启用AX完整优化功能的新闻处理器
- * 包含自动学习、few-shot优化、中间产物生成
+ * @deprecated 早期 AX 研究原型；未注册到生产处理链，其指标不得视为已验证质量。
+ * 生产路径使用 PromptProfileNewsProcessor，每篇文章只调用一次模型。
  */
 export class AxOptimizedNewsProcessor {
   private llm: any;

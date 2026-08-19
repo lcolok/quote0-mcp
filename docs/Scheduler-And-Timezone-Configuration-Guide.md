@@ -1,5 +1,7 @@
 # 智能调度系统和时区配置指南
 
+> **处理器名称更新。** 新任务应使用 `prompt-profile`；文中的 `ax-optimized` 仅适用于识别旧配置，两者当前映射到同一生产处理模块。
+
 ## 目录
 - [问题场景](#问题场景)
 - [解决方案概览](#解决方案概览)
@@ -137,7 +139,7 @@ curl -X POST http://localhost:3001/api/news/scheduler/jobs \
     "category": "technology",
     "dataSource": "rss",
     "rssSource": "solidot",
-    "processor": "ax-optimized",
+    "processor": "prompt-profile",
     "renderer": "device",
     "intervalMinutes": 60,
     "initialDelayMinutes": 5,

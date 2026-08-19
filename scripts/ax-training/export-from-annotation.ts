@@ -1,12 +1,14 @@
 #!/usr/bin/env tsx
 
 /**
- * 从标注系统导出训练数据并创建快照
+ * 从评审系统导出可追溯样本并创建数据快照
  */
 
 import { SnapshotManager, type TrainingSample } from './snapshot-manager.js';
 
 interface AnnotationSample {
+  news_id: number;
+  fingerprint: string;
   // 原始内容（RSS/API获取的）
   original_title: string;
   original_description: string;
@@ -84,8 +86,8 @@ async function convertToTrainingSamples(
     trainingSamples.push({
       sampleId: i + 1,
       title: inputTitle,
-      newsId: 0,
-      fingerprint: '',
+      newsId: sample.news_id,
+      fingerprint: sample.fingerprint,
       newsContent: inputContent,
 
       // ✨ 输出：优先使用人工优化内容
@@ -140,7 +142,7 @@ async function main() {
   }
 
   try {
-    console.log('🚀 开始导出标注数据并创建训练快照');
+    console.log('🚀 开始导出评审数据并创建证据快照');
     console.log('=====================================');
     console.log(`📌 版本: ${params.version}`);
     console.log(`📝 描述: ${params.description || '(无)'}`);
@@ -157,18 +159,17 @@ async function main() {
       process.exit(0);
     }
 
-    // 2. 转换为训练样本格式
-    console.log('🔄 转换为训练样本格式...');
+    // 2. 转换为可追溯评估样本格式
+    console.log('🔄 转换为可追溯评估样本格式...');
     const trainingSamples = await convertToTrainingSamples(annotationSamples);
 
     // 3. 创建快照
     const manager = new SnapshotManager();
     await manager.initialize();
 
-    const snapshotPath = await manager.createSnapshot(
+    const snapshotVersion = await manager.createSnapshot(
       trainingSamples,
-      params.version,
-      params.description || `从标注系统导出 ${trainingSamples.length} 条样本`,
+      params.description || `${params.version}：从评审系统导出 ${trainingSamples.length} 条样本`,
       params.createdBy,
       params.tags
     );
@@ -177,13 +178,13 @@ async function main() {
     console.log('✅ 快照创建成功！');
     console.log('');
     console.log('📊 快照统计:');
-    console.log(`   路径: ${snapshotPath}`);
+    console.log(`   快照版本: ${snapshotVersion}`);
     console.log(`   样本数: ${trainingSamples.length}`);
     console.log(`   平均分: ${(trainingSamples.reduce((sum, s) => sum + s.score, 0) / trainingSamples.length).toFixed(1)}`);
     console.log('');
     console.log('🔜 下一步操作:');
-    console.log(`   1. 激活版本: bun run scripts/ax-training/activate-version.ts --version=${params.version}`);
-    console.log(`   2. 训练模型: bun run scripts/ax-training/train-model.ts --version=${params.version}`);
+    console.log(`   1. 创建提示配置候选: bun run scripts/ax-training/train-model.ts --version=${snapshotVersion}`);
+    console.log('   2. 在独立留出集上与基线做盲评；通过门禁后再显式发布');
     console.log('');
 
   } catch (error) {

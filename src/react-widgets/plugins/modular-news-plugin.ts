@@ -352,9 +352,9 @@ ${this.getExampleCommands().map(cmd => `  ${cmd}`).join('\\n')}
       'npm run widget:modular-news',
       'npm run widget:modular-news technology mock passthrough 0 json',
       'npm run widget:modular-news technology rss passthrough 0 device',
-      'npm run widget:modular-news technology rss ax-optimized 7 device sspai',
+      'npm run widget:modular-news technology rss prompt-profile 7 device sspai',
       'npm run widget:modular-news finance rss basic-llm 1 device 36kr',
-      'npm run widget:modular-news technology mock ax-optimized 0 device solidot --force'
+      'npm run widget:modular-news technology mock prompt-profile 0 device solidot --force'
     ];
   }
 

@@ -174,7 +174,7 @@ const REPLAY_WINDOW_HOURS = Number(process.env.INVENTORY_REPLAY_WINDOW_HOURS) ||
 
 // 依赖外部 LLM 的 processor。这类 processor 失败（402 欠费/超时/连接错）属于
 // 「外部供给中断」而非「内容本身不可用」，producer 应降级续产而不是停产。
-const PRODUCER_LLM_PROCESSORS = new Set(['ax-optimized', 'basic-llm']);
+const PRODUCER_LLM_PROCESSORS = new Set(['prompt-profile', 'ax-optimized', 'basic-llm']);
 // 降级目标：不调用任何 LLM，直接透传 RSS 原文。
 const PRODUCER_FALLBACK_PROCESSOR = 'passthrough';
 
@@ -302,7 +302,7 @@ export class NewsScheduler {
         'memo',
         'memo',
         'memo-rss-placeholder',
-        'ax-optimized',
+        'prompt-profile',
         'device',
         30 * 60 * 1000,
         0,
@@ -333,7 +333,7 @@ export class NewsScheduler {
         category: 'technology',
         dataSource: 'rss',
         rssSource: 'solidot',
-        processor: 'ax-optimized',
+        processor: 'prompt-profile',
         renderer: 'device',
         intervalMs: 60 * 1000,
         initialDelayMs: 0,
@@ -352,7 +352,7 @@ export class NewsScheduler {
         dataSource: 'rss',
         rssSource: RECOMMENDED_RSS_SOURCE_IDS[0] || 'solidot',
         rssSources: RECOMMENDED_RSS_SOURCE_IDS,
-        processor: 'ax-optimized',
+        processor: 'prompt-profile',
         renderer: 'device',
         intervalMs: 10 * 60 * 1000,
         initialDelayMs: 0,
@@ -2535,7 +2535,7 @@ function normalizeInputConfig(config: NewsSchedulerJobConfig): NewsSchedulerJobR
     dataSource: config.dataSource || 'rss',
     rssSource: config.rssSource, // 单源模式（可选，向后兼容）
     rssSources: config.rssSources, // 多源轮换模式（可选）| Multiple sources rotation (optional)
-    processor: config.processor || 'ax-optimized',
+    processor: config.processor || 'prompt-profile',
     renderer: config.renderer || 'device',
     intervalMs,
     initialDelayMs,

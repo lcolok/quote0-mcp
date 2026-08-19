@@ -36,7 +36,7 @@ BEGIN
             'technology',
             'rss',
             'solidot',
-            'ax-optimized',
+            'prompt-profile',
             'device',
             60000,  -- 1分钟
             0,
@@ -62,7 +62,7 @@ BEGIN
             'news',
             'rss',
             'solidot',
-            'ax-optimized',
+            'prompt-profile',
             'device',
             60000,  -- 1分钟
             0,

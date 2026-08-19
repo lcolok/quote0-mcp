@@ -1,5 +1,7 @@
 # AX模型热重载系统使用指南
 
+> **历史名称提示。** 当前热重载的是版本化提示配置，不是在生产中自动训练的 AX optimizer；`ax-optimized` 仅为 `prompt-profile` 兼容别名。
+
 ## 🎯 概述
 
 AX模型热重载系统实现了**零停机模型更新**，当你在标注系统中训练并激活新模型后，API服务会自动检测文件变化并重新加载模型，无需手动重启服务。
@@ -120,7 +122,7 @@ curl -X POST http://localhost:3001/api/news/process \
   -d '{
     "category": "technology",
     "dataSource": "rss",
-    "processor": "ax-optimized",
+    "processor": "prompt-profile",
     "index": 0,
     "renderer": "json"
   }'

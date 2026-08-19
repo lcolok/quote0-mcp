@@ -1,14 +1,15 @@
 #!/usr/bin/env tsx
 
 /**
- * AX框架完整训练演示
- * 展示自动优化、few-shot学习和中间产物生成
+ * @deprecated 历史 AX 研究演示，不是生产训练或发布流程。
+ * 当前生产路径使用经离线评估、手动激活的版本化提示配置。
  */
 
 import { AxOptimizedNewsProcessor } from '../src/react-widgets/services/ax-optimized-news-processor.js';
 import { trainingData } from './ax-training-data.js';
 
 async function runAxTrainingDemo() {
+  console.warn('⚠️ 历史研究演示：输出不会自动激活到生产。');
   console.log('🚀 AX框架完整训练演示');
   console.log('====================');
   

@@ -137,7 +137,7 @@ export interface TrainingSample {
     dimensions: QualityDimensions;
     tags: string[];
 
-    // 新增：优化后的内容（AX训练目标）
+    // 人工参考改写：用于候选提示配置的离线评估，不会自动训练模型
     optimizedTitle?: string;     // 优化后的标题
     optimizedSummary?: string;   // 优化后的摘要
     optimizedContent?: string;   // 优化后的正文

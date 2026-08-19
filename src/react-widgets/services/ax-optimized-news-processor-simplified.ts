@@ -1,51 +1,113 @@
 /**
- * 简化版AX优化新闻处理器
- * 专注于实际功能而非复杂的类型系统
+ * Versioned prompt-profile processor.
+ *
+ * The historical filename and class alias are intentionally retained because
+ * persisted scheduler jobs still refer to `ax-optimized`. The runtime does not
+ * invoke AX optimizers: it loads a reviewed prompt profile and makes one
+ * OpenAI-compatible request per article.
  */
 
 import { Pool } from 'pg';
 import { LLMCallCache } from '../core/llm-call-cache.js';
 
-export interface OptimizedProgram {
+export interface PromptExample {
+  input: { newsContent: string };
+  output: { optimizedTitle?: string; summary?: string };
+  /** Legacy artifacts may contain this unverified field; runtime ignores it. */
+  score?: number;
+}
+
+export interface PromptProgram {
   instruction: string;
-  demos: Array<{
-    input: { newsContent: string };
-    output: { optimizedTitle?: string; summary?: string };
-    score: number;
-  }>;
+  demos: PromptExample[];
   modelConfig: {
     temperature: number;
-    topP: number;
-    maxTokens: number;
+    topP?: number;
+    maxTokens?: number;
   };
-  stats: {
-    trained: boolean;
-    version: string;
+  stats?: {
+    /** Legacy metadata only. It is never exposed as measured quality. */
+    trained?: boolean;
+    version?: string;
     accuracy?: number;
     compliance?: number;
+    exampleCount?: number;
+    validated?: boolean;
   };
 }
 
-export interface OptimizationArtifacts {
-  timestamp: string;
+export interface PromptProfileArtifact {
+  timestamp?: string;
   version: string;
   programs: {
-    titleProgram: OptimizedProgram;
-    summaryProgram: OptimizedProgram;
+    titleProgram: PromptProgram;
+    summaryProgram: PromptProgram;
   };
-  metadata: {
-    trainedAt: string;
-    framework: string;
-    optimizationType: string;
+  metadata?: {
+    createdAt?: string;
+    trainedAt?: string;
+    framework?: string;
+    optimizationType?: string;
+    profileType?: string;
+    source?: string;
     trainingDuration?: number;
     totalExamplesTested?: number;
     finalPerformance?: number;
   };
 }
 
-export class AxOptimizedNewsProcessorSimplified {
-  private optimizedProgram: OptimizationArtifacts['programs'] | null = null;
-  private currentVersion: string = 'unknown';
+// Compatibility type exports used by older scripts.
+export type OptimizedProgram = PromptProgram;
+export type OptimizationArtifacts = PromptProfileArtifact;
+
+export interface PromptProfileResult {
+  title: string;
+  body: string;
+  footer: string;
+  optimizationUsed: boolean;
+  profileVersion: string;
+  /** Mechanical length compliance, not a semantic quality score. */
+  constraintCompliance: number;
+}
+
+const DEFAULT_TITLE_LIMIT = 20;
+const DEFAULT_SUMMARY_LIMIT = 200;
+
+function characterLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function extractJsonObject(value: string): Record<string, unknown> | null {
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const source = fenced || value.slice(value.indexOf('{'), value.lastIndexOf('}') + 1);
+  if (!source || !source.includes('{')) return null;
+
+  try {
+    return JSON.parse(source) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a strict JSON response while accepting a labelled-line fallback. */
+export function parsePromptProfileResponse(value: string): { title: string; summary: string } {
+  const json = extractJsonObject(value);
+  const jsonTitle = json?.title;
+  const jsonSummary = json?.summary;
+  if (typeof jsonTitle === 'string' && jsonTitle.trim() && typeof jsonSummary === 'string' && jsonSummary.trim()) {
+    return { title: jsonTitle.trim(), summary: jsonSummary.trim() };
+  }
+
+  const title = value.match(/(?:^|\n)\s*(?:标题|title)\s*[:：]\s*(.+)/i)?.[1]?.trim();
+  const summary = value.match(/(?:^|\n)\s*(?:摘要|summary)\s*[:：]\s*([\s\S]+)/i)?.[1]?.trim();
+  if (title && summary) return { title, summary };
+
+  throw new Error('LLM响应缺少可解析的 title/summary JSON 字段');
+}
+
+export class PromptProfileNewsProcessor {
+  private promptProfile: PromptProfileArtifact['programs'] | null = null;
+  private currentVersion = 'unknown';
   private llmCache: LLMCallCache | null;
 
   constructor(private options: {
@@ -57,256 +119,188 @@ export class AxOptimizedNewsProcessorSimplified {
     this.llmCache = options.pool ? new LLMCallCache(options.pool) : null;
   }
 
-  /**
-   * 从文件加载优化产物
-   */
-  async loadOptimizationArtifacts(filename: string): Promise<boolean> {
+  async loadPromptProfile(filename: string): Promise<boolean> {
     const fs = await import('fs/promises');
     const path = `${process.cwd()}/${filename}`;
 
     try {
       const data = await fs.readFile(path, 'utf-8');
-      const artifacts: OptimizationArtifacts = JSON.parse(data);
-
-      this.optimizedProgram = artifacts.programs;
-      this.currentVersion = artifacts.version || 'unknown';
-
-      console.log(`✅ 已加载优化产物: ${filename}`);
-      console.log(`📦 版本: ${this.currentVersion}`);
-      console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);
-      return true;
+      const artifact = JSON.parse(data) as PromptProfileArtifact;
+      return this.loadFromModelData(artifact);
     } catch (error) {
-      console.error(`❌ 加载优化产物失败: ${error}`);
+      console.error(`❌ 加载提示配置失败: ${error instanceof Error ? error.message : error}`);
       return false;
     }
   }
 
-  /**
-   * 从模型数据对象加载（用于热重载）
-   */
-  loadFromModelData(artifacts: OptimizationArtifacts): boolean {
+  /** @deprecated Use loadPromptProfile. */
+  async loadOptimizationArtifacts(filename: string): Promise<boolean> {
+    return this.loadPromptProfile(filename);
+  }
+
+  loadFromModelData(artifact: PromptProfileArtifact): boolean {
     try {
-      this.optimizedProgram = artifacts.programs;
-      this.currentVersion = artifacts.version || 'unknown';
-
-      console.log(`🔥 热重载成功: 版本 ${this.currentVersion}`);
-      console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);
+      if (!artifact?.programs?.titleProgram?.instruction || !artifact?.programs?.summaryProgram?.instruction) {
+        throw new Error('提示配置缺少 titleProgram 或 summaryProgram');
+      }
+      this.promptProfile = artifact.programs;
+      this.currentVersion = artifact.version || 'unknown';
+      const exampleCount = artifact.programs.titleProgram.demos.length + artifact.programs.summaryProgram.demos.length;
+      console.log(`✅ 已加载提示配置 ${this.currentVersion}（${exampleCount} 个示例；未声明质量分）`);
       return true;
     } catch (error) {
-      console.error(`❌ 热重载失败: ${error}`);
+      console.error(`❌ 加载提示配置失败: ${error instanceof Error ? error.message : error}`);
       return false;
     }
   }
 
-  /**
-   * 获取当前加载的模型版本
-   */
   getCurrentVersion(): string {
     return this.currentVersion;
   }
 
-  /**
-   * 使用优化后的程序处理新闻
-   */
-  async processNewsWithOptimizedProgram(newsContent: string) {
-    if (!this.optimizedProgram) {
-      throw new Error('请先加载预训练模型');
-    }
+  async processNewsWithPromptProfile(newsContent: string): Promise<PromptProfileResult> {
+    if (!this.promptProfile) throw new Error('请先加载提示配置');
 
-    console.log('🤖 使用AX优化程序处理新闻...');
-
-    const titleProgram = this.optimizedProgram.titleProgram;
-    const summaryProgram = this.optimizedProgram.summaryProgram;
-
-    // 构建优化的提示词
-    const titlePrompt = this.buildOptimizedPrompt(
-      titleProgram.instruction,
-      titleProgram.demos.slice(0, 3),
-      newsContent,
-      'title'
-    );
-
-    const summaryPrompt = this.buildOptimizedPrompt(
-      summaryProgram.instruction,
-      summaryProgram.demos.slice(0, 2),
-      newsContent,
-      'summary'
+    const titleProgram = this.promptProfile.titleProgram;
+    const summaryProgram = this.promptProfile.summaryProgram;
+    const prompt = this.buildCombinedPrompt(titleProgram, summaryProgram, newsContent);
+    const temperature = Math.min(titleProgram.modelConfig.temperature, summaryProgram.modelConfig.temperature);
+    const maxTokens = Math.max(
+      titleProgram.modelConfig.maxTokens ?? 100,
+      summaryProgram.modelConfig.maxTokens ?? 512,
     );
 
     try {
-      const { OpenAI } = await import('openai');
-      
-      console.log('🔗 连接LLM服务...');
-      console.log(`📡 端点: ${this.options.baseURL}`);
-      console.log(`🤖 模型: ${this.options.model}`);
-      console.log(`🔑 API密钥状态: ${this.options.apiKey ? '已配置' : '未配置'}`);
-      
-      const client = new OpenAI({
-        apiKey: this.options.apiKey,
-        baseURL: this.options.baseURL
-      });
+      const cacheKey = { prompt, model: this.options.model, temperature };
+      const cached = this.llmCache ? await this.llmCache.get(cacheKey) : null;
+      let responseText: string;
 
-      let title: string;
-      const titleCacheKey = { prompt: titlePrompt, model: this.options.model, temperature: titleProgram.modelConfig.temperature };
-      const titleCached = this.llmCache ? await this.llmCache.get(titleCacheKey) : null;
-      if (titleCached) {
-        console.log(`💾 AX标题缓存命中`);
-        title = titleCached.response;
+      if (cached) {
+        console.log('💾 提示配置缓存命中');
+        responseText = cached.response;
       } else {
-        console.log('📝 生成优化标题...');
-        const titleResponse = await client.chat.completions.create({
+        const { OpenAI } = await import('openai');
+        const client = new OpenAI({ apiKey: this.options.apiKey, baseURL: this.options.baseURL });
+        const response = await client.chat.completions.create({
           model: this.options.model,
-          messages: [{ role: 'user', content: titlePrompt }],
-          ...titleProgram.modelConfig
+          messages: [{ role: 'user', content: prompt }],
+          temperature,
+          top_p: Math.min(titleProgram.modelConfig.topP ?? 0.9, summaryProgram.modelConfig.topP ?? 0.9),
+          max_tokens: maxTokens,
         });
-
-        if (!titleResponse.choices || titleResponse.choices.length === 0) {
-          throw new Error('LLM未返回标题优化结果');
-        }
-        title = titleResponse.choices[0]?.message?.content?.trim() || '无标题';
-        if (this.llmCache) {
-          await this.llmCache.set(titleCacheKey, title);
-        }
+        responseText = response.choices[0]?.message?.content?.trim() || '';
+        if (!responseText) throw new Error('LLM未返回内容处理结果');
       }
 
-      let body: string;
-      const summaryCacheKey = { prompt: summaryPrompt, model: this.options.model, temperature: summaryProgram.modelConfig.temperature };
-      const summaryCached = this.llmCache ? await this.llmCache.get(summaryCacheKey) : null;
-      if (summaryCached) {
-        console.log(`💾 AX摘要缓存命中`);
-        body = summaryCached.response;
-      } else {
-        console.log('📝 生成优化摘要...');
-        const summaryResponse = await client.chat.completions.create({
-          model: this.options.model,
-          messages: [{ role: 'user', content: summaryPrompt }],
-          ...summaryProgram.modelConfig
-        });
+      const parsed = parsePromptProfileResponse(responseText);
+      // Only cache structurally valid output; malformed JSON must not poison
+      // every future request for the same article/profile/model tuple.
+      if (!cached && this.llmCache) await this.llmCache.set(cacheKey, responseText);
+      const constraintCompliance = (
+        Number(characterLength(parsed.title) <= DEFAULT_TITLE_LIMIT)
+        + Number(characterLength(parsed.summary) <= DEFAULT_SUMMARY_LIMIT)
+      ) / 2;
 
-        if (!summaryResponse.choices || summaryResponse.choices.length === 0) {
-          throw new Error('LLM未返回摘要优化结果');
-        }
-        body = summaryResponse.choices[0]?.message?.content?.trim() || '无内容';
-        if (this.llmCache) {
-          await this.llmCache.set(summaryCacheKey, body);
-        }
-      }
-
-      console.log(`✅ 优化完成: 标题"${title}" (${title.length}字符), 摘要${body.length}字符`);
-
+      console.log(`✅ 提示配置处理完成: 标题 ${characterLength(parsed.title)} 字，摘要 ${characterLength(parsed.summary)} 字`);
       return {
-        title: title,
-        body: body,
-        footer: 'AX智能优化',
-        optimizationUsed: true
+        title: parsed.title,
+        body: parsed.summary,
+        footer: '提示配置处理',
+        optimizationUsed: true,
+        profileVersion: this.currentVersion,
+        constraintCompliance,
       };
     } catch (error) {
-      console.error('❌ LLM优化处理失败:', error);
-      
-      // 详细错误分类
-      if (error instanceof Error) {
-        const errorMessage = error.message;
-        const errorString = JSON.stringify(error, null, 2); // 包含更多错误信息
-        
-        if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
-          throw new Error(`LLM API认证失败: ${errorMessage} (请检查API密钥是否正确)`);
-        } else if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
-          throw new Error(`LLM服务未找到: ${errorMessage} (请检查baseURL和模型名称)`);
-        } else if (errorMessage.includes('timeout') || errorMessage.includes('ETIMEDOUT')) {
-          throw new Error(`LLM服务超时: ${errorMessage} (请检查网络连接和服务状态)`);
-        } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
-          throw new Error(`LLM API调用频率限制: ${errorMessage} (请稍后重试)`);
-        } else if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('Connection error') || errorMessage.includes('UND_ERR_SOCKET')) {
-          throw new Error(`无法连接LLM服务: ${errorMessage} (请检查baseURL是否正确: ${this.options.baseURL})`);
-        } else if (errorMessage.includes('fetch failed') || errorMessage.includes('other side closed')) {
-          throw new Error(`LLM服务连接失败: ${errorMessage} (请检查网络连接和服务端点: ${this.options.baseURL})`);
-        } else if (errorMessage.includes('Invalid URL')) {
-          throw new Error(`LLM服务端点URL无效: ${errorMessage} (请检查baseURL格式: ${this.options.baseURL})`);
-        } else {
-          throw new Error(`LLM优化处理失败: ${errorMessage} (端点: ${this.options.baseURL})`);
-        }
-      } else {
-        throw new Error('LLM优化处理失败: 未知错误类型');
+      const message = error instanceof Error ? error.message : '未知错误';
+      if (message.includes('401') || message.includes('Unauthorized')) {
+        throw new Error(`LLM API认证失败: ${message} (请检查API密钥是否正确)`);
       }
+      if (message.includes('404') || message.includes('Not Found')) {
+        throw new Error(`LLM服务未找到: ${message} (请检查baseURL和模型名称)`);
+      }
+      if (message.includes('timeout') || message.includes('ETIMEDOUT')) {
+        throw new Error(`LLM服务超时: ${message} (请检查网络连接和服务状态)`);
+      }
+      if (message.includes('rate limit') || message.includes('429')) {
+        throw new Error(`LLM API调用频率限制: ${message} (请稍后重试)`);
+      }
+      if (message.includes('ECONNREFUSED') || message.includes('Connection error') || message.includes('UND_ERR_SOCKET')) {
+        throw new Error(`无法连接LLM服务: ${message} (请检查baseURL: ${this.options.baseURL})`);
+      }
+      throw new Error(`LLM提示配置处理失败: ${message} (端点: ${this.options.baseURL})`);
     }
   }
 
-  /**
-   * 构建优化的few-shot提示词
-   */
-  private buildOptimizedPrompt(
-    instruction: string,
-    demos: OptimizedProgram['demos'],
-    newsContent: string,
-    type: 'title' | 'summary'
-  ): string {
-    let prompt = `${instruction}\n\n`;
-    
-    // 添加few-shot示例
-    if (demos && demos.length > 0) {
-      prompt += '以下是一些优秀的示例：\n\n';
-      
-      demos.forEach((demo, index) => {
-        const input = demo.input.newsContent;
-        const output = type === 'title' ? 
-          demo.output.optimizedTitle : 
-          demo.output.summary;
-          
-        if (output) {
-          prompt += `示例${index + 1}:\n`;
-          prompt += `输入: ${input}\n`;
-          prompt += `输出: ${output}\n\n`;
-        }
-      });
-    }
-    
-    // 添加当前任务
-    prompt += '现在请处理以下新闻内容：\n\n';
-    prompt += `输入: ${newsContent}\n`;
-    prompt += '输出: ';
-    
-    return prompt;
+  /** @deprecated Use processNewsWithPromptProfile. */
+  async processNewsWithOptimizedProgram(newsContent: string): Promise<PromptProfileResult> {
+    return this.processNewsWithPromptProfile(newsContent);
   }
 
-  /**
-   * 基础训练功能（用于快速训练场景）
-   */
+  createProfileFromExamples(trainingData: Array<{
+    newsContent: string;
+    expectedTitle: string;
+    expectedSummary: string;
+  }>): { success: true; titleExamples: number; summaryExamples: number } {
+    const titleDemos = trainingData.slice(0, 5).map((item) => ({
+      input: { newsContent: item.newsContent },
+      output: { optimizedTitle: item.expectedTitle },
+    }));
+    const summaryDemos = trainingData.slice(0, 3).map((item) => ({
+      input: { newsContent: item.newsContent },
+      output: { summary: item.expectedSummary },
+    }));
+
+    this.promptProfile = {
+      titleProgram: {
+        instruction: '将新闻内容改写为准确、简洁的标题，严格控制在20字符以内，不得补充输入中没有的事实',
+        demos: titleDemos,
+        modelConfig: { temperature: 0.3, topP: 0.9, maxTokens: 100 },
+        stats: { trained: false, version: 'profile-v1', exampleCount: titleDemos.length, validated: false },
+      },
+      summaryProgram: {
+        instruction: '将新闻内容提炼为200字符以内的摘要，只保留输入中明确出现的事实',
+        demos: summaryDemos,
+        modelConfig: { temperature: 0.3, topP: 0.9, maxTokens: 512 },
+        stats: { trained: false, version: 'profile-v1', exampleCount: summaryDemos.length, validated: false },
+      },
+    };
+    this.currentVersion = 'profile-v1';
+    return { success: true, titleExamples: titleDemos.length, summaryExamples: summaryDemos.length };
+  }
+
+  /** @deprecated This creates a prompt profile; it does not train a model. */
   async quickTrain(trainingData: Array<{
     newsContent: string;
     expectedTitle: string;
     expectedSummary: string;
   }>) {
-    console.log('🔄 执行快速训练（基于预设规则）...');
-    
-    // 基于训练数据构建优化程序
-    const titleDemos = trainingData.slice(0, 5).map((item, index) => ({
-      input: { newsContent: item.newsContent },
-      output: { optimizedTitle: item.expectedTitle },
-      score: 0.9 + (index * 0.01) // 模拟评分
-    }));
+    console.warn('⚠️ quickTrain 已弃用：当前操作仅创建 few-shot 提示配置，不产生准确率指标');
+    return this.createProfileFromExamples(trainingData);
+  }
 
-    const summaryDemos = trainingData.slice(0, 3).map((item, index) => ({
-      input: { newsContent: item.newsContent },
-      output: { summary: item.expectedSummary },
-      score: 0.85 + (index * 0.02) // 模拟评分
-    }));
+  private buildCombinedPrompt(titleProgram: PromptProgram, summaryProgram: PromptProgram, newsContent: string): string {
+    const renderExamples = (examples: PromptExample[], field: 'optimizedTitle' | 'summary') => examples
+      .map((demo, index) => {
+        const output = demo.output[field];
+        return output ? `示例${index + 1}\n输入：${demo.input.newsContent}\n输出：${output}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
 
-    this.optimizedProgram = {
-      titleProgram: {
-        instruction: '将新闻内容优化为简洁标题，严格控制在20字符以内，突出核心事件和关键实体',
-        demos: titleDemos,
-        modelConfig: { temperature: 0.3, topP: 0.9, maxTokens: 100 },
-        stats: { trained: true, version: '1.0.0', accuracy: 0.91, compliance: 0.95 }
-      },
-      summaryProgram: {
-        instruction: '将新闻内容提炼为200字符以内的精炼摘要，保留核心信息，适合水墨屏快速阅读',
-        demos: summaryDemos,
-        modelConfig: { temperature: 0.5, topP: 0.9, maxTokens: 512 },
-        stats: { trained: true, version: '1.0.0', accuracy: 0.87, compliance: 0.92 }
-      }
-    };
-
-    console.log('✅ 快速训练完成');
-    return { success: true, titleStats: { accuracy: 0.91 }, summaryStats: { accuracy: 0.87 } };
+    return [
+      '你是新闻内容编辑。一次完成标题与摘要，禁止引入输入中没有的实体、数字或事件。',
+      `标题规则：${titleProgram.instruction}`,
+      `摘要规则：${summaryProgram.instruction}`,
+      titleProgram.demos.length ? `标题示例：\n${renderExamples(titleProgram.demos.slice(0, 3), 'optimizedTitle')}` : '',
+      summaryProgram.demos.length ? `摘要示例：\n${renderExamples(summaryProgram.demos.slice(0, 2), 'summary')}` : '',
+      `待处理内容：\n${newsContent}`,
+      '仅返回一个 JSON 对象，不要 Markdown：{"title":"...","summary":"..."}',
+    ].filter(Boolean).join('\n\n');
   }
 }
+
+/**
+ * @deprecated Compatibility alias. The implementation is a prompt profile,
+ * not an AX optimization/training runtime.
+ */
+export class AxOptimizedNewsProcessorSimplified extends PromptProfileNewsProcessor {}

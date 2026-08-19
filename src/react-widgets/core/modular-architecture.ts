@@ -39,6 +39,10 @@ export interface ProcessedDataItem {
     llm_model?: string;
     processedAt: string;
     processingTime: number;
+    /** Identifies what qualityScore measures; absent means no measured score. */
+    qualityMetric?: 'constraint-compliance';
+    /** Version of the prompt profile used for this output. */
+    profileVersion?: string;
     confidence?: number;
   };
   rawData: RawDataItem;

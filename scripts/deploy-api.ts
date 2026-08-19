@@ -210,7 +210,7 @@ class APIDeploymentManager {
     console.log(`      "category": "technology",`);
     console.log(`      "dataSource": "rss",`);
     console.log(`      "rssSource": "sspai",`);
-    console.log(`      "processor": "ax-optimized",`);
+    console.log(`      "processor": "prompt-profile",`);
     console.log(`      "index": 7,`);
     console.log(`      "renderer": "device"`);
     console.log(`    }'`);
