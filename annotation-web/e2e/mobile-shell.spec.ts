@@ -338,6 +338,7 @@ test('mobile shell uses an off-canvas drawer and single-pane review flow', async
   await page.goto('/annotate');
   await expect(page.getByRole('heading', { name: '开始标注' })).toBeVisible();
   await expect(page.getByRole('button', { name: '打开导航' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /神经漫游者 A\/B/ })).toBeVisible();
 
   // 默认 system 模式必须实时跟随系统，不依赖刷新页面。
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -421,6 +422,7 @@ test('desktop keeps the three-column review workspace', async ({ page }, testInf
   await expect(page.getByText('新闻预览')).toBeVisible();
   await expect(page.getByText('怎么开始推送')).toBeVisible();
   await expect(page.getByText('MCP 新规范取消会话').first()).toBeVisible();
+  await expect(page.getByRole('link', { name: /神经漫游者 A\/B/ })).toBeVisible();
   await expect(page.locator('[class*="cursor-col-resize"]')).toHaveCount(2);
   await expectNoDocumentOverflow(page, 1440);
 

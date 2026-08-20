@@ -1113,6 +1113,34 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL;
 
+      -- Neuromancer paired content Review：直接比较同一 inventory 的 direct processed artifact
+      -- 与 Research result_artifact。盲测展示侧由 run id 确定性派生，表内保存 semantic truth，
+      -- 避免 UI A/B 顺序变化污染实验标签。
+      CREATE TABLE IF NOT EXISTS neuromancer_artifact_reviews (
+        id BIGSERIAL PRIMARY KEY,
+        research_run_id UUID NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+        source_inventory_id INTEGER REFERENCES content_inventory(id) ON DELETE SET NULL,
+        comparison_version TEXT NOT NULL,
+        research_side TEXT NOT NULL CHECK (research_side IN ('a','b')),
+        choice TEXT NOT NULL CHECK (choice IN ('direct','research','tie')),
+        direct_factual_confidence INTEGER NOT NULL CHECK (direct_factual_confidence BETWEEN 1 AND 5),
+        research_factual_confidence INTEGER NOT NULL CHECK (research_factual_confidence BETWEEN 1 AND 5),
+        direct_information_density INTEGER NOT NULL CHECK (direct_information_density BETWEEN 1 AND 5),
+        research_information_density INTEGER NOT NULL CHECK (research_information_density BETWEEN 1 AND 5),
+        direct_eink_suitability INTEGER NOT NULL CHECK (direct_eink_suitability BETWEEN 1 AND 5),
+        research_eink_suitability INTEGER NOT NULL CHECK (research_eink_suitability BETWEEN 1 AND 5),
+        research_worth_cost BOOLEAN,
+        note TEXT,
+        annotator TEXT NOT NULL DEFAULT 'human',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE(research_run_id, comparison_version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_neuromancer_artifact_reviews_inventory
+        ON neuromancer_artifact_reviews(source_inventory_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_neuromancer_artifact_reviews_choice
+        ON neuromancer_artifact_reviews(choice, updated_at DESC);
+
       -- job_role 列：producer / consumer / mixed
       ALTER TABLE news_scheduler_jobs
         ADD COLUMN IF NOT EXISTS job_role VARCHAR(20) NOT NULL DEFAULT 'mixed'

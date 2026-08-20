@@ -24,6 +24,7 @@ import researchCanaryApp from './research-canary-api.js';
 import trmnlCanaryApp from './trmnl-canary-api.js';
 import adaptiveReviewApp from './adaptive-review-api.js';
 import rendererReviewApp from './renderer-review-api.js';
+import neuromancerReviewApp from './neuromancer-review-api.js';
 import labelsApp from './labels-api.js';
 import labelBatchesApp from './label-batches-api.js';
 import componentLabelsApp from './component-labels-api.js';
@@ -325,6 +326,7 @@ app.route('/', researchCanaryApp);
 app.route('/', trmnlCanaryApp);
 app.route('/', adaptiveReviewApp);
 app.route('/', rendererReviewApp);
+app.route('/', neuromancerReviewApp);
 app.route('/api/labels', labelsApp);
 app.route('/api/label-batches', labelBatchesApp);
 

@@ -2,12 +2,14 @@ import { useState, useEffect, useMemo, useRef, useDeferredValue, type CSSPropert
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiClient } from '../api/client';
+import NeuromancerReviewPage from './NeuromancerReviewPage';
 import { devicesApi, type Device } from '../api/devices';
 import { useSearchParams, Link } from 'react-router-dom';
 import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  FlaskConical,
   Image as ImageIcon,
   Send,
   Search,
@@ -58,6 +60,14 @@ interface NewsRecord {
 }
 
 function AnnotationPage() {
+  const [searchParams] = useSearchParams();
+  if (searchParams.get('view') === 'neuromancer') {
+    return <NeuromancerReviewPage />;
+  }
+  return <ContentAnnotationPage />;
+}
+
+function ContentAnnotationPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [reviewMode, setReviewMode] = useState<'content' | 'renderers'>('content');
   const [rendererTargetId, setRendererTargetId] = useState('eink-296x152');
@@ -671,6 +681,15 @@ function AnnotationPage() {
       >
         {/* 搜索框 */}
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">内容标注</p>
+            <Link
+              to="/annotate?view=neuromancer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_oklab,var(--agent)_25%,var(--border-subtle))] bg-[var(--agent-soft)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--agent)]"
+            >
+              <FlaskConical className="size-3.5" /> 神经漫游者 A/B
+            </Link>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
