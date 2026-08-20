@@ -18,7 +18,22 @@ import {
   ThumbsDown,
   ThumbsUp,
   Sparkles,
+  GitCompareArrows,
 } from 'lucide-react';
+import {
+  RendererComparisonView,
+  RendererReviewActions,
+  type RendererReviewDraft,
+} from './RendererReviewPanel';
+
+const DEFAULT_RENDERER_DRAFT: RendererReviewDraft = {
+  choice: null,
+  informationRetention: 4,
+  readability: 4,
+  spaceUsage: 4,
+  physicalConfidence: 3,
+  note: '',
+};
 
 interface NewsRecord {
   id: number;
@@ -44,6 +59,9 @@ interface NewsRecord {
 
 function AnnotationPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [reviewMode, setReviewMode] = useState<'content' | 'renderers'>('content');
+  const [rendererTargetId, setRendererTargetId] = useState('eink-296x152');
+  const [rendererDraft, setRendererDraft] = useState<RendererReviewDraft>(DEFAULT_RENDERER_DRAFT);
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery.trim());
   const [mobilePane, setMobilePane] = useState<'list' | 'preview' | 'actions'>('list');
@@ -270,6 +288,113 @@ function AnnotationPage() {
       },
     };
   }, [currentRecordSummary, currentDetailData?.data]);
+
+  const { data: rendererTargetsData } = useQuery({
+    queryKey: ['renderer-review-targets'],
+    queryFn: () => apiClient.getRendererReviewTargets(),
+    staleTime: 5 * 60_000,
+    enabled: reviewMode === 'renderers',
+  });
+  const rendererTargets = rendererTargetsData?.data || [];
+  const {
+    data: rendererComparisonData,
+    isFetching: rendererComparisonLoading,
+    error: rendererComparisonError,
+  } = useQuery({
+    queryKey: ['renderer-comparison', currentRecordSummary?.id, rendererTargetId],
+    queryFn: () => apiClient.getRendererComparison(currentRecordSummary!.id, rendererTargetId),
+    enabled: reviewMode === 'renderers' && Boolean(currentRecordSummary?.id),
+    staleTime: 30_000,
+  });
+  const rendererComparison = rendererComparisonData?.data;
+
+  useEffect(() => {
+    if (reviewMode !== 'renderers') return;
+    const review = rendererComparison?.review;
+    if (!review) {
+      setRendererDraft(DEFAULT_RENDERER_DRAFT);
+      return;
+    }
+    setRendererDraft({
+      choice: review.choice === 'primary' || review.choice === 'candidate' || review.choice === 'tie' ? review.choice : null,
+      informationRetention: review.information_retention ?? 4,
+      readability: review.readability ?? 4,
+      spaceUsage: review.space_usage ?? 4,
+      physicalConfidence: review.physical_confidence ?? 3,
+      note: review.note ?? '',
+    });
+  }, [reviewMode, currentRecordSummary?.id, rendererTargetId, rendererComparison?.review?.updated_at]);
+
+  const rendererReviewMutation = useMutation({
+    mutationFn: async () => {
+      if (!currentRecordSummary?.id || !rendererDraft.choice) throw new Error('请先选择 A / B / 差不多');
+      return apiClient.saveRendererReview(currentRecordSummary.id, {
+        targetId: rendererTargetId,
+        choice: rendererDraft.choice,
+        informationRetention: rendererDraft.informationRetention,
+        readability: rendererDraft.readability,
+        spaceUsage: rendererDraft.spaceUsage,
+        physicalConfidence: rendererDraft.physicalConfidence,
+        note: rendererDraft.note,
+        metricsSnapshot: rendererComparison ? {
+          version: rendererComparison.version,
+          governanceVersion: rendererComparison.governanceVersion,
+          target: rendererComparison.target,
+          governance: rendererComparison.governance,
+          comparison: rendererComparison.comparison,
+          selfCheck: rendererComparison.selfCheck,
+          diffSummary: {
+            candidateVsPrimary: rendererComparison.diffs?.candidateVsPrimary ? {
+              exact: rendererComparison.diffs.candidateVsPrimary.exact,
+              changedPixels: rendererComparison.diffs.candidateVsPrimary.changedPixels,
+              changedRatio: rendererComparison.diffs.candidateVsPrimary.changedRatio,
+              bounds: rendererComparison.diffs.candidateVsPrimary.bounds,
+              regions: rendererComparison.diffs.candidateVsPrimary.regions,
+            } : undefined,
+            browserVsCandidate: rendererComparison.diffs?.browserVsCandidate ? {
+              exact: rendererComparison.diffs.browserVsCandidate.exact,
+              changedPixels: rendererComparison.diffs.browserVsCandidate.changedPixels,
+              changedRatio: rendererComparison.diffs.browserVsCandidate.changedRatio,
+              bounds: rendererComparison.diffs.browserVsCandidate.bounds,
+              regions: rendererComparison.diffs.browserVsCandidate.regions,
+            } : undefined,
+          },
+          primary: {
+            renderer: rendererComparison.primary?.renderer,
+            renderMetrics: rendererComparison.primary?.renderMetrics,
+            bitmapMetrics: rendererComparison.primary?.bitmapMetrics,
+          },
+          candidate: {
+            renderer: rendererComparison.candidate?.renderer,
+            layoutEngine: rendererComparison.candidate?.layoutEngine,
+            renderMetrics: rendererComparison.candidate?.renderMetrics,
+            bitmapMetrics: rendererComparison.candidate?.bitmapMetrics,
+            physicalPreview: rendererComparison.candidate?.physicalPreview ? {
+              pointToPoint: rendererComparison.candidate.physicalPreview.pointToPoint,
+              resizeApplied: rendererComparison.candidate.physicalPreview.resizeApplied,
+              planeSha256: rendererComparison.candidate.physicalPreview.planeSha256,
+            } : undefined,
+          },
+          browserProbe: {
+            renderer: rendererComparison.browserProbe?.renderer,
+            renderMetrics: rendererComparison.browserProbe?.renderMetrics,
+            bitmapMetrics: rendererComparison.browserProbe?.bitmapMetrics,
+            diagnosticOnly: rendererComparison.browserProbe?.diagnosticOnly,
+          },
+          reference: {
+            renderer: rendererComparison.reference?.renderer,
+            renderMetrics: rendererComparison.reference?.renderMetrics,
+            bitmapMetrics: rendererComparison.reference?.bitmapMetrics,
+          },
+        } : undefined,
+      });
+    },
+    onSuccess: () => {
+      toast.success('Renderer A/B 评审已保存');
+      queryClient.invalidateQueries({ queryKey: ['renderer-comparison', currentRecordSummary?.id, rendererTargetId] });
+    },
+    onError: (error: Error) => toast.error(`Renderer A/B 评审保存失败: ${error.message}`),
+  });
 
   // 格式化时间显示
   const formatTime = (date: Date) => {
@@ -712,8 +837,32 @@ function AnnotationPage() {
         className={`${mobilePane === 'preview' ? 'block' : 'hidden'} h-[calc(100dvh-10.5rem)] w-full overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-1)] shadow-[var(--shadow-soft)] lg:block lg:h-full lg:w-[var(--panel-width)] lg:rounded-none lg:border-x-0`}
       >
         <div className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">新闻预览</h3>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="text-lg font-semibold text-gray-900">新闻预览</h3>
+              <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] p-1">
+                <button
+                  type="button"
+                  onClick={() => setReviewMode('content')}
+                  aria-pressed={reviewMode === 'content'}
+                  className={`flex min-h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors ${reviewMode === 'content'
+                    ? 'bg-[var(--surface-1)] text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
+                >
+                  <Newspaper className="size-3.5" /> 内容
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReviewMode('renderers')}
+                  aria-pressed={reviewMode === 'renderers'}
+                  className={`flex min-h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors ${reviewMode === 'renderers'
+                    ? 'bg-[var(--agent-soft)] text-[var(--agent)] shadow-sm'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
+                >
+                  <GitCompareArrows className="size-3.5" /> Renderer A/B
+                </button>
+              </div>
+            </div>
             {(currentRecord.rawContent?.link || currentRecord.processedContent?.link) && (
               <a
                 href={currentRecord.rawContent?.link || currentRecord.processedContent?.link}
@@ -754,6 +903,19 @@ function AnnotationPage() {
           {isDetailLoading && (
             <div className="mb-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-muted)]">
               正在加载当前内容详情…列表本身已可交互。
+            </div>
+          )}
+
+          {reviewMode === 'renderers' && (
+            <div className="mb-5">
+              <RendererComparisonView
+                data={rendererComparison}
+                targets={rendererTargets}
+                targetId={rendererTargetId}
+                onTargetChange={setRendererTargetId}
+                isLoading={rendererComparisonLoading}
+                error={rendererComparisonError instanceof Error ? rendererComparisonError : null}
+              />
             </div>
           )}
 
@@ -1057,6 +1219,16 @@ function AnnotationPage() {
           <h3 className="text-lg font-semibold text-gray-900 mb-4">操作</h3>
 
           <div className="space-y-3">
+            {reviewMode === 'renderers' && (
+              <RendererReviewActions
+                draft={rendererDraft}
+                onChange={setRendererDraft}
+                onSubmit={() => rendererReviewMutation.mutate()}
+                isSaving={rendererReviewMutation.isPending}
+                existingReview={rendererComparison?.review}
+              />
+            )}
+
             {/* 标注按钮（待标注状态） */}
             {currentRecord.annotationStatus === 'pending' && (
               <>

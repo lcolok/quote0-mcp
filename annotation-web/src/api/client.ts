@@ -215,6 +215,66 @@ class AnnotationApiClient {
     return response.data;
   }
 
+  async getRendererReviewTargets(): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get<ApiResponse<any[]>>('/api/review/renderers/targets');
+    return response.data;
+  }
+
+  async getRendererComparison(newsId: number, targetId: string): Promise<ApiResponse<any>> {
+    const response = await this.client.get<ApiResponse<any>>(
+      `/api/review/renderers/${newsId}`,
+      { params: { targetId } }
+    );
+    return response.data;
+  }
+
+  async saveRendererReview(newsId: number, review: {
+    targetId: string;
+    choice: 'primary' | 'candidate' | 'tie';
+    informationRetention?: number | null;
+    readability?: number | null;
+    spaceUsage?: number | null;
+    physicalConfidence?: number | null;
+    note?: string;
+    metricsSnapshot?: unknown;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.put<ApiResponse<any>>(
+      `/api/review/renderers/${newsId}/review`,
+      review
+    );
+    return response.data;
+  }
+
+  async getAdaptiveReviewTargets(): Promise<ApiResponse<any[]>> {
+    const response = await this.client.get<ApiResponse<any[]>>('/api/review/adaptive/targets');
+    return response.data;
+  }
+
+  async getAdaptiveComparison(newsId: number, targetId: string): Promise<ApiResponse<any>> {
+    const response = await this.client.get<ApiResponse<any>>(
+      `/api/review/adaptive/${newsId}`,
+      { params: { targetId } }
+    );
+    return response.data;
+  }
+
+  async saveAdaptiveReview(newsId: number, review: {
+    targetId: string;
+    choice: 'primary' | 'adaptive' | 'tie';
+    informationRetention?: number | null;
+    readability?: number | null;
+    spaceUsage?: number | null;
+    physicalConfidence?: number | null;
+    note?: string;
+    metricsSnapshot?: unknown;
+  }): Promise<ApiResponse<any>> {
+    const response = await this.client.put<ApiResponse<any>>(
+      `/api/review/adaptive/${newsId}/review`,
+      review
+    );
+    return response.data;
+  }
+
   /**
    * 获取调度器任务列表
    */

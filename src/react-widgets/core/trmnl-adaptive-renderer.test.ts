@@ -6,6 +6,7 @@ import {
   TRMNL_NEWS_RECIPE_VERSION,
   buildTrmnlAdaptiveHtml,
   deriveTrmnlTargetProfile,
+  snapTrmnlTypographyToPhysicalGrid,
 } from './trmnl-adaptive-renderer.js';
 import {
   EINK_296X128_TARGET,
@@ -64,10 +65,65 @@ describe('TRMNL adaptive target profile', () => {
   });
 });
 
+describe('TRMNL physical typography contract', () => {
+  test('snaps browser responsive sizes to the exact physical pixel grid before Clamp measurement', () => {
+    expect(snapTrmnlTypographyToPhysicalGrid({
+      eyebrowFontPx: null,
+      eyebrowLineHeightPx: null,
+      titleFontPx: 26,
+      titleLineHeightPx: 28.08,
+      bodyFontPx: 12,
+      bodyLineHeightPx: 14.04,
+      footerFontPx: 12,
+      footerLineHeightPx: 12.96,
+    })).toEqual({
+      eyebrow: null,
+      title: {
+        requestedFontPx: 26,
+        requestedLineHeightPx: 28.08,
+        fontPx: 24,
+        lineHeightPx: 26,
+        baseFontSize: 12,
+        scaleFactor: 2,
+      },
+      body: {
+        requestedFontPx: 12,
+        requestedLineHeightPx: 14.04,
+        fontPx: 12,
+        lineHeightPx: 14,
+        baseFontSize: 12,
+        scaleFactor: 1,
+      },
+      footer: {
+        requestedFontPx: 12,
+        requestedLineHeightPx: 12.96,
+        fontPx: 12,
+        lineHeightPx: 14,
+        baseFontSize: 12,
+        scaleFactor: 1,
+      },
+    });
+
+    expect(snapTrmnlTypographyToPhysicalGrid({
+      eyebrowFontPx: 6,
+      eyebrowLineHeightPx: 6.48,
+      titleFontPx: 13,
+      titleLineHeightPx: 13.65,
+      bodyFontPx: 8,
+      bodyLineHeightPx: 9.36,
+      footerFontPx: 6,
+      footerLineHeightPx: 6.48,
+    })).toMatchObject({
+      title: { fontPx: 12, lineHeightPx: 14 },
+      body: { fontPx: 8, lineHeightPx: 10 },
+    });
+  });
+});
+
 describe('TRMNL adaptive HTML', () => {
   test('pins framework assets to 3.2.0 instead of rolling latest', () => {
     expect(TRMNL_FRAMEWORK_VERSION).toBe('3.2.0');
-    expect(TRMNL_NEWS_RECIPE_VERSION).toBe('quote0-news-recipe/v1');
+    expect(TRMNL_NEWS_RECIPE_VERSION).toBe('quote0-news-recipe/v2');
     expect(TRMNL_FRAMEWORK_CSS_URL).toContain('/css/3.2.0/');
     expect(TRMNL_FRAMEWORK_JS_URL).toContain('/js/3.2.0/');
     expect(TRMNL_FRAMEWORK_CSS_URL).not.toContain('latest');

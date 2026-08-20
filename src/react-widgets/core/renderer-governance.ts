@@ -1,10 +1,11 @@
 import type { RenderTarget } from './render-targets.js';
 
-export const RENDERER_GOVERNANCE_VERSION = 'renderer-governance/v1';
-export const TRMNL_FRAMEWORK_RENDERER_VERSION = 'trmnl-framework-browser/v3.2.0+quote0-news-v1';
+export const RENDERER_GOVERNANCE_VERSION = 'renderer-governance/v3';
+export const TRMNL_FRAMEWORK_RENDERER_VERSION = 'trmnl-framework-browser/v3.2.0+quote0-news-v2';
+export const TRMNL_PIXEL_RENDERER_VERSION = 'trmnl-layout-satori-pixel/v2';
 export const ADAPTIVE_REFERENCE_RENDERER_VERSION = 'adaptive-satori/v2';
 export const CURRENT_SATORI_RENDERER_VERSION = 'current-satori-news/v1';
-export const TRMNL_COMPARISON_KEY = 'renderer-comparison/trmnl-news-recipe-v1';
+export const TRMNL_COMPARISON_KEY = 'renderer-comparison/trmnl-news-recipe-v2';
 
 export type RendererTrackId = 'current-satori' | 'trmnl-framework' | 'adaptive-v2-reference';
 export type RendererLifecycle = 'experimental' | 'canary' | 'preferred' | 'authoritative' | 'reference';
@@ -12,6 +13,8 @@ export type RendererLifecycle = 'experimental' | 'canary' | 'preferred' | 'autho
 export interface RendererTrackGovernance {
   id: RendererTrackId;
   renderer: string;
+  layoutEngine?: string;
+  diagnosticRenderer?: string;
   lifecycle: RendererLifecycle;
   role: 'production' | 'candidate' | 'reference';
   frozen: boolean;
@@ -38,12 +41,14 @@ export const RENDERER_TRACKS: RendererTrackGovernance[] = [
   },
   {
     id: 'trmnl-framework',
-    renderer: TRMNL_FRAMEWORK_RENDERER_VERSION,
+    renderer: TRMNL_PIXEL_RENDERER_VERSION,
+    layoutEngine: TRMNL_FRAMEWORK_RENDERER_VERSION,
+    diagnosticRenderer: TRMNL_FRAMEWORK_RENDERER_VERSION,
     lifecycle: 'canary',
     role: 'candidate',
     frozen: false,
     changesPhysicalDelivery: false,
-    summary: '正式第二轨的 Quote0 News Recipe v1；使用 TRMNL Framework 3.2 原生 no-bleed / inverse / top-stretch / flex / text-scale 视觉语法，先经人工 A/B 与真机门控再晋级。',
+    summary: '正式第二轨的物理候选：TRMNL Framework 3.2 负责 Responsive / Clamp / Content Limiter，并在 terminalize 前按最终 Fusion Pixel 字号量化；Satori 负责整数点阵栅格。原始 Browser PNG 仅作布局诊断，不参与物理 A/B。',
   },
   {
     id: 'adaptive-v2-reference',
@@ -70,6 +75,7 @@ export interface RendererPromotionGate {
   requiresNoCriticalOverflow: boolean;
   requiresPhysicalReview: boolean;
   requiresFallbackValidation: boolean;
+  requiresBitplaneSelfCheck: boolean;
   preferenceRule: string;
 }
 
@@ -78,5 +84,6 @@ export const TRMNL_PROMOTION_GATE: RendererPromotionGate = {
   requiresNoCriticalOverflow: true,
   requiresPhysicalReview: true,
   requiresFallbackValidation: true,
+  requiresBitplaneSelfCheck: true,
   preferenceRule: 'candidate_preferred + tie >= current_preferred for the target/content class',
 };

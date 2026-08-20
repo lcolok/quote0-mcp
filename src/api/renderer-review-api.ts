@@ -5,6 +5,7 @@ import {
   RENDERER_TRACKS,
   TRMNL_COMPARISON_KEY,
   TRMNL_FRAMEWORK_RENDERER_VERSION,
+  TRMNL_PIXEL_RENDERER_VERSION,
   TRMNL_PROMOTION_GATE,
   CURRENT_SATORI_RENDERER_VERSION,
   rendererGovernanceForTarget,
@@ -59,7 +60,9 @@ app.get('/api/review/renderers/targets', (c) => {
     tracks: RENDERER_TRACKS,
     promotionGate: TRMNL_PROMOTION_GATE,
     primaryRenderer: CURRENT_SATORI_RENDERER_VERSION,
-    candidateRenderer: TRMNL_FRAMEWORK_RENDERER_VERSION,
+    candidateRenderer: TRMNL_PIXEL_RENDERER_VERSION,
+    layoutEngine: TRMNL_FRAMEWORK_RENDERER_VERSION,
+    browserProbeRenderer: TRMNL_FRAMEWORK_RENDERER_VERSION,
     changesPhysicalDelivery: false,
   });
 });
@@ -189,7 +192,7 @@ app.put('/api/review/renderers/:id/review', async (c) => {
         target.id,
         TRMNL_COMPARISON_KEY,
         CURRENT_SATORI_RENDERER_VERSION,
-        TRMNL_FRAMEWORK_RENDERER_VERSION,
+        TRMNL_PIXEL_RENDERER_VERSION,
         storedChoice,
         informationRetention,
         readability,

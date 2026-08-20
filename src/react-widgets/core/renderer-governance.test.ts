@@ -6,16 +6,24 @@ import {
   RENDERER_GOVERNANCE_VERSION,
   RENDERER_TRACKS,
   TRMNL_FRAMEWORK_RENDERER_VERSION,
+  TRMNL_PIXEL_RENDERER_VERSION,
   TRMNL_PROMOTION_GATE,
   rendererGovernanceForTarget,
 } from './renderer-governance.js';
 
 describe('renderer governance', () => {
   test('keeps Satori authoritative, TRMNL canary, and Adaptive v2 frozen reference', () => {
-    expect(RENDERER_GOVERNANCE_VERSION).toBe('renderer-governance/v1');
+    expect(RENDERER_GOVERNANCE_VERSION).toBe('renderer-governance/v3');
     expect(RENDERER_TRACKS).toEqual(expect.arrayContaining([
       expect.objectContaining({ renderer: CURRENT_SATORI_RENDERER_VERSION, lifecycle: 'authoritative', role: 'production', frozen: false }),
-      expect.objectContaining({ renderer: TRMNL_FRAMEWORK_RENDERER_VERSION, lifecycle: 'canary', role: 'candidate', frozen: false }),
+      expect.objectContaining({
+        renderer: TRMNL_PIXEL_RENDERER_VERSION,
+        layoutEngine: TRMNL_FRAMEWORK_RENDERER_VERSION,
+        diagnosticRenderer: TRMNL_FRAMEWORK_RENDERER_VERSION,
+        lifecycle: 'canary',
+        role: 'candidate',
+        frozen: false,
+      }),
       expect.objectContaining({ renderer: ADAPTIVE_REFERENCE_RENDERER_VERSION, lifecycle: 'reference', role: 'reference', frozen: true }),
     ]));
   });
@@ -30,5 +38,6 @@ describe('renderer governance', () => {
     expect(TRMNL_PROMOTION_GATE.minHumanReviews).toBeGreaterThanOrEqual(30);
     expect(TRMNL_PROMOTION_GATE.requiresPhysicalReview).toBe(true);
     expect(TRMNL_PROMOTION_GATE.requiresFallbackValidation).toBe(true);
+    expect(TRMNL_PROMOTION_GATE.requiresBitplaneSelfCheck).toBe(true);
   });
 });

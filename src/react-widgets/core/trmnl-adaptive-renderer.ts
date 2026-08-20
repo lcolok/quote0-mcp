@@ -4,9 +4,10 @@ import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import type { RenderTarget } from './render-targets.js';
+import { selectOptimalFont } from '../smart-font-selector.js';
 
 export const TRMNL_FRAMEWORK_VERSION = '3.2.0';
-export const TRMNL_NEWS_RECIPE_VERSION = 'quote0-news-recipe/v1';
+export const TRMNL_NEWS_RECIPE_VERSION = 'quote0-news-recipe/v2';
 export const TRMNL_FRAMEWORK_ORIGIN = 'https://trmnl.com';
 export const TRMNL_FRAMEWORK_CSS_URL = `${TRMNL_FRAMEWORK_ORIGIN}/css/${TRMNL_FRAMEWORK_VERSION}/plugins.min.css`;
 export const TRMNL_FRAMEWORK_JS_URL = `${TRMNL_FRAMEWORK_ORIGIN}/js/${TRMNL_FRAMEWORK_VERSION}/plugins.min.js`;
@@ -59,6 +60,33 @@ export interface TrmnlTargetProfile {
   screenClasses: string[];
 }
 
+export interface TrmnlTypographyMeasurement {
+  eyebrowFontPx: number | null;
+  eyebrowLineHeightPx: number | null;
+  titleFontPx: number | null;
+  titleLineHeightPx: number | null;
+  bodyFontPx: number | null;
+  bodyLineHeightPx: number | null;
+  footerFontPx: number | null;
+  footerLineHeightPx: number | null;
+}
+
+export interface TrmnlPhysicalTypographySnapEntry {
+  requestedFontPx: number;
+  requestedLineHeightPx: number | null;
+  fontPx: number;
+  lineHeightPx: number;
+  baseFontSize: 8 | 10 | 12;
+  scaleFactor: number;
+}
+
+export interface TrmnlPhysicalTypographySnap {
+  eyebrow: TrmnlPhysicalTypographySnapEntry | null;
+  title: TrmnlPhysicalTypographySnapEntry | null;
+  body: TrmnlPhysicalTypographySnapEntry | null;
+  footer: TrmnlPhysicalTypographySnapEntry | null;
+}
+
 export interface TrmnlRenderMetrics {
   frameworkVersion: string;
   recipeVersion: string;
@@ -68,6 +96,7 @@ export interface TrmnlRenderMetrics {
   browserInitMs: number;
   frameworkLoadMs: number;
   domMutationMs: number;
+  physicalTypographySnap: TrmnlPhysicalTypographySnap;
   terminalizeMs: number;
   screenshotMs: number;
   assetSource: 'local-pinned' | 'remote';
@@ -89,8 +118,15 @@ export interface TrmnlRenderMetrics {
     vertical: boolean;
   };
   visibleText: {
+    eyebrow: string;
     title: string;
     body: string;
+    footer: string;
+  };
+  boxModel: {
+    title: { paddingTop: number; paddingRight: number; paddingBottom: number; paddingLeft: number } | null;
+    body: { paddingTop: number; paddingRight: number; paddingBottom: number; paddingLeft: number } | null;
+    footer: { paddingTop: number; paddingRight: number; paddingBottom: number; paddingLeft: number } | null;
   };
   regions: {
     title: { x: number; y: number; width: number; height: number } | null;
@@ -98,6 +134,8 @@ export interface TrmnlRenderMetrics {
     footer: { x: number; y: number; width: number; height: number } | null;
   };
   typography: {
+    eyebrowFontPx: number | null;
+    eyebrowLineHeightPx: number | null;
     titleFontPx: number | null;
     titleLineHeightPx: number | null;
     bodyFontPx: number | null;
@@ -126,6 +164,44 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function snapTypographyEntry(
+  fontPx: number | null,
+  lineHeightPx: number | null,
+): TrmnlPhysicalTypographySnapEntry | null {
+  if (!Number.isFinite(fontPx) || (fontPx as number) <= 0) return null;
+  const requestedFontPx = fontPx as number;
+  const selection = selectOptimalFont(requestedFontPx);
+  const snappedFontPx = Math.max(1, selection.actualSize);
+  return {
+    requestedFontPx,
+    requestedLineHeightPx: Number.isFinite(lineHeightPx) ? lineHeightPx as number : null,
+    fontPx: snappedFontPx,
+    lineHeightPx: snappedFontPx + 2,
+    baseFontSize: selection.baseFontSize,
+    scaleFactor: selection.scaleFactor,
+  };
+}
+
+/**
+ * Quantize the browser-computed TRMNL typography before terminalize() runs.
+ *
+ * TRMNL still chooses responsive classes and semantic regions. The snap only
+ * makes its line wrapping / Clamp measurement use the exact font sizes that the
+ * physical Satori/Fusion Pixel raster can reproduce. Without this step a 26px
+ * browser title can wrap to two lines while its final 24px pixel title fits one,
+ * leaving a large empty black tail on 40×20 and 20×8 thermal targets.
+ */
+export function snapTrmnlTypographyToPhysicalGrid(
+  typography: TrmnlTypographyMeasurement,
+): TrmnlPhysicalTypographySnap {
+  return {
+    eyebrow: snapTypographyEntry(typography.eyebrowFontPx, typography.eyebrowLineHeightPx),
+    title: snapTypographyEntry(typography.titleFontPx, typography.titleLineHeightPx),
+    body: snapTypographyEntry(typography.bodyFontPx, typography.bodyLineHeightPx),
+    footer: snapTypographyEntry(typography.footerFontPx, typography.footerLineHeightPx),
+  };
 }
 
 type PinnedTrmnlAsset = {
@@ -570,7 +646,7 @@ export class TrmnlAdaptiveRenderer {
 
     const pageReused = Boolean(this.page && !this.page.isClosed());
     let frameworkLoadMs = 0;
-    const domMutationMs = 0;
+    let domMutationMs = 0;
 
     try {
       if (!pageReused) {
@@ -609,6 +685,53 @@ export class TrmnlAdaptiveRenderer {
       }, debug);
       frameworkLoadMs = round2(performance.now() - frameworkLoadStartedAt);
 
+      const requestedTypography = await this.page!.evaluate((): TrmnlTypographyMeasurement => {
+        const typographyOf = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return { fontPx: null, lineHeightPx: null };
+          const style = getComputedStyle(element);
+          const fontPx = Number.parseFloat(style.fontSize);
+          const lineHeightPx = Number.parseFloat(style.lineHeight);
+          return {
+            fontPx: Number.isFinite(fontPx) ? fontPx : null,
+            lineHeightPx: Number.isFinite(lineHeightPx) ? lineHeightPx : null,
+          };
+        };
+        const eyebrow = typographyOf('.quote0-eyebrow');
+        const title = typographyOf('.quote0-title');
+        const body = typographyOf('.quote0-body-text');
+        const footer = typographyOf('.quote0-footer');
+        return {
+          eyebrowFontPx: eyebrow.fontPx,
+          eyebrowLineHeightPx: eyebrow.lineHeightPx,
+          titleFontPx: title.fontPx,
+          titleLineHeightPx: title.lineHeightPx,
+          bodyFontPx: body.fontPx,
+          bodyLineHeightPx: body.lineHeightPx,
+          footerFontPx: footer.fontPx,
+          footerLineHeightPx: footer.lineHeightPx,
+        };
+      });
+      const physicalTypographySnap = snapTrmnlTypographyToPhysicalGrid(requestedTypography);
+      const domMutationStartedAt = performance.now();
+      await this.page!.evaluate((snap) => {
+        const apply = (
+          selector: string,
+          value: TrmnlPhysicalTypographySnapEntry | null,
+        ) => {
+          if (!value) return;
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return;
+          element.style.setProperty('font-size', `${value.fontPx}px`, 'important');
+          element.style.setProperty('line-height', `${value.lineHeightPx}px`, 'important');
+        };
+        apply('.quote0-eyebrow', snap.eyebrow);
+        apply('.quote0-title', snap.title);
+        apply('.quote0-body-text', snap.body);
+        apply('.quote0-footer', snap.footer);
+      }, physicalTypographySnap);
+      domMutationMs = round2(performance.now() - domMutationStartedAt);
+
       const terminalizeStartedAt = performance.now();
       await this.page!.evaluate(async (debugEnabled) => {
         const runtime = globalThis as typeof globalThis & {
@@ -635,6 +758,7 @@ export class TrmnlAdaptiveRenderer {
         };
         const screen = document.querySelector<HTMLElement>('.quote0-adaptive-screen');
         if (!screen) throw new Error('TRMNL screen missing after render');
+        const eyebrow = screen.querySelector<HTMLElement>('.quote0-eyebrow');
         const title = screen.querySelector<HTMLElement>('.quote0-title');
         const bodyText = screen.querySelector<HTMLElement>('.quote0-body-text');
         const footer = screen.querySelector<HTMLElement>('.quote0-footer');
@@ -656,6 +780,25 @@ export class TrmnlAdaptiveRenderer {
             lineHeightPx: Number.isFinite(lineHeightPx) ? lineHeightPx : null,
           };
         };
+        const boxModelOf = (element: HTMLElement | null) => {
+          if (!element) return null;
+          const style = getComputedStyle(element);
+          const parse = (value: string) => {
+            const number = Number.parseFloat(value);
+            return Number.isFinite(number) ? number : 0;
+          };
+          return {
+            paddingTop: parse(style.paddingTop),
+            paddingRight: parse(style.paddingRight),
+            paddingBottom: parse(style.paddingBottom),
+            paddingLeft: parse(style.paddingLeft),
+          };
+        };
+        const visibleTextOf = (element: HTMLElement | null) => {
+          if (!element || element.hidden || element.closest('[hidden]') || getComputedStyle(element).display === 'none') return '';
+          return element.textContent?.trim() ?? '';
+        };
+        const eyebrowType = typographyOf(eyebrow);
         const titleType = typographyOf(title);
         const bodyType = typographyOf(bodyText);
         const footerType = typographyOf(footer);
@@ -674,8 +817,15 @@ export class TrmnlAdaptiveRenderer {
             scrollHeight: document.documentElement.scrollHeight,
           },
           visibleText: {
-            title: title?.textContent?.trim() ?? '',
-            body: bodyText?.textContent?.trim() ?? '',
+            eyebrow: visibleTextOf(eyebrow),
+            title: visibleTextOf(title),
+            body: visibleTextOf(bodyText),
+            footer: visibleTextOf(footer),
+          },
+          boxModel: {
+            title: boxModelOf(titleRegion),
+            body: boxModelOf(bodyRegion),
+            footer: boxModelOf(footerRegion),
           },
           regions: {
             title: rectOf(titleRegion),
@@ -683,6 +833,8 @@ export class TrmnlAdaptiveRenderer {
             footer: rectOf(footerRegion),
           },
           typography: {
+            eyebrowFontPx: eyebrowType.fontPx,
+            eyebrowLineHeightPx: eyebrowType.lineHeightPx,
             titleFontPx: titleType.fontPx,
             titleLineHeightPx: titleType.lineHeightPx,
             bodyFontPx: bodyType.fontPx,
@@ -721,6 +873,7 @@ export class TrmnlAdaptiveRenderer {
           browserInitMs,
           frameworkLoadMs,
           domMutationMs,
+          physicalTypographySnap,
           terminalizeMs,
           screenshotMs,
           assetSource: this.assetSource,
@@ -731,6 +884,7 @@ export class TrmnlAdaptiveRenderer {
           document: runtimeMetrics.document,
           overflow: { horizontal, vertical },
           visibleText: runtimeMetrics.visibleText,
+          boxModel: runtimeMetrics.boxModel,
           regions: runtimeMetrics.regions,
           typography: runtimeMetrics.typography,
         },
