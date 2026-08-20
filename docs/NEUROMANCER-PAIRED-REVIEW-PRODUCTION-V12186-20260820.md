@@ -49,7 +49,7 @@ chore(release): prepare Quote0 v1.21.86
 release/v1.21.86
 ```
 
-Both `release/v1.21.85` and `release/v1.21.86` were pushed. `origin/main` was verified to be a strict ancestor of the release line, so final convergence can be performed as a fast-forward without rewriting history or touching the dirty primary checkout.
+Both `release/v1.21.85` and `release/v1.21.86` were pushed. `origin/main` was verified to be a strict ancestor and was then fast-forwarded to the final v1.21.86 production-closure tip without rewriting history or touching the dirty primary checkout.
 
 ## Product behavior
 
@@ -267,6 +267,19 @@ annotation-web CPU 0.00%, 13.16 MiB / 128 MiB, 17 PIDs
 ```
 
 Deployment-window logs contained no fatal, panic, OOM, unhandled, uncaught, renderer self-check failure, paired-review failure, or skipped migration. Startup confirmed schema migrations, Research worker and TRMNL prewarm.
+
+Two production observation rounds, separated by 30 seconds, both returned:
+
+```text
+health = healthy
+version = 1.21.86
+unreviewed candidates = 9
+physical candidate = pass
+title bar = pass
+excess rows = 0
+point-to-point = true
+40×20 XOR = 0
+```
 
 ## Known boundaries
 
