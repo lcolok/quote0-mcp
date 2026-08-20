@@ -1,5 +1,7 @@
 # Quote0 Neuromancer Paired Review Candidate — 2026-08-20
 
+> Production closure completed in `docs/NEUROMANCER-PAIRED-REVIEW-PRODUCTION-V12186-20260820.md`. The deployment block described below is retained as historical candidate context and is no longer current.
+
 ## Workspace / Git boundary
 
 - Worktree: `/Users/friday/.devspace/worktrees/quote0-mcp-8ba2a887`
