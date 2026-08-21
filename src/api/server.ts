@@ -12,6 +12,7 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { startLabelJobWorker } from './label-jobs-worker.js';
 import { startDeviceDeliveryWorker } from './device-delivery-worker.js';
 import { startDeviceHealthAlertWorker } from './device-health-alerts.js';
+import { startRssSourceHealthAlertWorker } from './rss-source-health.js';
 import { startResearchCanaryWorker } from './research-canary-worker.js';
 import { EINK_TARGET } from '../react-widgets/core/render-targets.js';
 import { trmnlAdaptiveRenderer } from '../react-widgets/core/trmnl-adaptive-renderer.js';
@@ -51,6 +52,8 @@ if (import.meta.main) {
   startDeviceDeliveryWorker();
   // 健康状态迁移通知独立 outbox worker；Bark 网络失败不阻塞 delivery hot path。
   startDeviceHealthAlertWorker();
+  // 核心 RSS 源连续抓取失败同样走独立 outbox；避免 Solidot/Tailnet 这类链路静默停产数小时。
+  startRssSourceHealthAlertWorker();
   // Research canary 独立于 producer/device hot path：每日硬上限 + 单并发，且绝不自动推屏。
   startResearchCanaryWorker();
 

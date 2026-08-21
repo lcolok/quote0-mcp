@@ -538,6 +538,53 @@ export class PostgresDatabase {
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_device_health_alerts_one_pending_target
          ON device_health_alerts(device_id, to_health)
          WHERE state IN ('pending','leased','retry_wait')`,
+
+      // RSS source runtime health is independent from content freshness. A source that is
+      // reachable but has no new article is healthy; only repeated fetch/integration failures
+      // degrade the source. Persisting this state prevents a restart from erasing an outage.
+      `CREATE TABLE IF NOT EXISTS rss_source_runtime_state (
+        source_id TEXT PRIMARY KEY,
+        health TEXT NOT NULL DEFAULT 'unknown',
+        last_success_at TIMESTAMPTZ,
+        last_failure_at TIMESTAMPTZ,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        outage_started_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_rss_source_runtime_health
+         ON rss_source_runtime_state(health, updated_at DESC)`,
+
+      // Core RSS outage/recovery outbox. Scheduler hot-path only records transitions; Bark
+      // delivery is retried asynchronously and never blocks source rotation or inventory writes.
+      `CREATE TABLE IF NOT EXISTS rss_source_health_alerts (
+        id BIGSERIAL PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        from_health TEXT NOT NULL,
+        to_health TEXT NOT NULL,
+        alert_kind TEXT NOT NULL,
+        level TEXT NOT NULL,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        reason TEXT,
+        outage_started_at TIMESTAMPTZ,
+        state TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        sent_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_rss_source_health_alerts_due
+         ON rss_source_health_alerts(state, next_attempt_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_rss_source_health_alerts_source_time
+         ON rss_source_health_alerts(source_id, created_at DESC)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_rss_source_health_alerts_one_pending_target
+         ON rss_source_health_alerts(source_id, to_health)
+         WHERE state IN ('pending','leased','retry_wait')`,
     ];
   }
 

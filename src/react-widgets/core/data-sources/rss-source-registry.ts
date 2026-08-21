@@ -9,6 +9,8 @@ export interface RSSSourceDefinition {
   profile: RSSSourceProfile;
   /** Optional source-specific fetch timeout; default comes from RSS_FETCH_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** Optional runtime URL override. Useful for moving a relay without rebuilding Quote0. */
+  urlEnvVar?: string;
 }
 
 /**
@@ -26,6 +28,7 @@ export const RSS_SOURCE_REGISTRY: Record<string, RSSSourceDefinition> = {
     category: 'technology',
     description: '奇客的资讯，重要的东西',
     profile: 'core',
+    urlEnvVar: 'SOLIDOT_RSS_URL',
   },
   sspai: {
     id: 'sspai',
@@ -168,10 +171,33 @@ export const RECOMMENDED_RSS_SOURCE_IDS = Object.values(RSS_SOURCE_REGISTRY)
   .filter((source) => source.profile === 'core')
   .map((source) => source.id);
 
-export function getRssSourceDefinition(id: string): RSSSourceDefinition | undefined {
-  return RSS_SOURCE_REGISTRY[id];
+function resolveRuntimeSource(
+  source: RSSSourceDefinition,
+  env: Record<string, string | undefined> = process.env,
+): RSSSourceDefinition {
+  const override = source.urlEnvVar ? env[source.urlEnvVar]?.trim() : '';
+  if (!override) return { ...source };
+  try {
+    const parsed = new URL(override);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ...source };
+    return { ...source, url: parsed.toString() };
+  } catch {
+    return { ...source };
+  }
 }
 
-export function getRssSourceRegistry(): Record<string, RSSSourceDefinition> {
-  return { ...RSS_SOURCE_REGISTRY };
+export function getRssSourceDefinition(
+  id: string,
+  env: Record<string, string | undefined> = process.env,
+): RSSSourceDefinition | undefined {
+  const source = RSS_SOURCE_REGISTRY[id];
+  return source ? resolveRuntimeSource(source, env) : undefined;
+}
+
+export function getRssSourceRegistry(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, RSSSourceDefinition> {
+  return Object.fromEntries(
+    Object.entries(RSS_SOURCE_REGISTRY).map(([id, source]) => [id, resolveRuntimeSource(source, env)]),
+  );
 }

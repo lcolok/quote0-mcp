@@ -50,6 +50,7 @@ import { parseDisplayAckPayload, parseLongPollWaitMs } from './eink-pull-protoco
 import { recordDisplayAck } from './device-frame-ack.js';
 import { crc32Hex } from './eink-converter.js';
 import { isBarkAlertsConfigured } from './device-health-alerts.js';
+import { listRssSourceHealth } from './rss-source-health.js';
 import {
   getRssSourceRegistry,
   RECOMMENDED_RSS_SOURCE_IDS,
@@ -822,6 +823,29 @@ app.get('/api/news/sources', (c) => {
     categories: Object.keys(groupedSources),
     recommendedSources: RECOMMENDED_RSS_SOURCE_IDS,
   });
+});
+
+/**
+ * RSS 源运行时健康状态。与“有没有新文章”分离：可访问但无新鲜候选仍是 healthy；
+ * 只有连续 fetch/integration failure 达到 scheduler threshold 才进入 degraded。
+ */
+app.get('/api/news/sources/health', async (c) => {
+  try {
+    const db = getPostgresDatabase();
+    await db.initialize();
+    const sources = await listRssSourceHealth(db);
+    return c.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      barkAlertsConfigured: isBarkAlertsConfigured(),
+      sources,
+    });
+  } catch (error) {
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    }, 500);
+  }
 });
 
 /**

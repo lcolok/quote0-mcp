@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.92
+version: 1.21.93
 
 # 应用名称
 name: Quote0 新闻服务
@@ -208,7 +208,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.14-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.92
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.93
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1
@@ -261,11 +261,15 @@ services:
       LLM_MAX_TOKENS: "1000"
       LLM_TEMPERATURE: "0.7"
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
-      # Bark 设备健康状态迁移告警；device key 只通过懒猫控制台注入，不进 Git。
+      # Solidot relay 运行时 SSoT。当前仍指向 Tailnet 中转；后续可切到公开 HTTPS relay
+      # 而无需再次修改 RSS registry 代码。
+      SOLIDOT_RSS_URL: 'http://100.94.204.103:8899/solidot.rss'
+      # Bark 设备/RSS 源健康状态迁移告警；device key 只通过懒猫控制台注入，不进 Git。
       BARK_ALERTS_ENABLED: 'true'
       BARK_DEVICE_KEY: '<set-via-lazycat-console>'
       BARK_BASE: 'https://bark.logic.heiyu.space'
       BARK_GROUP: 'quote0-eink'
+      BARK_SOURCE_GROUP: 'quote0-rss'
       AMAP_API_KEY: dae9a4112f54312a2cef32517cc1ecbe
       # ADR-0002 Phase C: niimbot 热敏标签机 push endpoint（4 级 fallback 链的 env 兜底）
       NIIMBOT_ENDPOINT: http://192.168.31.186/api/print/raw

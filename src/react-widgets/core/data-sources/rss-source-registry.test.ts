@@ -22,6 +22,15 @@ describe('RSS source registry', () => {
     }
   });
 
+  it('Solidot relay URL 可用环境变量迁移，非法 override 会回退内置地址', () => {
+    expect(getRssSourceDefinition('solidot', {
+      SOLIDOT_RSS_URL: 'https://devaiplus.example.test/solidot.rss',
+    })?.url).toBe('https://devaiplus.example.test/solidot.rss');
+    expect(getRssSourceDefinition('solidot', {
+      SOLIDOT_RSS_URL: 'file:///tmp/solidot.rss',
+    })?.url).toBe(RSS_SOURCE_REGISTRY.solidot.url);
+  });
+
   it('HN 只局部放宽超时，The Verge 则降为扩展源', () => {
     expect(RSS_SOURCE_REGISTRY.hackernews.timeoutMs).toBe(12_000);
     expect(RSS_SOURCE_REGISTRY['the-verge'].profile).toBe('extended');

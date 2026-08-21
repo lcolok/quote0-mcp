@@ -6,6 +6,14 @@ import type { PushErrorCode } from './push-results.js';
 
 export type DeviceAlertKind = 'warning' | 'critical' | 'recovery';
 export type DeviceAlertLevel = 'info' | 'warning' | 'critical';
+export type BarkAlertLevel = DeviceAlertLevel;
+
+export interface BarkAlertMessage {
+  title: string;
+  body: string;
+  level?: BarkAlertLevel;
+  group?: string;
+}
 export type DeviceAlertState = 'pending' | 'leased' | 'retry_wait' | 'sent' | 'dead' | 'skipped';
 
 export interface DeviceHealthTransition {
@@ -142,9 +150,8 @@ function alertBackoffMs(attempts: number): number {
   return ALERT_BACKOFF_MS[index];
 }
 
-export async function sendBarkDeviceAlert(
-  alert: Pick<DeviceHealthAlertRow,
-    'device_id' | 'from_health' | 'to_health' | 'alert_kind' | 'level' | 'error_code' | 'consecutive_failures'>,
+export async function sendBarkAlertMessage(
+  alert: BarkAlertMessage,
   options: {
     env?: NodeJS.ProcessEnv;
     fetchFn?: typeof fetch;
@@ -155,24 +162,15 @@ export async function sendBarkDeviceAlert(
   const key = barkDeviceKey(env);
   if (!key) throw new Error('Bark disabled or BARK_DEVICE_KEY not configured');
 
-  const formatted = formatDeviceHealthAlert({
-    deviceId: alert.device_id,
-    fromHealth: alert.from_health,
-    toHealth: alert.to_health,
-    errorCode: (alert.error_code as PushErrorCode | null) ?? undefined,
-    consecutiveFailures: alert.consecutive_failures,
-  });
-  if (!formatted) throw new Error('alert transition is not notifiable');
-
   const base = (env.BARK_BASE || 'https://bark.logic.heiyu.space').replace(/\/+$/, '');
-  const group = env.BARK_GROUP || 'quote0-eink';
+  const level = alert.level ?? 'info';
   const params = new URLSearchParams({
-    title: formatted.title,
-    body: formatted.body,
-    group,
+    title: alert.title,
+    body: alert.body,
+    group: alert.group || env.BARK_GROUP || 'quote0-eink',
   });
-  if (formatted.level !== 'info') params.set('level', formatted.level);
-  if (formatted.level === 'critical') params.set('volume', '5');
+  if (level !== 'info') params.set('level', level);
+  if (level === 'critical') params.set('volume', '5');
 
   const response = await (options.fetchFn ?? fetch)(`${base}/${encodeURIComponent(key)}`, {
     method: 'POST',
@@ -191,6 +189,31 @@ export async function sendBarkDeviceAlert(
       throw new Error(`Bark response code ${payload.code}`);
     }
   }
+}
+
+export async function sendBarkDeviceAlert(
+  alert: Pick<DeviceHealthAlertRow,
+    'device_id' | 'from_health' | 'to_health' | 'alert_kind' | 'level' | 'error_code' | 'consecutive_failures'>,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchFn?: typeof fetch;
+    timeoutMs?: number;
+  } = {},
+): Promise<void> {
+  const formatted = formatDeviceHealthAlert({
+    deviceId: alert.device_id,
+    fromHealth: alert.from_health,
+    toHealth: alert.to_health,
+    errorCode: (alert.error_code as PushErrorCode | null) ?? undefined,
+    consecutiveFailures: alert.consecutive_failures,
+  });
+  if (!formatted) throw new Error('alert transition is not notifiable');
+
+  return sendBarkAlertMessage({
+    title: formatted.title,
+    body: formatted.body,
+    level: formatted.level,
+  }, options);
 }
 
 export async function claimDeviceHealthAlerts(limit = ALERT_BATCH_SIZE): Promise<DeviceHealthAlertRow[]> {

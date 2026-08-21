@@ -25,6 +25,7 @@ import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { RECOMMENDED_RSS_SOURCE_IDS } from '../react-widgets/core/data-sources/rss-source-registry.js';
+import { recordRssSourceFailure, recordRssSourceSuccess } from './rss-source-health.js';
 import { MindResetDeviceClient } from '../image-sender/services/api/device-client.js';
 
 function sanitizeWeatherData(data: any): WeatherData {
@@ -582,6 +583,9 @@ export class NewsScheduler {
           // consumer 已有独立 LRU replay，因此这里应直接轮到下一个源，而不是 fallback 旧闻。
           this.resetFailureCount(job, currentRssSource);
           job.state.consecutiveFailures = 0;
+          await recordRssSourceSuccess(this.postgres, currentRssSource).catch((healthError) => {
+            console.warn(`⚠️ RSS源健康状态恢复记录失败: source=${currentRssSource}`, healthError);
+          });
           await this.rotateRssSource(job);
           const nextRunAt = new Date(Date.now() + job.config.intervalMs);
           await this.persistSchedulerState(job, nextRunAt);
@@ -591,7 +595,7 @@ export class NewsScheduler {
         this.incrementFailureCount(job, currentRssSource);
         job.state.consecutiveFailures += 1;
 
-        await this.handlePostRunFailure(job, currentRssSource);
+        await this.handlePostRunFailure(job, currentRssSource, reason);
         return;
       }
 
@@ -991,6 +995,9 @@ export class NewsScheduler {
 
       this.resetFailureCount(job, currentRssSource);
       job.state.consecutiveFailures = 0;
+      await recordRssSourceSuccess(this.postgres, currentRssSource).catch((healthError) => {
+        console.warn(`⚠️ RSS源健康状态恢复记录失败: source=${currentRssSource}`, healthError);
+      });
 
       this.recordRecentFingerprint(job, candidate.fingerprint, this.strategyConfig.recentFingerprintGlobalLimit);
       this.updateIndexState(job, candidate.index, selection.poolSize);
@@ -1025,7 +1032,7 @@ export class NewsScheduler {
         }
       }
 
-      await this.handlePostRunFailure(job, currentRssSource);
+      await this.handlePostRunFailure(job, currentRssSource, message);
     } finally {
       job.state.running = false;
     }
@@ -1898,9 +1905,17 @@ export class NewsScheduler {
     }, nextRunAt);
   }
 
-  private async handlePostRunFailure(job: SchedulerJobInstance, currentRssSource: string): Promise<void> {
+  private async handlePostRunFailure(job: SchedulerJobInstance, currentRssSource: string, reason = ''): Promise<void> {
     const threshold = this.strategyConfig.sourceFailureSkipThreshold ?? 0;
     const failureCount = this.getFailureCount(job, currentRssSource);
+    await recordRssSourceFailure(this.postgres, {
+      sourceId: currentRssSource,
+      consecutiveFailures: failureCount,
+      threshold: Math.max(1, threshold || 1),
+      reason,
+    }).catch((healthError) => {
+      console.warn(`⚠️ RSS源健康状态失败记录失败: source=${currentRssSource}`, healthError);
+    });
     if (threshold > 0 && failureCount >= threshold) {
       const cooldownUntil = this.setSourceCooldown(job, currentRssSource);
       console.warn(`⚠️ 源 ${currentRssSource} 连续失败 ${failureCount} 次，冷却到 ${cooldownUntil.toISOString()} 并轮换到下一个源`);
