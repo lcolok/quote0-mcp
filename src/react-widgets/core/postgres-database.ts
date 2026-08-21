@@ -125,6 +125,9 @@ export class PostgresDatabase {
       // Straylight thread 引用和确定性 evidence packet，不能只记当前 thread。
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb`,
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS evidence_snapshot TEXT`,
+      // Universal Evidence Research: preserve the pre-Research Direct draft as immutable
+      // comparison/editorial context even after the inventory is replaced by the grounded final.
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS direct_snapshot JSONB`,
       // v1.21.65: inventory auto-canary provenance. Keep the trigger and source inventory id
       // in Quote0 domain state so the worker can enforce daily caps/idempotency without
       // scraping Straylight or overloading input_snapshot with control-plane metadata.
@@ -1098,6 +1101,7 @@ export class PostgresDatabase {
         straylight_thread_id VARCHAR(128),
         straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         evidence_snapshot TEXT,
+        direct_snapshot JSONB,
         attempts INTEGER NOT NULL DEFAULT 0,
         result_artifact JSONB,
         runtime_receipt JSONB,
@@ -1140,6 +1144,72 @@ export class PostgresDatabase {
         ON neuromancer_artifact_reviews(source_inventory_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_neuromancer_artifact_reviews_choice
         ON neuromancer_artifact_reviews(choice, updated_at DESC);
+
+      -- Synthetic evaluator 与真实人工 gold 严格分表。这里记录的是模型模拟评审，
+      -- 永远不能写入 neuromancer_artifact_reviews，也不能把 annotator 冒充 human。
+      CREATE TABLE IF NOT EXISTS neuromancer_synthetic_evaluations (
+        id BIGSERIAL PRIMARY KEY,
+        research_run_id UUID NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+        source_inventory_id INTEGER REFERENCES content_inventory(id) ON DELETE SET NULL,
+        comparison_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        judge_id TEXT NOT NULL,
+        judge_family TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        research_side TEXT NOT NULL CHECK (research_side IN ('a','b')),
+        choice TEXT NOT NULL CHECK (choice IN ('direct','research','tie')),
+        direct_factual_confidence INTEGER NOT NULL CHECK (direct_factual_confidence BETWEEN 1 AND 5),
+        research_factual_confidence INTEGER NOT NULL CHECK (research_factual_confidence BETWEEN 1 AND 5),
+        direct_information_density INTEGER NOT NULL CHECK (direct_information_density BETWEEN 1 AND 5),
+        research_information_density INTEGER NOT NULL CHECK (research_information_density BETWEEN 1 AND 5),
+        direct_eink_suitability INTEGER NOT NULL CHECK (direct_eink_suitability BETWEEN 1 AND 5),
+        research_eink_suitability INTEGER NOT NULL CHECK (research_eink_suitability BETWEEN 1 AND 5),
+        confidence DOUBLE PRECISION NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+        direct_unsupported_claims JSONB NOT NULL DEFAULT '[]'::jsonb,
+        research_unsupported_claims JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rationale TEXT,
+        raw_result JSONB NOT NULL,
+        evidence_digest TEXT NOT NULL,
+        straylight_job_id TEXT,
+        straylight_thread_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE(research_run_id, comparison_version, judge_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_neuromancer_synthetic_eval_run
+        ON neuromancer_synthetic_evaluations(research_run_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_neuromancer_synthetic_eval_choice
+        ON neuromancer_synthetic_evaluations(choice, updated_at DESC);
+
+      -- Promotion 是显式 operator 审批后的可回滚业务动作。synthetic judge 只能提出
+      -- 证据，不能自行宣称为人工，也不能绕过 approved_by / approval_kind。
+      CREATE TABLE IF NOT EXISTS neuromancer_artifact_promotions (
+        id BIGSERIAL PRIMARY KEY,
+        research_run_id UUID NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+        source_inventory_id INTEGER NOT NULL REFERENCES content_inventory(id) ON DELETE CASCADE,
+        policy_version TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','rolled_back')),
+        approval_kind TEXT NOT NULL CHECK (approval_kind IN ('operator-explicit','human-review')),
+        approved_by TEXT NOT NULL,
+        evaluation_summary JSONB NOT NULL,
+        previous_processed_content JSONB NOT NULL,
+        promoted_processed_content JSONB NOT NULL,
+        previous_image_path TEXT NOT NULL,
+        promoted_image_path TEXT NOT NULL,
+        previous_inventory_state TEXT NOT NULL,
+        previous_replay_count INTEGER NOT NULL,
+        previous_last_pushed_at TIMESTAMPTZ,
+        delivery_summary JSONB,
+        promoted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        rolled_back_at TIMESTAMPTZ,
+        rollback_reason TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE(research_run_id, policy_version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_neuromancer_promotions_inventory
+        ON neuromancer_artifact_promotions(source_inventory_id, promoted_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_neuromancer_promotions_state
+        ON neuromancer_artifact_promotions(state, promoted_at DESC);
 
       -- job_role 列：producer / consumer / mixed
       ALTER TABLE news_scheduler_jobs

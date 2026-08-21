@@ -5,6 +5,7 @@ import {
   semanticChoiceFromBlind,
   semanticScoresFromBlind,
   getNeuromancerReviewPair,
+  listNeuromancerReviewCandidates,
   saveNeuromancerReview,
   NEUROMANCER_PAIRED_REVIEW_VERSION,
 } from './neuromancer-review-service.js';
@@ -41,6 +42,20 @@ describe('Neuromancer paired review blind assignment', () => {
 });
 
 describe('Neuromancer paired review service projection', () => {
+  test('keeps the original Direct artifact after an active Research promotion', async () => {
+    let sql = '';
+    const fakeDb = {
+      query: async (statement: string) => {
+        sql = statement;
+        return { rows: [] };
+      },
+    } as any;
+    await listNeuromancerReviewCandidates(fakeDb, { limit: 1 });
+    expect(sql).toContain('active_promotion.previous_processed_content');
+    expect(sql).toContain("promotion.state = 'active'");
+    expect(sql).toContain('COALESCE(rr.direct_snapshot, active_promotion.previous_processed_content, ci.processed_content)');
+  });
+
   test('returns only blind title/message before a human review exists', async () => {
     const runId = '82306199-5030-47db-a3f8-e3046cbc8d96';
     const fakeDb = {

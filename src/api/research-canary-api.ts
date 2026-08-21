@@ -18,9 +18,18 @@ import {
   type ResearchRunRecord,
 } from './research-run-store.js';
 import { triageResearchCandidate, type ResearchSeed } from './research-triage.js';
+import { applyUniversalResearchArtifact } from './universal-research-finalization.js';
 
 const app = new Hono();
 const postgres = getPostgresDatabase();
+
+function directDraftFromRun(run: ResearchRunRecord): { title: string; message: string } | undefined {
+  const draft = run.directSnapshot;
+  const title = cleanString(draft?.title);
+  const message = cleanString(draft?.message);
+  if (!title || !message) return undefined;
+  return { title, message };
+}
 
 function cleanString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -143,12 +152,14 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
   }
 
   const phase = run.attempts <= 1 ? 'research' : 'finalization';
+  const maxFinalizationAttempts = 2 + (run.triage.budget?.maxFinalizationRetries ?? 1);
   const inspection = await inspectResearchCanary({
     runId: run.id,
     seed: run.inputSnapshot,
     jobId: run.straylightJobId,
     threadId: run.straylightThreadId,
     phase,
+    decision: run.triage,
     ...(phase === 'finalization' && run.runtimeReceipt ? { priorRuntime: run.runtimeReceipt } : {}),
   });
 
@@ -174,6 +185,8 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
         run.id,
         run.inputSnapshot,
         inspection.evidencePacket,
+        run.triage,
+        { directDraft: directDraftFromRun(run) },
       );
       const updated = await markResearchRunDispatched(postgres, run.id, finalized.jobId, finalized.threadId);
       return c.json({
@@ -204,7 +217,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
   }
 
   if (inspection.status === 'failed') {
-    if (phase === 'finalization' && inspection.retryable && run.attempts < 3 && run.evidenceSnapshot) {
+    if (phase === 'finalization' && inspection.retryable && run.attempts < maxFinalizationAttempts && run.evidenceSnapshot) {
       // Preserve the runtime failure that caused the retry. A fresh-thread retry may
       // itself no-event, so the first failure remains part of the durable audit trail.
       await markResearchRunState(postgres, run.id, {
@@ -216,7 +229,8 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           run.id,
           run.inputSnapshot,
           run.evidenceSnapshot,
-          inspection.errors,
+          run.triage,
+          { errors: inspection.errors, directDraft: directDraftFromRun(run) },
         );
         const updated = await markResearchRunDispatched(postgres, run.id, retried.jobId, retried.threadId);
         return c.json({ success: true, reconciled: true, finalizationRetry: true, data: publicRun(updated) }, 202);
@@ -234,16 +248,97 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
   }
 
   if (inspection.status === 'completed' && inspection.artifact) {
+    const materializationRun: ResearchRunRecord = {
+      ...run,
+      runtimeReceipt: inspection.runtime,
+      resultArtifact: inspection.artifact,
+      completedAt: new Date().toISOString(),
+    };
+    let universalApply;
+    try {
+      universalApply = await applyUniversalResearchArtifact(postgres, {
+        run: materializationRun,
+        artifact: inspection.artifact,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const publishGateFailure = message.startsWith('universal Research final artifact 无效:');
+      const feedback = [`universal publish gate: ${message}`];
+
+      if (publishGateFailure && phase === 'finalization' && run.attempts < maxFinalizationAttempts && run.evidenceSnapshot) {
+        await markResearchRunState(postgres, run.id, {
+          state: 'running',
+          runtimeReceipt: inspection.runtime,
+          resultArtifact: inspection.artifact,
+          validationErrors: feedback,
+        });
+        try {
+          const retried = await dispatchResearchFinalization(
+            run.id,
+            run.inputSnapshot,
+            run.evidenceSnapshot,
+            run.triage,
+            { errors: feedback, directDraft: directDraftFromRun(run) },
+          );
+          const updated = await markResearchRunDispatched(postgres, run.id, retried.jobId, retried.threadId);
+          return c.json({
+            success: true,
+            reconciled: true,
+            universalFinalizerRetry: true,
+            data: publicRun(updated),
+          }, 202);
+        } catch (dispatchError) {
+          feedback.push(`universal finalizer retry dispatch 失败: ${dispatchError instanceof Error ? dispatchError.message : String(dispatchError)}`);
+        }
+      }
+
+      if (publishGateFailure) {
+        const failed = await markResearchRunState(postgres, run.id, {
+          state: 'failed',
+          runtimeReceipt: inspection.runtime,
+          resultArtifact: inspection.artifact,
+          validationErrors: feedback,
+          error: feedback.join('; '),
+        });
+        return c.json({
+          success: false,
+          reconciled: true,
+          retryable: true,
+          error: `Research final artifact 未通过 universal publish gate；保留 pending，稍后重新研究: ${message}`,
+          data: publicRun(failed),
+        }, 422);
+      }
+
+      const retrying = await markResearchRunState(postgres, run.id, {
+        state: 'running',
+        runtimeReceipt: inspection.runtime,
+        resultArtifact: inspection.artifact,
+        validationErrors: [`universal materialization pending: ${message}`],
+      });
+      return c.json({
+        success: false,
+        reconciled: true,
+        retryable: true,
+        error: `Research 已完成，但 grounded inventory materialization 暂未成功: ${message}`,
+        data: publicRun(retrying),
+      }, 503);
+    }
+
     const completed = await markResearchRunState(postgres, run.id, {
       state: 'completed',
       runtimeReceipt: inspection.runtime,
       resultArtifact: inspection.artifact,
       validationErrors: [],
     });
-    return c.json({ success: true, reconciled: true, data: publicRun(completed) });
+    return c.json({
+      success: true,
+      reconciled: true,
+      universalApply,
+      data: publicRun(completed),
+    });
   }
 
-  if (inspection.status === 'invalid' && inspection.retryable && phase === 'finalization' && run.attempts < 3 && run.evidenceSnapshot) {
+  if (inspection.status === 'invalid' && inspection.retryable && phase === 'finalization' && run.attempts < maxFinalizationAttempts && run.evidenceSnapshot) {
     // Persist the first validator failure before dispatching the one allowed retry.
     // If the retry itself crashes/no-events, this evidence must survive the terminal update.
     await markResearchRunState(postgres, run.id, {
@@ -255,7 +350,8 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
         run.id,
         run.inputSnapshot,
         run.evidenceSnapshot,
-        inspection.errors,
+        run.triage,
+        { errors: inspection.errors, directDraft: directDraftFromRun(run) },
       );
       const updated = await markResearchRunDispatched(postgres, run.id, retried.jobId, retried.threadId);
       return c.json({

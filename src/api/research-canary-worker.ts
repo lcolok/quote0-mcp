@@ -20,11 +20,18 @@ import {
   type ResearchSeed,
   type ResearchTriageDecision,
 } from './research-triage.js';
+import { contentQualityResearchPriority } from './content-quality.js';
+import {
+  UNIVERSAL_RESEARCH_POLICY_VERSION,
+  universalResearchEnabled,
+} from './universal-research-policy.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 
 export interface ResearchAutoWorkerConfig {
   enabled: boolean;
+  /** Universal mode removes the per-day item quota but keeps per-run bounded budgets. */
+  universal: boolean;
   dailyLimit: number;
   lookbackHours: number;
   tickMs: number;
@@ -41,12 +48,22 @@ export interface InventoryResearchRow {
   raw_content?: Record<string, unknown> | null;
   processed_content?: Record<string, unknown> | null;
   created_at?: string | Date | null;
+  research_attempts?: number | string | null;
 }
 
 export interface AutoResearchCandidate {
   inventoryId: number;
   seed: ResearchSeed;
   triage: ResearchTriageDecision;
+  directSnapshot?: Record<string, unknown>;
+  priorRuns: number;
+}
+
+export type ResearchSelectionBucket = 'quality-gap' | 'high-risk' | 'exploration';
+
+export function researchSelectionBucketForCount(count: number): ResearchSelectionBucket {
+  const normalized = Math.max(0, Math.floor(count));
+  return normalized % 3 === 0 ? 'quality-gap' : normalized % 3 === 1 ? 'high-risk' : 'exploration';
 }
 
 export type ResearchAutoTickResult =
@@ -73,6 +90,7 @@ export function getResearchAutoWorkerConfig(
 ): ResearchAutoWorkerConfig {
   return {
     enabled: (env.QUOTE0_RESEARCH_AUTO_ENABLED || 'false').toLowerCase() === 'true',
+    universal: universalResearchEnabled(env),
     dailyLimit: boundedInt(env.QUOTE0_RESEARCH_AUTO_DAILY_LIMIT, 1, 1, 20),
     lookbackHours: boundedInt(env.QUOTE0_RESEARCH_AUTO_LOOKBACK_HOURS, 24, 1, 168),
     tickMs: boundedInt(env.QUOTE0_RESEARCH_AUTO_TICK_MS, 30_000, 5_000, 300_000),
@@ -100,24 +118,58 @@ export function inventoryRowToResearchSeed(row: InventoryResearchRow): ResearchS
 }
 
 /**
- * Candidate choice is deterministic: high-risk research candidates first, then the
- * incoming DB order (newest first). Rich/low-risk rows are skipped completely.
+ * Candidate choice is deterministic and bucket-aware. The worker rotates its daily
+ * Research budget across quality-gap, high-risk and exploratory slots so no single
+ * class can monopolize the small production canary budget. If the preferred bucket
+ * is empty, selection falls back to the global research pool.
  */
-export function chooseAutoResearchCandidate(rows: InventoryResearchRow[]): AutoResearchCandidate | undefined {
+export function chooseAutoResearchCandidate(
+  rows: InventoryResearchRow[],
+  preferredBucket: ResearchSelectionBucket = 'exploration',
+  universal = false,
+): AutoResearchCandidate | undefined {
   const candidates = rows.flatMap((row, index) => {
     const seed = inventoryRowToResearchSeed(row);
     if (!seed || !Number.isInteger(row.id) || row.id <= 0) return [];
-    const triage = triageResearchCandidate({ seed });
+    const triage = triageResearchCandidate({ seed, universal });
     if (triage.lane !== 'research') return [];
-    return [{ inventoryId: row.id, seed, triage, index }];
+    const direct = row.processed_content && typeof row.processed_content === 'object' && !Array.isArray(row.processed_content)
+      ? row.processed_content as Record<string, unknown>
+      : undefined;
+    return [{
+      inventoryId: row.id,
+      seed,
+      triage,
+      ...(direct ? { directSnapshot: direct } : {}),
+      priorRuns: Math.max(0, Number(row.research_attempts || 0)),
+      qualityPriority: contentQualityResearchPriority(row.processed_content),
+      index,
+    }];
   });
-  candidates.sort((a, b) => {
-    const riskDelta = Number(b.triage.signals.highRisk) - Number(a.triage.signals.highRisk);
-    return riskDelta || a.index - b.index;
+  const preferred = preferredBucket === 'quality-gap'
+    ? candidates.filter((candidate) => candidate.qualityPriority > 0)
+    : preferredBucket === 'high-risk'
+      ? candidates.filter((candidate) => candidate.triage.signals.highRisk)
+      : candidates;
+  const pool = preferred.length > 0 ? preferred : candidates;
+  pool.sort((a, b) => {
+    if (preferredBucket === 'quality-gap') {
+      const priorityDelta = b.qualityPriority - a.qualityPriority;
+      if (priorityDelta) return priorityDelta;
+    }
+    // Exploration remains newest-first and intentionally does not privilege high-risk;
+    // otherwise the third slot would silently recreate the old high-risk sampling bias.
+    return a.index - b.index;
   });
-  const selected = candidates[0];
+  const selected = pool[0];
   if (!selected) return undefined;
-  return { inventoryId: selected.inventoryId, seed: selected.seed, triage: selected.triage };
+  return {
+    inventoryId: selected.inventoryId,
+    seed: selected.seed,
+    triage: selected.triage,
+    ...(selected.directSnapshot ? { directSnapshot: selected.directSnapshot } : {}),
+    priorRuns: selected.priorRuns,
+  };
 }
 
 let running = false;
@@ -131,7 +183,8 @@ export function startResearchCanaryWorker(): void {
   if (running) return;
   running = true;
   console.log(
-    `🧪 Research auto-canary worker started id=${WORKER_ID} daily=${config.dailyLimit} `
+    `🧪 Research auto-canary worker started id=${WORKER_ID} `
+      + `mode=${config.universal ? 'universal-admission' : `daily-cap:${config.dailyLimit}`} `
       + `lookback=${config.lookbackHours}h tick=${config.tickMs}ms concurrency=1`,
   );
   loop(config).catch((error) => console.error('Research auto-canary worker loop crash:', error));
@@ -191,34 +244,67 @@ export async function runResearchAutoTick(
     return { action: 'reconciled', runId, ...(payload?.data?.state ? { state: String(payload.data.state) } : {}) };
   }
 
-  const today = await db.query(
-    `SELECT COUNT(*)::int AS count FROM research_runs
-      WHERE trigger='inventory-auto'
-        AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai')`,
-  );
-  const count = Number(today.rows[0]?.count || 0);
-  if (count >= config.dailyLimit) return { action: 'daily-cap', count, limit: config.dailyLimit };
+  let count = 0;
+  if (!config.universal) {
+    const today = await db.query(
+      `SELECT COUNT(*)::int AS count FROM research_runs
+        WHERE trigger='inventory-auto'
+          AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai')`,
+    );
+    count = Number(today.rows[0]?.count || 0);
+    if (count >= config.dailyLimit) return { action: 'daily-cap', count, limit: config.dailyLimit };
+  }
 
   const inventory = await db.query(
-    `SELECT id, fingerprint, title, link, source, category, raw_content, processed_content, created_at
+    `SELECT ci.id, ci.fingerprint, ci.title, ci.link, ci.source, ci.category,
+            ci.raw_content, ci.processed_content, ci.created_at,
+            (SELECT COUNT(*)::int FROM research_runs history
+              WHERE history.trigger='inventory-auto' AND history.source_inventory_id=ci.id) AS research_attempts
        FROM content_inventory ci
       WHERE ci.state IN ('ready','pushed')
-        AND ci.created_at >= now() - ($1 || ' hours')::interval
+        AND ($3::boolean = true OR ci.created_at >= now() - ($1 || ' hours')::interval)
         AND COALESCE(ci.raw_content->>'origin','') <> 'renderable-intake'
         AND ci.processed_content->'metadata'->'researchReceipt' IS NULL
+        AND ($3::boolean = false OR (
+          ci.processed_content->'metadata'->'researchGate'->>'schemaVersion' = $4
+          AND ci.processed_content->'metadata'->'researchGate'->>'state' = 'pending'
+        ))
         AND NOT EXISTS (
           SELECT 1 FROM research_runs rr
-           WHERE rr.trigger='inventory-auto' AND rr.source_inventory_id=ci.id
+           WHERE rr.trigger='inventory-auto'
+             AND rr.source_inventory_id=ci.id
+             AND rr.state IN ('queued','running','waiting_user','completed')
         )
-      ORDER BY ci.created_at DESC
+        AND NOT EXISTS (
+          SELECT 1 FROM research_runs recent_failure
+           WHERE recent_failure.trigger='inventory-auto'
+             AND recent_failure.source_inventory_id=ci.id
+             AND recent_failure.state IN ('failed','invalid')
+             AND recent_failure.updated_at >= now() - INTERVAL '15 minutes'
+        )
+      ORDER BY
+        CASE WHEN $3::boolean THEN (SELECT COUNT(*) FROM research_runs attempts
+          WHERE attempts.trigger='inventory-auto' AND attempts.source_inventory_id=ci.id) END ASC,
+        CASE WHEN $3::boolean THEN ci.created_at END ASC,
+        CASE WHEN $3::boolean = false THEN ci.created_at END DESC
       LIMIT $2`,
-    [String(config.lookbackHours), config.scanLimit],
+    [String(config.lookbackHours), config.scanLimit, config.universal, UNIVERSAL_RESEARCH_POLICY_VERSION],
   );
-  const candidate = chooseAutoResearchCandidate(inventory.rows as InventoryResearchRow[]);
+  // Legacy mode preserves the stratified daily canary. Universal mode admits every
+  // pending item and uses oldest-first FIFO to prevent starvation while keeping
+  // per-item adaptive Research budgets bounded.
+  const selectionBucket = researchSelectionBucketForCount(count);
+  const candidate = chooseAutoResearchCandidate(
+    inventory.rows as InventoryResearchRow[],
+    selectionBucket,
+    config.universal,
+  );
   if (!candidate) return { action: 'no-candidate' };
 
   const candidateId = randomUUID();
-  const requestKey = `inventory-auto:${candidate.inventoryId}`;
+  const requestKey = config.universal
+    ? `inventory-auto:${candidate.inventoryId}:attempt-${candidate.priorRuns + 1}`
+    : `inventory-auto:${candidate.inventoryId}`;
   const run = await createResearchRun(db, {
     id: candidateId,
     mode: RESEARCH_CANARY_MODE,
@@ -228,6 +314,7 @@ export async function runResearchAutoTick(
     agentId: canaryConfig.agentId,
     trigger: 'inventory-auto',
     sourceInventoryId: candidate.inventoryId,
+    ...(candidate.directSnapshot ? { directSnapshot: candidate.directSnapshot } : {}),
     seed: candidate.seed,
     triage: candidate.triage,
   });

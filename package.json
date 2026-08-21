@@ -20,6 +20,7 @@
     "test:eink": "bun test src/api/delivery-attempt-store.test.ts src/api/delivery-payload-store.test.ts src/api/device-health-alerts.test.ts src/api/eink-push-serialization.test.ts src/api/scheduler-extra-renderers.test.ts src/api/eink-converter.test.ts src/api/eink-status-single-probe.test.ts src/api/push-results.test.ts src/api/delivery-policy.test.ts src/api/target-aware-eink.test.ts src/api/device-pusher-concurrency.test.ts src/api/worker-db-readiness.test.ts src/api/device-pusher.test.ts",
     "test:gate": "bun run test:unit && bun run build",
     "test:all": "bun run test:unit && bun run test:integration && bun run build",
+    "quality:synthetic-eval": "bun scripts/run-neuromancer-synthetic-evaluation.ts",
     "image:send": "node dist/image-sender/interfaces/cli/cli-main.js send",
     "image:preview": "node dist/image-sender/interfaces/cli/cli-main.js preview",
     "image:mono": "node dist/image-sender/interfaces/cli/cli-main.js mono",

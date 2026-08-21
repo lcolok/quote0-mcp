@@ -26,6 +26,10 @@ export interface OptimizedProgram {
   };
 }
 
+export const EVIDENCE_BOUNDED_DIRECT_PROFILE_VERSION = 'evidence-bounded-direct/v1';
+
+const EVIDENCE_BOUNDED_NEWS_CONTRACT = `证据约束（高优先级，覆盖示例中的任何冲突）：\n- 只能使用“输入”中明确出现的事实，不得调用外部知识、记忆或常识补全。\n- 禁止新增输入中没有的日期/年份、金额、百分比、版本号、数量、人物身份、因果关系、预测或结论。\n- 可以压缩、重排和改写措辞，但不得提高事实强度；“称/据报/计划/可能”不能改写成“证实/已完成/必然”。\n- 输入证据不足时宁可更短，不要把标题扩写成看似完整的新闻。\n- 只输出最终标题或摘要本身，不要解释规则。`;
+
 export interface OptimizationArtifacts {
   timestamp: string;
   version: string;
@@ -73,7 +77,13 @@ export class AxOptimizedNewsProcessorSimplified {
 
       console.log(`✅ 已加载优化产物: ${filename}`);
       console.log(`📦 版本: ${this.currentVersion}`);
-      console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);
+      const titleAccuracy = this.optimizedProgram.titleProgram.stats.accuracy;
+      const summaryAccuracy = this.optimizedProgram.summaryProgram.stats.accuracy;
+      if (typeof titleAccuracy === 'number' && typeof summaryAccuracy === 'number') {
+        console.log(`📊 已测量历史指标: 标题${titleAccuracy}, 摘要${summaryAccuracy}`);
+      } else {
+        console.log('📊 当前生成配置未携带自报质量分；质量由独立评审/holdout 决定');
+      }
       return true;
     } catch (error) {
       console.error(`❌ 加载优化产物失败: ${error}`);
@@ -90,7 +100,13 @@ export class AxOptimizedNewsProcessorSimplified {
       this.currentVersion = artifacts.version || 'unknown';
 
       console.log(`🔥 热重载成功: 版本 ${this.currentVersion}`);
-      console.log(`📊 模型性能: 标题${this.optimizedProgram.titleProgram.stats.accuracy}, 摘要${this.optimizedProgram.summaryProgram.stats.accuracy}`);
+      const titleAccuracy = this.optimizedProgram.titleProgram.stats.accuracy;
+      const summaryAccuracy = this.optimizedProgram.summaryProgram.stats.accuracy;
+      if (typeof titleAccuracy === 'number' && typeof summaryAccuracy === 'number') {
+        console.log(`📊 已测量历史指标: 标题${titleAccuracy}, 摘要${summaryAccuracy}`);
+      } else {
+        console.log('📊 当前生成配置未携带自报质量分；质量由独立评审/holdout 决定');
+      }
       return true;
     } catch (error) {
       console.error(`❌ 热重载失败: ${error}`);
@@ -198,7 +214,8 @@ export class AxOptimizedNewsProcessorSimplified {
         title: title,
         body: body,
         footer: 'AX智能优化',
-        optimizationUsed: true
+        optimizationUsed: true,
+        generationProfileVersion: EVIDENCE_BOUNDED_DIRECT_PROFILE_VERSION,
       };
     } catch (error) {
       console.error('❌ LLM优化处理失败:', error);
@@ -240,7 +257,7 @@ export class AxOptimizedNewsProcessorSimplified {
     newsContent: string,
     type: 'title' | 'summary'
   ): string {
-    let prompt = `${instruction}\n\n`;
+    let prompt = `${EVIDENCE_BOUNDED_NEWS_CONTRACT}\n\n任务要求：${instruction}\n\n`;
     
     // 添加few-shot示例
     if (demos && demos.length > 0) {

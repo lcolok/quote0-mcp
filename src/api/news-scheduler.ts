@@ -1,4 +1,9 @@
 import { processNews, computeNewsFingerprint } from './news-processing-service.js';
+import { assessProducedContentQuality, assessSourceEvidence } from './content-quality.js';
+import {
+  markUniversalResearchPending,
+  universalResearchEnabled,
+} from './universal-research-policy.js';
 import { devicePusher } from './device-pusher.js';
 import { enqueueDeliveriesForContent, enqueuePreRenderedImageDeliveries } from './delivery-enqueue.js';
 import { resolveSchedulerExtraRenderers } from './scheduler-extra-renderers.js';
@@ -591,6 +596,11 @@ export class NewsScheduler {
       }
 
       const candidate = selection.candidate;
+      const sourceQuality = assessSourceEvidence({
+        title: candidate.context.title,
+        content: candidate.context.content,
+        description: candidate.context.description,
+      });
 
       // producer 用 news renderer（只渲染上传 MinIO 不推送设备）；
       // 但 news renderer 默认 640×384，必须注入设备尺寸 296×152 保持一致
@@ -638,30 +648,49 @@ export class NewsScheduler {
               border: request.options?.border,
             });
 
-          try {
-            producerRenderableData = await buildRenderableData(request.processor);
-          } catch (llmError) {
-            // LLM 类 processor 失败（402 欠费 / 超时 / 连接错）时确定性降级为
-            // passthrough：产物质量下降，但产线不停。若 passthrough 也失败，
-            // 说明坏的是 RSS/数据源本身而非 LLM，抛原始错误交由上层失败路径处理。
-            // 一次降级即定局：不做 LLM 重试/退避/provider 熔断（Phase 2 议题）。
-            if (PRODUCER_LLM_PROCESSORS.has(request.processor || '')) {
-              const llmMessage = llmError instanceof Error ? llmError.message : String(llmError);
-              console.warn(
-                `⚠️ producer LLM 处理失败，降级为 passthrough 继续产出: ` +
-                `job=${job.config.id} processor=${request.processor} 原始错误=${llmMessage}`,
-              );
-              try {
-                producerRenderableData = await buildRenderableData(PRODUCER_FALLBACK_PROCESSOR);
-              } catch {
-                // passthrough 同样失败 → 数据源问题，保持现状抛原始错误
+          if (
+            sourceQuality.mode === 'seed-only'
+            && PRODUCER_LLM_PROCESSORS.has(request.processor || '')
+          ) {
+            // Evidence-bounded generation: only a true seed-only payload (no semantic
+            // proposition beyond headline/boilerplate) skips publishable Direct synthesis.
+            // Sparse but meaningful evidence still reaches the LLM and is later marked
+            // Research-recommended. This is deliberately not a character-count rule.
+            const reason = `content_quality:${sourceQuality.reasons.join(',')}`;
+            console.warn(
+              `⚠️ producer 源只有 seed/boilerplate，禁止 publishable Direct synthesis；保留素材并交给 Research: `
+                + `job=${job.config.id} processor=${request.processor} ${reason}`,
+            );
+            producerRenderableData = await buildRenderableData(PRODUCER_FALLBACK_PROCESSOR);
+            producerDegraded = true;
+            producerDegradeReason = reason;
+            producerEffectiveProcessor = PRODUCER_FALLBACK_PROCESSOR;
+          } else {
+            try {
+              producerRenderableData = await buildRenderableData(request.processor);
+            } catch (llmError) {
+              // LLM 类 processor 失败（402 欠费 / 超时 / 连接错）时确定性降级为
+              // passthrough：产物质量下降，但产线不停。若 passthrough 也失败，
+              // 说明坏的是 RSS/数据源本身而非 LLM，抛原始错误交由上层失败路径处理。
+              // 一次降级即定局：不做 LLM 重试/退避/provider 熔断（Phase 2 议题）。
+              if (PRODUCER_LLM_PROCESSORS.has(request.processor || '')) {
+                const llmMessage = llmError instanceof Error ? llmError.message : String(llmError);
+                console.warn(
+                  `⚠️ producer LLM 处理失败，降级为 passthrough 继续产出: ` +
+                  `job=${job.config.id} processor=${request.processor} 原始错误=${llmMessage}`,
+                );
+                try {
+                  producerRenderableData = await buildRenderableData(PRODUCER_FALLBACK_PROCESSOR);
+                } catch {
+                  // passthrough 同样失败 → 数据源问题，保持现状抛原始错误
+                  throw llmError;
+                }
+                producerDegraded = true;
+                producerDegradeReason = llmMessage;
+                producerEffectiveProcessor = PRODUCER_FALLBACK_PROCESSOR;
+              } else {
                 throw llmError;
               }
-              producerDegraded = true;
-              producerDegradeReason = llmMessage;
-              producerEffectiveProcessor = PRODUCER_FALLBACK_PROCESSOR;
-            } else {
-              throw llmError;
             }
           }
           const newsRenderer = renderingRegistry.get('news');
@@ -825,6 +854,26 @@ export class NewsScheduler {
           category: (result.result as any).category || candidate.context.category || job.config.category,
           publishTime: (result.result as any).publishTime || candidate.context.publishTime
         };
+      }
+
+      if (processedContent) {
+        const contentQuality = assessProducedContentQuality(rawContent, processedContent);
+        processedContent.metadata = {
+          ...(processedContent.metadata && typeof processedContent.metadata === 'object'
+            ? processedContent.metadata
+            : {}),
+          contentQuality,
+        };
+        if (contentQuality.disposition === 'hold') {
+          console.warn(
+            `🛡️ Content Quality HOLD fingerprint=${candidate.fingerprint} `
+              + `recommendation=${contentQuality.recommendation} reasons=${contentQuality.reasons.join(',')} `
+              + `unsupported=${contentQuality.unsupportedHardFacts.join(',') || '-'}`,
+          );
+        }
+        if (job.config.jobRole === 'producer' && universalResearchEnabled()) {
+          processedContent = markUniversalResearchPending(processedContent);
+        }
       }
 
       let imagePath: string | undefined;
@@ -2110,6 +2159,11 @@ export class NewsScheduler {
       let item = await this.postgres.query(`
         SELECT * FROM content_inventory
         WHERE state='ready'
+          AND COALESCE(processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
+          AND (
+            COALESCE(processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
+            OR processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+          )
           AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
         ORDER BY created_at ASC
         LIMIT 1
@@ -2120,6 +2174,11 @@ export class NewsScheduler {
         item = await this.postgres.query(`
           SELECT * FROM content_inventory
           WHERE state='pushed'
+            AND COALESCE(processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
+            AND (
+              COALESCE(processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
+              OR processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+            )
             AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
           ORDER BY last_pushed_at ASC NULLS FIRST
           LIMIT 1

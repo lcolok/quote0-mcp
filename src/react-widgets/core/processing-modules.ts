@@ -672,7 +672,6 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
       originalContent: rawData.content,
       processedContent: result.body,
       summary: result.body,
-      qualityScore: 0.95, // AX优化的高质量分数
       processingMetadata: {
         processor: this.name,
         model: usedModel,
@@ -680,7 +679,8 @@ export class AxOptimizedProcessingModule extends BaseProcessingModule {
         llm_model: usedModel,
         processedAt: new Date().toISOString(),
         processingTime,
-        confidence: 0.95
+        generationProfileVersion: result.generationProfileVersion,
+        evaluationStatus: 'unmeasured',
       },
       rawData
     };

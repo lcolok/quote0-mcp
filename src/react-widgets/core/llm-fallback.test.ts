@@ -229,5 +229,8 @@ describe('reasoning_content 被忽略（只取 choices[].message.content）', ()
     expect(out.title).toBe('REAL_CONTENT');
     expect(out.body).toBe('REAL_CONTENT');
     expect(out.title).not.toContain('HIDDEN_THINK');
+    expect(out.generationProfileVersion).toBe('evidence-bounded-direct/v1');
+    expect(createMock.mock.calls[0]?.[0]?.messages?.[0]?.content).toContain('只能使用“输入”中明确出现的事实');
+    expect(createMock.mock.calls[1]?.[0]?.messages?.[0]?.content).toContain('不得提高事实强度');
   });
 });

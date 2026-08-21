@@ -117,6 +117,125 @@ function validateHttpUrl(value: string): boolean {
   }
 }
 
+function canonicalEvidenceUrl(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    parsed.hash = '';
+    for (const key of [...parsed.searchParams.keys()]) {
+      const normalized = key.toLowerCase();
+      if (normalized.startsWith('utm_') || ['fbclid', 'gclid', 'mc_cid', 'mc_eid'].includes(normalized)) {
+        parsed.searchParams.delete(key);
+      }
+    }
+    parsed.searchParams.sort();
+    parsed.hostname = parsed.hostname.toLowerCase();
+    if (parsed.pathname.length > 1) parsed.pathname = parsed.pathname.replace(/\/+$/u, '');
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+const RESEARCH_SOURCE_ROLE_RANK: Record<string, number> = {
+  official: 6,
+  primary: 5,
+  seed: 4,
+  secondary: 3,
+  community: 2,
+  syndicated: 1,
+};
+
+/**
+ * Normalizes only structurally equivalent Neuromancer finalizer output before the
+ * strict validator runs. This must never invent or rewrite factual text.
+ *
+ * Safe normalizations:
+ * - drop/merge duplicate evidence sources that resolve to the same canonical URL;
+ * - remap claim sourceIds to the retained source id;
+ * - keep only unique highlights that actually occur in message, capped at four.
+ *
+ * Substantive problems (unsupported claims, oversized title/message, invalid URLs,
+ * missing evidence, conflicts) are deliberately left for the validator to reject.
+ */
+export function normalizeNeuromancerFinalArtifact(input: unknown): unknown {
+  if (!isPlainObject(input)) return input;
+  const normalized: Record<string, unknown> = { ...input };
+  const message = cleanString(normalized.message);
+
+  if (Array.isArray(normalized.highlights)) {
+    const highlights = cleanStringArray(normalized.highlights, 32)
+      .filter((highlight) => message.includes(highlight))
+      .slice(0, 4);
+    if (highlights.length) normalized.highlights = highlights;
+    else delete normalized.highlights;
+  }
+
+  if (!isPlainObject(normalized.metadata)) return normalized;
+  const metadata: Record<string, unknown> = { ...normalized.metadata };
+  normalized.metadata = metadata;
+  if (!isPlainObject(metadata.researchReceipt)) return normalized;
+
+  const receipt: Record<string, unknown> = { ...metadata.researchReceipt };
+  metadata.researchReceipt = receipt;
+  if (!Array.isArray(receipt.sources)) return normalized;
+
+  const retainedSources: Record<string, unknown>[] = [];
+  const canonicalToIndex = new Map<string, number>();
+  const sourceAliases = new Map<string, string>();
+
+  for (const raw of receipt.sources) {
+    if (!isPlainObject(raw)) {
+      retainedSources.push(raw as never);
+      continue;
+    }
+    const source = { ...raw };
+    const id = cleanString(source.id);
+    const url = cleanString(source.url);
+    const canonical = canonicalEvidenceUrl(url);
+    if (!canonical) {
+      retainedSources.push(source);
+      if (id) sourceAliases.set(id, id);
+      continue;
+    }
+
+    const existingIndex = canonicalToIndex.get(canonical);
+    if (existingIndex === undefined) {
+      canonicalToIndex.set(canonical, retainedSources.length);
+      retainedSources.push(source);
+      if (id) sourceAliases.set(id, id);
+      continue;
+    }
+
+    const existing = retainedSources[existingIndex];
+    const existingId = cleanString(existing.id);
+    const retainedId = existingId || id;
+    if (!existingId && id) existing.id = id;
+    if (id && retainedId) sourceAliases.set(id, retainedId);
+    if (existingId && retainedId) sourceAliases.set(existingId, retainedId);
+
+    const existingRole = cleanString(existing.role);
+    const candidateRole = cleanString(source.role);
+    if ((RESEARCH_SOURCE_ROLE_RANK[candidateRole] || 0) > (RESEARCH_SOURCE_ROLE_RANK[existingRole] || 0)) {
+      existing.role = source.role;
+      if (cleanString(source.title)) existing.title = source.title;
+      if (cleanString(source.note)) existing.note = source.note;
+    }
+  }
+  receipt.sources = retainedSources;
+
+  if (Array.isArray(receipt.claims)) {
+    receipt.claims = receipt.claims.map((raw) => {
+      if (!isPlainObject(raw) || !Array.isArray(raw.sourceIds)) return raw;
+      const sourceIds = cleanStringArray(raw.sourceIds, 8)
+        .map((sourceId) => sourceAliases.get(sourceId) || sourceId);
+      return { ...raw, sourceIds: [...new Set(sourceIds)] };
+    });
+  }
+
+  return normalized;
+}
+
 function validateResearchReceipt(value: unknown, errors: string[]): NeuromancerResearchReceipt | undefined {
   if (value === undefined) return undefined;
   if (!isPlainObject(value)) {
@@ -174,6 +293,7 @@ function validateResearchReceipt(value: unknown, errors: string[]): NeuromancerR
   if (rawSources.length < 1) errors.push('metadata.researchReceipt.sources 至少 1 项');
   if (rawSources.length > 8) errors.push('metadata.researchReceipt.sources 最多 8 项');
   const sourceIds = new Set<string>();
+  const sourceUrls = new Set<string>();
   const sources: NeuromancerResearchReceipt['sources'] = [];
   for (const [index, raw] of rawSources.slice(0, 8).entries()) {
     if (!isPlainObject(raw)) {
@@ -187,7 +307,15 @@ function validateResearchReceipt(value: unknown, errors: string[]): NeuromancerR
     const note = cleanString(raw.note);
     if (!id || id.length > 40) errors.push(`metadata.researchReceipt.sources[${index}].id 无效`);
     if (id && sourceIds.has(id)) errors.push(`metadata.researchReceipt.sources source id 重复: ${id}`);
-    if (!url || !validateHttpUrl(url)) errors.push(`metadata.researchReceipt.sources[${index}].url 必须是 http/https URL`);
+    if (!url || !validateHttpUrl(url)) {
+      errors.push(`metadata.researchReceipt.sources[${index}].url 必须是 http/https URL`);
+    } else {
+      const canonicalUrl = canonicalEvidenceUrl(url);
+      if (canonicalUrl && sourceUrls.has(canonicalUrl)) {
+        errors.push(`metadata.researchReceipt.sources canonical URL 重复: ${canonicalUrl}`);
+      }
+      if (canonicalUrl) sourceUrls.add(canonicalUrl);
+    }
     if (!RESEARCH_SOURCE_ROLES.has(role)) errors.push(`metadata.researchReceipt.sources[${index}].role 无效`);
     if (title.length > 180) errors.push(`metadata.researchReceipt.sources[${index}].title 过长`);
     if (note.length > 320) errors.push(`metadata.researchReceipt.sources[${index}].note 过长`);

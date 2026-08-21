@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto';
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
 import {
   NEUROMANCER_RESEARCH_RECEIPT_VERSION,
+  normalizeNeuromancerFinalArtifact,
   validateRenderableNews,
   type NeuromancerResearchReceipt,
 } from './renderable-news-intake.js';
 import {
   buildNeuromancerEvidenceFinalizationPrompt,
   buildNeuromancerResearchPrompt,
+  type NeuromancerEditorialDraft,
 } from './research-few-shot.js';
 import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
 
@@ -21,6 +23,8 @@ export interface ResearchCanaryConfig {
   enabled: boolean;
   baseUrl?: string;
   agentId: string;
+  researchProviderId?: string;
+  finalizerProviderId?: string;
   bearerToken?: string;
   requestTimeoutMs: number;
 }
@@ -117,6 +121,12 @@ export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): R
     enabled,
     ...(baseUrlRaw ? { baseUrl: normalizeBaseUrl(baseUrlRaw) } : {}),
     agentId: cleanString(env.STRAYLIGHT_RESEARCH_AGENT_ID) || 'pi-mono',
+    ...(cleanString(env.STRAYLIGHT_RESEARCH_PROVIDER_ID)
+      ? { researchProviderId: cleanString(env.STRAYLIGHT_RESEARCH_PROVIDER_ID) }
+      : {}),
+    ...(cleanString(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID)
+      ? { finalizerProviderId: cleanString(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID) }
+      : {}),
     ...(cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN)
       ? { bearerToken: cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN) }
       : {}),
@@ -193,6 +203,7 @@ export async function dispatchResearchCanary(
     body: JSON.stringify({
       message: buildNeuromancerResearchPrompt(seed, decision, runId),
       agentId: config.agentId,
+      ...(config.researchProviderId ? { providerId: config.researchProviderId } : {}),
       source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
     }),
   }, fetchImpl);
@@ -213,15 +224,24 @@ export async function dispatchResearchFinalization(
   runId: string,
   seed: ResearchSeed,
   evidencePacket: string,
-  errors: string[] = [],
+  decision: ResearchTriageDecision,
+  options: { errors?: string[]; directDraft?: NeuromancerEditorialDraft } = {},
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
 ): Promise<StraylightCanaryDispatch> {
   const payload = await requestJson(config, '/jobs', {
     method: 'POST',
     body: JSON.stringify({
-      message: buildNeuromancerEvidenceFinalizationPrompt(seed, evidencePacket, runId, errors),
+      message: buildNeuromancerEvidenceFinalizationPrompt(
+        seed,
+        evidencePacket,
+        runId,
+        decision,
+        options.errors || [],
+        options.directDraft,
+      ),
       agentId: config.agentId,
+      ...(config.finalizerProviderId ? { providerId: config.finalizerProviderId } : {}),
       source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
     }),
   }, fetchImpl);
@@ -412,8 +432,8 @@ function compactToolOutput(call: StraylightToolCall): string {
  * same document in both formatted/text fields and can exceed megabytes, so unwrap the
  * structured tool envelope, keep one bounded body plus provenance, and cap the whole packet.
  */
-export function buildResearchEvidencePacket(turns: StraylightThreadTurn[]): string {
-  const MAX_PACKET_CHARS = 6_000;
+export function buildResearchEvidencePacket(turns: StraylightThreadTurn[], maxPacketChars = 6_000): string {
+  const MAX_PACKET_CHARS = Math.max(2_000, Math.min(12_000, Math.round(maxPacketChars)));
   const calls = turns
     .filter((turn) => turn.participantType === 'agent')
     .flatMap((turn) => Array.isArray(turn.toolCalls) ? turn.toolCalls! : []);
@@ -468,15 +488,22 @@ function materializeArtifact(
   threadId: string,
   jobId: string,
   runtime: ResearchRuntimeReceipt,
+  decision: ResearchTriageDecision,
 ): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
-  const metadata = isPlainObject(candidate.metadata) ? { ...candidate.metadata } : {};
+  const normalizedCandidate = normalizeNeuromancerFinalArtifact(candidate) as Record<string, unknown>;
+  const metadata = isPlainObject(normalizedCandidate.metadata) ? { ...normalizedCandidate.metadata } : {};
   const rawReceipt = isPlainObject(metadata.researchReceipt) ? metadata.researchReceipt : {};
   const rawSources = Array.isArray(rawReceipt.sources) ? rawReceipt.sources : [];
   const rawClaims = Array.isArray(rawReceipt.claims) ? rawReceipt.claims : [];
   const policyErrors: string[] = [];
-  if (runtime.toolCalls > 6) policyErrors.push(`Research tool budget 超限: ${runtime.toolCalls} > 6`);
-  if (rawSources.length > 3) policyErrors.push(`Research source artifact budget 超限: ${rawSources.length} > 3`);
-  if (rawClaims.length > 4) policyErrors.push(`Research claim budget 超限: ${rawClaims.length} > 4`);
+  const budget = decision.budget;
+  if (!budget) policyErrors.push('Research decision 缺少 budget');
+  const toolCap = budget?.maxToolCalls ?? 0;
+  const sourceCap = budget ? budget.maxPostSeedArtifacts + 1 : 0;
+  const claimCap = budget?.maxPublishableClaims ?? 0;
+  if (runtime.toolCalls > toolCap) policyErrors.push(`Research tool budget 超限: ${runtime.toolCalls} > ${toolCap}`);
+  if (rawSources.length > sourceCap) policyErrors.push(`Research source artifact budget 超限: ${rawSources.length} > ${sourceCap}`);
+  if (rawClaims.length > claimCap) policyErrors.push(`Research claim budget 超限: ${rawClaims.length} > ${claimCap}`);
 
   const receipt = {
     ...rawReceipt,
@@ -495,7 +522,7 @@ function materializeArtifact(
     },
   };
   const validation = validateRenderableNews({
-    ...candidate,
+    ...normalizedCandidate,
     metadata: { ...metadata, researchReceipt: receipt },
   });
   if (!validation.ok) {
@@ -515,6 +542,7 @@ export async function inspectResearchCanary(
     jobId: string;
     threadId: string;
     phase: ResearchCanaryPhase;
+    decision: ResearchTriageDecision;
     priorRuntime?: ResearchRuntimeReceipt;
   },
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
@@ -545,13 +573,23 @@ export async function inspectResearchCanary(
   const jobStatus = cleanString(jobResult.snapshot?.status);
 
   if (params.phase === 'research') {
-    if (phaseRuntime.toolCalls > 6) {
+    const budget = params.decision.budget;
+    if (!budget) {
       return {
         ...base,
         status: 'invalid',
         jobStatus,
-        evidencePacket: buildResearchEvidencePacket(turns),
-        errors: [...errors, `Research tool budget 超限: ${phaseRuntime.toolCalls} > 6`],
+        errors: [...errors, 'Research decision 缺少 budget'],
+        retryable: false,
+      };
+    }
+    if (phaseRuntime.toolCalls > budget.maxToolCalls) {
+      return {
+        ...base,
+        status: 'invalid',
+        jobStatus,
+        evidencePacket: buildResearchEvidencePacket(turns, budget.maxEvidenceChars),
+        errors: [...errors, `Research tool budget 超限: ${phaseRuntime.toolCalls} > ${budget.maxToolCalls}`],
         retryable: false,
       };
     }
@@ -565,7 +603,7 @@ export async function inspectResearchCanary(
         ...base,
         status: 'research_complete',
         jobStatus,
-        evidencePacket: buildResearchEvidencePacket(turns),
+        evidencePacket: buildResearchEvidencePacket(turns, budget.maxEvidenceChars),
         errors: latestError ? [...errors, `Phase A agent 尾部错误已降级为 evidence-only: ${latestError}`] : errors,
         retryable: false,
       };
@@ -662,7 +700,7 @@ export async function inspectResearchCanary(
     };
   }
 
-  const materialized = materializeArtifact(candidate, params.seed, params.threadId, params.jobId, runtime);
+  const materialized = materializeArtifact(candidate, params.seed, params.threadId, params.jobId, runtime, params.decision);
   if (!materialized.artifact) {
     return {
       ...base,

@@ -119,18 +119,26 @@ export async function listNeuromancerReviewCandidates(
             rr.input_snapshot,
             rr.completed_at,
             rr.runtime_receipt,
-            ci.processed_content,
+            COALESCE(rr.direct_snapshot, active_promotion.previous_processed_content, ci.processed_content) AS processed_content,
             review.id AS review_id,
             review.choice AS review_choice,
             review.updated_at AS review_updated_at
        FROM research_runs rr
        JOIN content_inventory ci ON ci.id = rr.source_inventory_id
+       LEFT JOIN LATERAL (
+         SELECT promotion.previous_processed_content
+           FROM neuromancer_artifact_promotions promotion
+          WHERE promotion.research_run_id = rr.id
+            AND promotion.state = 'active'
+          ORDER BY promotion.promoted_at DESC
+          LIMIT 1
+       ) active_promotion ON true
        LEFT JOIN neuromancer_artifact_reviews review
          ON review.research_run_id = rr.id
         AND review.comparison_version = $1
       WHERE rr.state = 'completed'
         AND rr.result_artifact IS NOT NULL
-        AND ci.processed_content IS NOT NULL
+        AND COALESCE(rr.direct_snapshot, active_promotion.previous_processed_content, ci.processed_content) IS NOT NULL
         AND ($2::boolean = false OR review.id IS NULL)
       ORDER BY rr.completed_at DESC NULLS LAST, rr.created_at DESC
       LIMIT $3`,
@@ -159,7 +167,7 @@ export async function listNeuromancerReviewCandidates(
 export async function getNeuromancerReviewPair(db: PostgresDatabase, runId: string) {
   const result = await db.query(
     `SELECT rr.*,
-            ci.processed_content,
+            COALESCE(rr.direct_snapshot, active_promotion.previous_processed_content, ci.processed_content) AS processed_content,
             ci.raw_content,
             ci.title AS inventory_title,
             review.id AS review_id,
@@ -181,6 +189,14 @@ export async function getNeuromancerReviewPair(db: PostgresDatabase, runId: stri
             review.updated_at AS review_updated_at
        FROM research_runs rr
        JOIN content_inventory ci ON ci.id = rr.source_inventory_id
+       LEFT JOIN LATERAL (
+         SELECT promotion.previous_processed_content
+           FROM neuromancer_artifact_promotions promotion
+          WHERE promotion.research_run_id = rr.id
+            AND promotion.state = 'active'
+          ORDER BY promotion.promoted_at DESC
+          LIMIT 1
+       ) active_promotion ON true
        LEFT JOIN neuromancer_artifact_reviews review
          ON review.research_run_id = rr.id
         AND review.comparison_version = $2

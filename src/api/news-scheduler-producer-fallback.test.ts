@@ -152,6 +152,7 @@ describe('runJob(producer) — LLM 失败时确定性降级到 passthrough', () 
   const realLog = console.log;
 
   beforeEach(() => {
+    delete process.env.QUOTE0_RESEARCH_UNIVERSAL_ENABLED;
     scheduler = new NewsScheduler();
     // 隔离出 producer 处理段：候选选择/状态持久化/软上限都不是本次施工范围
     scheduler.persistSchedulerState = async () => {};
@@ -172,8 +173,8 @@ describe('runJob(producer) — LLM 失败时确定性降级到 passthrough', () 
             publishTime: '2026-08-03T00:00:00.000Z',
             source: 'solidot',
             category: 'technology',
-            content: '正文',
-            description: '摘要',
+            content: '这是一段足够完整的生产新闻正文，用于验证LLM处理失败时的fallback行为，不应被内容证据门控误判为薄源。'.repeat(8),
+            description: '足够完整的新闻摘要，用于测试正常Direct处理链路。',
             fingerprint: 'fp-producer',
           },
         },
@@ -241,6 +242,135 @@ describe('runJob(producer) — LLM 失败时确定性降级到 passthrough', () 
     const degradeWarn = warnings.filter((w) => w.includes('降级为 passthrough'));
     expect(degradeWarn).toHaveLength(1);
     expect(degradeWarn[0]).toContain('402 Insufficient Balance');
+  });
+
+  it('seed-only 正文 → 禁止 publishable Direct synthesis，保留素材并写入 content-quality HOLD', async () => {
+    scheduler.selectCandidate = async () => ({
+      selection: {
+        candidate: {
+          index: 0,
+          fingerprint: 'fp-thin-infoq',
+          publishTime: '2026-08-20T00:00:00.000Z',
+          pushCount: 0,
+          lastPushedAt: undefined,
+          context: {
+            title: '将可理解性作为架构特性：无法理解的系统无法安全演进',
+            link: 'https://example.com/infoq',
+            publishTime: '2026-08-20T00:00:00.000Z',
+            source: 'infoq-cn',
+            category: 'technology',
+            content: '点击查看原文>',
+            description: '',
+            fingerprint: 'fp-thin-infoq',
+          },
+        },
+        layer: 'fresh',
+        isFallback: false,
+        pushCountBefore: 0,
+        coolingElapsedMs: undefined,
+        reasons: [],
+        strategySnapshot: {},
+        poolSize: 10,
+        totalCandidates: 10,
+      },
+      attempts: [],
+      totalCandidates: 10,
+      poolSize: 10,
+    });
+    renderableBehavior = async (processor) => {
+      if (processor === 'ax-optimized') throw new Error('LLM must not be called for thin evidence');
+      return {
+        ...PASSTHROUGH_OUTPUT,
+        title: '将可理解性作为架构特性：无法理解的系统无法安全演进',
+        message: '点击查看原文>',
+      };
+    };
+
+    await scheduler.runJob(makeProducerJob());
+    restore();
+
+    expect(getRenderableCalls.map((call) => call.processor)).toEqual(['passthrough']);
+    const content = inventoryInsert()!.processedContent;
+    expect(content.degraded).toBe(true);
+    expect(content.degradedReason).toContain('content_quality:');
+    expect(content.metadata.contentQuality.disposition).toBe('hold');
+    expect(content.metadata.contentQuality.recommendation).toBe('research-required');
+    expect(content.metadata.contentQuality.mode).toBe('seed-only');
+    expect(content.metadata.contentQuality.reasons).toContain('no-semantic-body');
+  });
+
+  it('短但有语义事实的正文不会因为字符少而跳过 Direct synthesis', async () => {
+    scheduler.selectCandidate = async () => ({
+      selection: {
+        candidate: {
+          index: 0,
+          fingerprint: 'fp-short-meaningful',
+          publishTime: '2026-08-03T00:00:00.000Z',
+          pushCount: 0,
+          lastPushedAt: undefined,
+          context: {
+            title: 'FDA新药审批进展',
+            link: 'https://example.com/fda',
+            publishTime: '2026-08-03T00:00:00.000Z',
+            source: 'wire',
+            category: 'technology',
+            content: 'FDA批准新药',
+            description: '',
+            fingerprint: 'fp-short-meaningful',
+          },
+        },
+        layer: 'fresh',
+        isFallback: false,
+        pushCountBefore: 0,
+        coolingElapsedMs: undefined,
+        reasons: [],
+        strategySnapshot: {},
+        poolSize: 10,
+        totalCandidates: 10,
+      },
+      attempts: [],
+      totalCandidates: 10,
+      poolSize: 10,
+    });
+    renderableBehavior = async (processor) => {
+      if (processor !== 'ax-optimized') throw new Error(`unexpected processor ${processor}`);
+      return {
+        ...LLM_OUTPUT,
+        title: 'FDA批准新药',
+        message: 'FDA批准新药',
+        source: 'wire',
+        link: 'https://example.com/fda',
+      };
+    };
+
+    await scheduler.runJob(makeProducerJob());
+    restore();
+
+    expect(getRenderableCalls.map((call) => call.processor)).toEqual(['ax-optimized']);
+    const content = inventoryInsert()!.processedContent;
+    expect(content.degraded).toBeUndefined();
+    expect(content.metadata.contentQuality.mode).toBe('sparse');
+    expect(content.metadata.contentQuality.disposition).toBe('review');
+    expect(content.metadata.contentQuality.recommendation).toBe('research-recommended');
+  });
+
+  it('universal mode keeps the Direct result only as a pending draft until Neuromancer digests evidence', async () => {
+    process.env.QUOTE0_RESEARCH_UNIVERSAL_ENABLED = 'true';
+    renderableBehavior = async () => LLM_OUTPUT;
+
+    try {
+      await scheduler.runJob(makeProducerJob());
+      const content = inventoryInsert()!.processedContent;
+      expect(content.metadata.contentQuality.disposition).toBe('deliver');
+      expect(content.metadata.researchGate).toEqual(expect.objectContaining({
+        schemaVersion: 'universal-evidence-research/v1',
+        required: true,
+        state: 'pending',
+      }));
+    } finally {
+      delete process.env.QUOTE0_RESEARCH_UNIVERSAL_ENABLED;
+      restore();
+    }
   });
 
   it('LLM 连接超时 → 同样降级（不只认 402）', async () => {

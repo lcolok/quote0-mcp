@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   buildRenderablePushContent,
   minioImagePathFromRenderedImages,
+  normalizeNeuromancerFinalArtifact,
   normalizeRenderableDeviceIds,
   validateRenderableNews,
 } from './renderable-news-intake.js';
@@ -84,6 +85,27 @@ describe('validateRenderableNews', () => {
     expect(result.data.metadata?.researchReceipt?.seed?.content).toBe('点击查看原文>');
   });
 
+  it('rejects the same evidence page when tracking params or source ids try to make it look like multiple sources', () => {
+    const result = validateRenderableNews({
+      ...VALID,
+      metadata: {
+        researchReceipt: {
+          schemaVersion: 'neuromancer-research/v1',
+          agent: 'neuromancer',
+          sources: [
+            { id: 'seed', url: 'https://www.infoq.cn/article/abc?utm_source=rss&utm_medium=article', role: 'seed' },
+            { id: 'secondary', url: 'https://www.infoq.cn/article/abc', role: 'secondary' },
+          ],
+          claims: [{ text: '同一主张', sourceIds: ['seed'], status: 'supported' }],
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes('canonical URL 重复'))).toBe(true);
+    }
+  });
+
   it('fails closed when a claim cites an unknown source id', () => {
     const result = validateRenderableNews({
       ...VALID,
@@ -98,6 +120,37 @@ describe('validateRenderableNews', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors).toContain('metadata.researchReceipt.claims[0] 引用了未知 sourceId: missing');
+  });
+
+  it('normalizes the real universal digest failure shape without changing factual text', () => {
+    const message = '生物学文章讨论科研体验，正文中的细胞、实验、学习和兴趣构成核心线索。';
+    const normalized = normalizeNeuromancerFinalArtifact({
+      ...VALID,
+      message,
+      highlights: ['生物学', '细胞', '实验', '学习', '兴趣', '不存在'],
+      metadata: {
+        researchReceipt: {
+          schemaVersion: 'neuromancer-research/v1',
+          agent: 'neuromancer',
+          sources: [
+            { id: 'seed', url: 'https://example.com/biology?utm_source=hn', role: 'seed' },
+            { id: 'primary', url: 'https://example.com/biology', role: 'primary', title: 'Primary article' },
+          ],
+          claims: [
+            { text: '正文主张', sourceIds: ['seed', 'primary'], status: 'supported' },
+          ],
+        },
+      },
+    }) as any;
+
+    expect(normalized.message).toBe(message);
+    expect(normalized.highlights).toEqual(['生物学', '细胞', '实验', '学习']);
+    expect(normalized.metadata.researchReceipt.sources).toHaveLength(1);
+    expect(normalized.metadata.researchReceipt.sources[0].id).toBe('seed');
+    expect(normalized.metadata.researchReceipt.sources[0].role).toBe('primary');
+    expect(normalized.metadata.researchReceipt.claims[0].sourceIds).toEqual(['seed']);
+    const validation = validateRenderableNews(normalized);
+    expect(validation.ok).toBe(true);
   });
 });
 

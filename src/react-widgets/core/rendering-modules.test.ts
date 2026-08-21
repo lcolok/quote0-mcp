@@ -87,6 +87,27 @@ describe("DevicePushRenderingModule", () => {
       // 'ax-optimized' 不包含大写 'AX'，因此会走 else 分支返回 "RSS智能"
       expect(result.signature).toBe("RSS智能");
     });
+
+    it("does not turn an unmeasured AX generator into a fake Q score", () => {
+      const result = renderer.transformToRenderable(
+        {
+          optimizedTitle: "证据约束标题",
+          summary: "仅保留输入明确事实。",
+          rawData: { source: "rss", publishTime: "2026-08-20T00:00:00Z" },
+          processingMetadata: {
+            processor: "AX优化处理器",
+            generationProfileVersion: "evidence-bounded-direct/v1",
+            evaluationStatus: "unmeasured",
+          },
+        } as any,
+        {}
+      );
+
+      expect(result.signature).toBe("AI优化");
+      expect(result.signature).not.toContain("Q");
+      expect(result.metadata?.processingMetadata?.evaluationStatus).toBe("unmeasured");
+      expect(result.metadata).not.toHaveProperty("qualityScore");
+    });
   });
 
   describe("render", () => {

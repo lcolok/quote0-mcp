@@ -22,6 +22,7 @@ export interface ResearchRunRecord {
   straylightThreadId?: string;
   straylightThreadIds: string[];
   evidenceSnapshot?: string;
+  directSnapshot?: Record<string, unknown>;
   attempts: number;
   resultArtifact?: RenderableDataItem;
   runtimeReceipt?: ResearchRuntimeReceipt;
@@ -50,6 +51,7 @@ function fromRow(row: any): ResearchRunRecord {
     ...(row.straylight_thread_id ? { straylightThreadId: String(row.straylight_thread_id) } : {}),
     straylightThreadIds: Array.isArray(row.straylight_thread_ids) ? row.straylight_thread_ids.map(String) : [],
     ...(row.evidence_snapshot ? { evidenceSnapshot: String(row.evidence_snapshot) } : {}),
+    ...(row.direct_snapshot ? { directSnapshot: row.direct_snapshot as Record<string, unknown> } : {}),
     attempts: Number(row.attempts || 0),
     ...(row.result_artifact ? { resultArtifact: row.result_artifact as RenderableDataItem } : {}),
     ...(row.runtime_receipt ? { runtimeReceipt: row.runtime_receipt as ResearchRuntimeReceipt } : {}),
@@ -72,6 +74,7 @@ export async function createResearchRun(
     agentId: string;
     trigger?: 'manual' | 'inventory-auto';
     sourceInventoryId?: number;
+    directSnapshot?: Record<string, unknown>;
     seed: ResearchSeed;
     triage: ResearchTriageDecision;
   },
@@ -79,8 +82,8 @@ export async function createResearchRun(
   const result = await db.query(
     `INSERT INTO research_runs (
        id, mode, fingerprint, idempotency_key, state, policy_version, agent_id,
-       trigger, source_inventory_id, input_snapshot, triage
-     ) VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9::jsonb, $10::jsonb)
+       trigger, source_inventory_id, direct_snapshot, input_snapshot, triage
+     ) VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb)
      ON CONFLICT (idempotency_key) DO UPDATE SET updated_at = research_runs.updated_at
      RETURNING *`,
     [
@@ -92,6 +95,7 @@ export async function createResearchRun(
       input.agentId,
       input.trigger || 'manual',
       input.sourceInventoryId ?? null,
+      input.directSnapshot ? JSON.stringify(input.directSnapshot) : null,
       JSON.stringify(input.seed),
       JSON.stringify(input.triage),
     ],

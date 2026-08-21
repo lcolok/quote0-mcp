@@ -136,12 +136,12 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       'api': 'API实时'
     };
     
-    // 根据处理器类型生成签名
+    // 处理器只能声明生成身份，不能把未测量的自评分伪装成质量事实。
     let signature = '';
     const processorName = processedData.processingMetadata?.processor || 'unknown';
     
     if (processorName.includes('AX')) {
-      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+      signature = 'AI优化';
     } else if (processorName.includes('LLM')) {
       signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
     } else {
@@ -161,7 +161,7 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
       metadata: {
         originalTitle: processedData.originalTitle,
         processingMetadata: processedData.processingMetadata,
-        qualityScore: processedData.qualityScore
+        ...(typeof processedData.qualityScore === 'number' ? { qualityScore: processedData.qualityScore } : {})
       }
     };
   }
@@ -382,12 +382,12 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
       'api': 'API实时'
     };
     
-    // 根据处理器类型生成签名
+    // 生成器身份不是质量评分；真实质量来自人工/holdout 评估。
     let signature = '';
     const processorName = processedData.processingMetadata?.processor || 'unknown';
     
     if (processorName.includes('AX')) {
-      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+      signature = 'AI优化';
     } else if (processorName.includes('LLM')) {
       signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
     } else {
@@ -407,7 +407,7 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
       metadata: {
         originalTitle: processedData.originalTitle,
         processingMetadata: processedData.processingMetadata,
-        qualityScore: processedData.qualityScore
+        ...(typeof processedData.qualityScore === 'number' ? { qualityScore: processedData.qualityScore } : {})
       }
     };
   }
@@ -564,7 +564,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
     let signature = '';
     const processorName = processedData.processingMetadata?.processor || 'unknown';
     if (processorName.includes('AX')) {
-      signature = `AI优化·Q${Math.round((processedData.qualityScore || 0.85) * 100)}`;
+      signature = 'AI优化';
     } else if (processorName.includes('LLM')) {
       signature = `AI智能·${processedData.processingMetadata?.model || 'LLM'}`;
     } else {
@@ -584,7 +584,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
       metadata: {
         originalTitle: processedData.originalTitle,
         processingMetadata: processedData.processingMetadata,
-        qualityScore: processedData.qualityScore
+        ...(typeof processedData.qualityScore === 'number' ? { qualityScore: processedData.qualityScore } : {})
       }
     };
   }

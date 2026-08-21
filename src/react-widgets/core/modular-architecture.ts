@@ -39,6 +39,10 @@ export interface ProcessedDataItem {
     llm_model?: string;
     processedAt: string;
     processingTime: number;
+    /** Immutable generation/profile identity. This is not a quality score. */
+    generationProfileVersion?: string;
+    /** Quality must come from measured review/evaluation, never processor self-report. */
+    evaluationStatus?: 'unmeasured' | 'measured';
     confidence?: number;
   };
   rawData: RawDataItem;

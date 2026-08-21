@@ -1,91 +1,93 @@
 {
-  "timestamp": "2025-08-24T09:17:05.189Z",
-  "version": "1.0.0",
+  "timestamp": "2026-08-20T00:00:00.000Z",
+  "version": "evidence-bounded-direct/v1",
   "programs": {
     "titleProgram": {
-      "instruction": "将新闻内容优化为简洁标题，严格控制在20字符以内，突出核心事件和关键实体",
+      "instruction": "将输入新闻压缩为20字符以内的中文标题；只保留输入中明确出现的核心实体、动作与必要数字，不得补充外部事实",
       "demos": [
         {
           "input": {
-            "newsContent": "英伟达和富士通宣布合作开发下一代超级计算机..."
+            "newsContent": "标题: 英伟达与富士通合作开发下一代超级计算机富岳NEXT\n内容: 英伟达与富士通宣布合作开发下一代超级计算机富岳NEXT。"
           },
           "output": {
-            "optimizedTitle": "英伟达富士通合作富岳"
+            "optimizedTitle": "英伟达富士通合作富岳NEXT"
           },
-          "score": 0.95
+          "score": 0
         },
         {
           "input": {
-            "newsContent": "百度计划将其自动驾驶出租车服务扩展到海外市场..."
+            "newsContent": "标题: 百度自动驾驶出租车计划进入新加坡\n内容: 百度表示计划把Apollo自动驾驶出租车服务扩展到新加坡。"
           },
           "output": {
-            "optimizedTitle": "百度自驾出租车出海"
+            "optimizedTitle": "百度Apollo出租车拟进新加坡"
           },
-          "score": 0.92
+          "score": 0
         },
         {
           "input": {
-            "newsContent": "OpenAI发布最新研究报告称，其GPT-5模型在多项基准测试中超越了人类专家水平..."
+            "newsContent": "标题: OpenAI发布GPT-5研究报告\n内容: OpenAI发布研究报告，称GPT-5在多项基准测试中超过报告所比较的人类专家表现。"
           },
           "output": {
-            "optimizedTitle": "GPT-5超越人类专家"
+            "optimizedTitle": "OpenAI称GPT-5多项基准领先"
           },
-          "score": 0.94
+          "score": 0
         }
       ],
       "modelConfig": {
-        "temperature": 0.3,
+        "temperature": 0.2,
         "topP": 0.9,
         "maxTokens": 100
       },
       "stats": {
-        "trained": true,
-        "version": "1.0.0",
-        "accuracy": 0.94,
-        "compliance": 0.98
+        "trained": false,
+        "version": "evidence-bounded-direct/v1"
       }
     },
     "summaryProgram": {
-      "instruction": "将新闻内容提炼为200字符以内的精炼摘要，保留核心信息，适合水墨屏快速阅读",
+      "instruction": "将输入新闻压缩为180字符以内的中文摘要；只使用输入中明确出现的事实，保留不确定性措辞，不新增日期、金额、百分比、版本、数量、因果或结论",
       "demos": [
         {
           "input": {
-            "newsContent": "英伟达和富士通宣布合作开发下一代超级计算机..."
+            "newsContent": "标题: 英伟达与富士通合作开发下一代超级计算机富岳NEXT\n内容: 英伟达与富士通宣布合作开发下一代超级计算机富岳NEXT。"
           },
           "output": {
-            "summary": "英伟达与富士通合作开发\"富岳NEXT\"超算，采用Grace Hopper架构，性能提升10倍，2027年投用。"
+            "summary": "英伟达与富士通宣布合作开发下一代超级计算机富岳NEXT。"
           },
-          "score": 0.91
+          "score": 0
         },
         {
           "input": {
-            "newsContent": "百度计划将其自动驾驶出租车服务扩展到海外市场..."
+            "newsContent": "标题: 百度自动驾驶出租车计划进入新加坡\n内容: 百度表示计划把Apollo自动驾驶出租车服务扩展到新加坡。"
           },
           "output": {
-            "summary": "百度将自动驾驶出租车服务扩展至新加坡，基于Apollo平台，已在中国运营两年，服务超100万次。"
+            "summary": "百度表示计划将Apollo自动驾驶出租车服务扩展到新加坡。"
           },
-          "score": 0.89
+          "score": 0
+        },
+        {
+          "input": {
+            "newsContent": "标题: 某公司称三期试验达到主要终点\n内容: 公司公告称一项三期试验达到主要终点，完整数据尚待公布。"
+          },
+          "output": {
+            "summary": "公司公告称一项三期试验达到主要终点，完整数据尚待公布。"
+          },
+          "score": 0
         }
       ],
       "modelConfig": {
-        "temperature": 0.5,
+        "temperature": 0.2,
         "topP": 0.9,
-        "maxTokens": 512
+        "maxTokens": 384
       },
       "stats": {
-        "trained": true,
-        "version": "1.0.0",
-        "accuracy": 0.89,
-        "compliance": 0.95
+        "trained": false,
+        "version": "evidence-bounded-direct/v1"
       }
     }
   },
   "metadata": {
-    "trainedAt": "2025-08-24T09:17:05.191Z",
-    "framework": "ax-llm",
-    "optimizationType": "BootstrapFewShot",
-    "trainingDuration": 45000,
-    "totalExamplesTested": 24,
-    "finalPerformance": 0.91
+    "trainedAt": "2026-08-20T00:00:00.000Z",
+    "framework": "quote0-governed-profile",
+    "optimizationType": "manual-evidence-bounded-profile"
   }
 }

@@ -138,6 +138,13 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     expect(enqueueMock).toHaveBeenCalledTimes(1);
     expect(enqueueCalls[0]).toEqual({ contentId: 42 });
 
+    // consumer 只会消费质量门控未 HOLD 的内容；旧库存没有该 metadata 时保持兼容。
+    const readySelect = executedQueries.find((q) => /FROM content_inventory/i.test(q.sql) && /state='ready'/.test(q.sql));
+    expect(readySelect?.sql).toContain("contentQuality");
+    expect(readySelect?.sql).toContain("<> 'hold'");
+    expect(readySelect?.sql).toContain('researchGate');
+    expect(readySelect?.sql).toContain("->>'state' = 'ready'");
+
     // inventory 推进语义与 Phase 0 完全一致（SQL 未改动）
     const updates = inventoryUpdateQueries();
     expect(updates).toHaveLength(1);

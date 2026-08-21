@@ -17,6 +17,10 @@ const config: ResearchCanaryConfig = {
   agentId: 'pi-mono',
   requestTimeoutMs: 5_000,
 };
+const finalizerConfig: ResearchCanaryConfig = {
+  ...config,
+  finalizerProviderId: 'hy3',
+};
 
 const seed = {
   title: 'MCP 新规范取消会话',
@@ -25,6 +29,7 @@ const seed = {
   link: 'https://www.infoq.cn/example',
   category: 'technology',
 };
+const seedDecision = triageResearchCandidate({ seed });
 
 const phaseARuntime: ResearchRuntimeReceipt = {
   toolCalls: 2,
@@ -75,22 +80,30 @@ function phaseATurns(tools: Array<Record<string, unknown>>) {
   ];
 }
 
+function phaseBTurns(text: string, toolCalls: Array<Record<string, unknown>> = []) {
+  return [
+    { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },
+    { participantType: 'agent', state: 'completed', blocks: [{ type: 'text', text }], toolCalls },
+  ];
+}
+
 describe('research canary adapter', () => {
-  it('dispatches Phase A as bounded retrieval-only work to pi-mono', async () => {
+  it('dispatches seed-only Phase A as a deeper recovery run to pi-mono', async () => {
     let captured: any;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body));
       return jsonResponse({ jobId: 'job-a', threadId: 'thread-a' }, 202);
     }) as typeof fetch;
-    const decision = triageResearchCandidate({ seed });
 
-    const dispatched = await dispatchResearchCanary('run-1', seed, decision, config, fetchImpl);
+    const dispatched = await dispatchResearchCanary('run-1', seed, seedDecision, config, fetchImpl);
 
     expect(dispatched).toEqual({ jobId: 'job-a', threadId: 'thread-a' });
     expect(captured.agentId).toBe('pi-mono');
     expect(captured.source).toEqual({ channel: 'agent', identity: researchCanaryIdentity('run-1') });
     expect(captured.message).toContain('Phase A：只负责检索和事实核验');
-    expect(captured.message).toContain('最多 6 次工具调用');
+    expect(captured.message).toContain('研究模式：recovery');
+    expect(captured.message).toContain('最多 10 次工具调用');
+    expect(captured.message).toContain('Marginal-gain stop');
   });
 
   it('treats completed+empty with successful tool evidence as research_complete, not invalid', async () => {
@@ -100,15 +113,13 @@ describe('research canary adapter', () => {
     ];
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith('/jobs/job-a')) {
-        return jsonResponse({ jobId: 'job-a', threadId: 'thread-a', status: 'completed', response: '' });
-      }
+      if (url.endsWith('/jobs/job-a')) return jsonResponse({ jobId: 'job-a', threadId: 'thread-a', status: 'completed', response: '' });
       if (url.endsWith('/threads/thread-a')) return jsonResponse({ turns: phaseATurns(tools) });
       return jsonResponse({ error: 'not found' }, 404);
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-a', threadId: 'thread-a', phase: 'research',
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-a', threadId: 'thread-a', phase: 'research',
     }, config, fetchImpl);
 
     expect(result.status).toBe('research_complete');
@@ -118,8 +129,8 @@ describe('research canary adapter', () => {
     expect(result.evidencePacket).toContain('Official MCP evidence');
   });
 
-  it('unwraps duplicate Straylight envelopes and caps the deterministic evidence packet at 6k', () => {
-    const huge = 'x'.repeat(8_000);
+  it('unwraps duplicate Straylight envelopes and supports a decision-sized evidence packet', () => {
+    const huge = 'x'.repeat(10_000);
     const crawlEnvelope = JSON.stringify({
       status: 'completed',
       url: 'https://example.com/a',
@@ -139,19 +150,20 @@ describe('research canary adapter', () => {
       { name: 'search', status: 'completed', input: { q: 'MCP stateless' }, output: { content: [{ type: 'text', text: searchEnvelope }], details: {} } },
     ]);
 
-    const first = buildResearchEvidencePacket(turns as any);
-    const second = buildResearchEvidencePacket(turns as any);
+    const defaultPacket = buildResearchEvidencePacket(turns as any);
+    const deepPacket = buildResearchEvidencePacket(turns as any, 8_000);
 
-    expect(first).toBe(second);
-    expect(first.length).toBeLessThanOrEqual(6_000);
-    expect(first).toContain('[TRUNCATED');
-    expect(first).toContain('"body"');
-    expect(first).not.toContain('"formatted"');
-    expect(first).not.toContain('"text"');
-    expect(first).toContain('tool=search');
+    expect(defaultPacket.length).toBeLessThanOrEqual(6_000);
+    expect(deepPacket.length).toBeLessThanOrEqual(8_000);
+    expect(deepPacket.length).toBeGreaterThanOrEqual(defaultPacket.length);
+    expect(defaultPacket).toContain('[TRUNCATED');
+    expect(defaultPacket).toContain('"body"');
+    expect(defaultPacket).not.toContain('"formatted"');
+    expect(defaultPacket).not.toContain('"text"');
+    expect(defaultPacket).toContain('tool=search');
   });
 
-  it('dispatches Phase B on a fresh thread with the frozen packet and no threadId reuse', async () => {
+  it('dispatches Phase B on a fresh thread with the frozen packet and v3 decision', async () => {
     let captured: any;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body));
@@ -159,13 +171,23 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const dispatched = await dispatchResearchFinalization(
-      'run-1', seed, 'version=quote0-evidence-packet/v1\n[EVIDENCE 1] output=official', [], config, fetchImpl,
+      'run-1',
+      seed,
+      'version=quote0-evidence-packet/v1\n[EVIDENCE 1] output=official',
+      seedDecision,
+      { directDraft: { title: 'Direct draft', message: 'Direct detail' } },
+      finalizerConfig,
+      fetchImpl,
     );
 
     expect(dispatched).toEqual({ jobId: 'job-b', threadId: 'thread-b' });
     expect(captured.threadId).toBeUndefined();
+    expect(captured.providerId).toBe('hy3');
     expect(captured.message).toContain('Phase B finalizer');
+    expect(captured.message).toContain('researchMode=recovery');
     expect(captured.message).toContain('绝对禁止调用任何工具');
+    expect(captured.message).toContain('Direct Draft');
+    expect(captured.message).toContain('Direct detail');
     expect(captured.message).toContain('output=official');
   });
 
@@ -173,22 +195,13 @@ describe('research canary adapter', () => {
     const candidate = validCandidate();
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith('/jobs/job-b')) {
-        return jsonResponse({ jobId: 'job-b', threadId: 'thread-b', status: 'completed', response: JSON.stringify(candidate) });
-      }
-      if (url.endsWith('/threads/thread-b')) {
-        return jsonResponse({
-          turns: [
-            { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },
-            { participantType: 'agent', state: 'completed', blocks: [{ type: 'text', text: JSON.stringify(candidate) }], toolCalls: [] },
-          ],
-        });
-      }
+      if (url.endsWith('/jobs/job-b')) return jsonResponse({ jobId: 'job-b', threadId: 'thread-b', status: 'completed', response: JSON.stringify(candidate) });
+      if (url.endsWith('/threads/thread-b')) return jsonResponse({ turns: phaseBTurns(JSON.stringify(candidate)) });
       return jsonResponse({ error: 'not found' }, 404);
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
     }, config, fetchImpl);
 
     expect(result.status).toBe('completed');
@@ -202,23 +215,20 @@ describe('research canary adapter', () => {
 
   it('preserves the full rich seed in domain input while capping Receipt seed.content at 1000 chars', async () => {
     const candidate = validCandidate();
-    const richSeed = { ...seed, content: 'x'.repeat(6_341) };
+    const richSeed = { ...seed, content: '事实段一。事实段二；事实段三。'.repeat(500) };
+    const richDecision = triageResearchCandidate({ seed: richSeed, manual: true });
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith('/jobs/job-b')) {
-        return jsonResponse({ jobId: 'job-b', threadId: 'thread-b', status: 'completed', response: JSON.stringify(candidate) });
-      }
-      if (url.endsWith('/threads/thread-b')) {
-        return jsonResponse({ turns: phaseBTurns(JSON.stringify(candidate)) });
-      }
+      if (url.endsWith('/jobs/job-b')) return jsonResponse({ jobId: 'job-b', threadId: 'thread-b', status: 'completed', response: JSON.stringify(candidate) });
+      if (url.endsWith('/threads/thread-b')) return jsonResponse({ turns: phaseBTurns(JSON.stringify(candidate)) });
       return jsonResponse({ error: 'not found' }, 404);
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed: richSeed, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed: richSeed, decision: richDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
     }, config, fetchImpl);
 
-    expect(richSeed.content).toHaveLength(6_341);
+    expect(richSeed.content.length).toBeGreaterThan(1_000);
     expect(result.status).toBe('completed');
     expect(result.artifact?.metadata?.researchReceipt?.seed?.content).toHaveLength(1_000);
   });
@@ -228,19 +238,12 @@ describe('research canary adapter', () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/jobs/job-lost')) return jsonResponse({ error: 'job not found' }, 404);
-      if (url.endsWith('/threads/thread-b')) {
-        return jsonResponse({
-          turns: [
-            { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },
-            { participantType: 'agent', state: 'completed', blocks: [{ type: 'text', text: JSON.stringify(candidate) }], toolCalls: [] },
-          ],
-        });
-      }
+      if (url.endsWith('/threads/thread-b')) return jsonResponse({ turns: phaseBTurns(JSON.stringify(candidate)) });
       return jsonResponse({ error: 'not found' }, 404);
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-lost', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-lost', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
     }, config, fetchImpl);
 
     expect(result.status).toBe('completed');
@@ -261,7 +264,7 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-a', threadId: 'thread-a', phase: 'research',
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-a', threadId: 'thread-a', phase: 'research',
     }, config, fetchImpl);
 
     expect(result.status).toBe('needs_input');
@@ -269,8 +272,8 @@ describe('research canary adapter', () => {
     expect(result.errors.join(' ')).toContain('不自动代答');
   });
 
-  it('fails closed when Phase A exceeds the six-tool budget', async () => {
-    const tools = Array.from({ length: 7 }, (_, index) => ({
+  it('fails closed when Phase A exceeds the dynamic ten-tool recovery budget', async () => {
+    const tools = Array.from({ length: 11 }, (_, index) => ({
       name: index === 0 ? 'search' : 'crawl', status: 'completed', output: { index },
     }));
     const fetchImpl = (async (input: RequestInfo | URL) => {
@@ -280,23 +283,26 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-a', threadId: 'thread-a', phase: 'research',
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-a', threadId: 'thread-a', phase: 'research',
     }, config, fetchImpl);
 
     expect(result.status).toBe('invalid');
     expect(result.retryable).toBe(false);
-    expect(result.errors.join(' ')).toContain('tool budget 超限');
+    expect(result.errors.join(' ')).toContain('11 > 10');
   });
 
-  it('fails closed when the v2 final artifact exceeds 3 sources or 4 claims', async () => {
+  it('fails closed when a recovery artifact exceeds its five-source/five-claim cap', async () => {
     const candidate = validCandidate() as any;
-    candidate.metadata.researchReceipt.sources.push({
-      id: 'extra', url: 'https://example.com/extra', role: 'secondary',
-    });
+    candidate.metadata.researchReceipt.sources.push(
+      { id: 'extra1', url: 'https://example.com/extra1', role: 'secondary' },
+      { id: 'extra2', url: 'https://example.com/extra2', role: 'secondary' },
+      { id: 'extra3', url: 'https://example.com/extra3', role: 'secondary' },
+    );
     candidate.metadata.researchReceipt.claims.push(
       { text: 'claim-3', sourceIds: ['official'], status: 'supported' },
       { text: 'claim-4', sourceIds: ['official'], status: 'supported' },
       { text: 'claim-5', sourceIds: ['official'], status: 'supported' },
+      { text: 'claim-6', sourceIds: ['official'], status: 'supported' },
     );
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -305,8 +311,7 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization',
-      priorRuntime: { toolCalls: 2, crawlRequests: 2, searchRequests: 0, failedToolCalls: 0 },
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
     }, config, fetchImpl);
 
     expect(result.status).toBe('invalid');
@@ -320,16 +325,11 @@ describe('research canary adapter', () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/jobs/job-b')) return jsonResponse({ jobId: 'job-b', threadId: 'thread-b', status: 'completed', response: JSON.stringify(candidate) });
-      return jsonResponse({
-        turns: [
-          { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },
-          { participantType: 'agent', state: 'completed', blocks: [{ type: 'text', text: JSON.stringify(candidate) }], toolCalls: [{ name: 'search', status: 'completed' }] },
-        ],
-      });
+      return jsonResponse({ turns: phaseBTurns(JSON.stringify(candidate), [{ name: 'search', status: 'completed' }]) });
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
     }, config, fetchImpl);
 
     expect(result.status).toBe('invalid');
@@ -353,7 +353,7 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
     }, config, fetchImpl);
 
     expect(result.status).toBe('failed');
