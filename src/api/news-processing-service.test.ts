@@ -79,6 +79,63 @@ describe("computeNewsFingerprint", () => {
     });
     expect(fp1).toBe(fp2);
   });
+
+  it("uses an explicit subject identity even when RSS title/time metadata changes later", () => {
+    const fp1 = computeNewsFingerprint({
+      title: "Same RSS story",
+      link: "https://example.com/story?utm_source=rss",
+      publishTime: "2026-08-23T10:00:00Z",
+      identityKey: "infoq-cn::https://example.com/story",
+      source: "feed",
+      category: "technology",
+      fallback: "fb"
+    });
+    const fp2 = computeNewsFingerprint({
+      title: "Same RSS story (corrected title)",
+      link: "https://example.com/story?utm_source=rss",
+      publishTime: "2026-08-23T11:25:00Z",
+      identityKey: "infoq-cn::https://example.com/story",
+      source: "feed renamed later",
+      category: "programming",
+      fallback: "fb"
+    });
+    expect(fp1).toBe(fp2);
+  });
+
+  it("uses explicit identityPublishTime instead of an unstable display/fetch time", () => {
+    const common = {
+      title: "Same RSS story",
+      link: "https://example.com/story",
+      source: "feed",
+      category: "technology",
+      fallback: "fb"
+    };
+    const fp1 = computeNewsFingerprint({
+      ...common,
+      publishTime: "2026-08-23T10:00:00Z",
+      identityPublishTime: "2026-08-24T00:00:00Z"
+    });
+    const fp2 = computeNewsFingerprint({
+      ...common,
+      publishTime: "2026-08-23T11:00:00Z",
+      identityPublishTime: "2026-08-24T00:00:00.000Z"
+    });
+    expect(fp1).toBe(fp2);
+  });
+
+  it("allows RSS callers to explicitly exclude synthesized fetch time from identity", () => {
+    const common = {
+      title: "Feed item without pubDate",
+      link: "https://example.com/no-date",
+      source: "feed",
+      category: "technology",
+      identityPublishTime: null,
+      fallback: "fb"
+    };
+    const fp1 = computeNewsFingerprint({ ...common, publishTime: "2026-08-23T10:00:00Z" });
+    const fp2 = computeNewsFingerprint({ ...common, publishTime: "2026-08-23T11:00:00Z" });
+    expect(fp1).toBe(fp2);
+  });
 });
 
 describe("enrichContextFromResult", () => {

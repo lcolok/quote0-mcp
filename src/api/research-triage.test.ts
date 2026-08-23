@@ -119,7 +119,7 @@ describe('research triage', () => {
       maxPublishableClaims: 4,
       maxFinalizationRetries: 2,
       maxEvidenceChars: 5_000,
-      targetIndependentClusters: 1,
+      targetIndependentClusters: 2,
     });
   });
 

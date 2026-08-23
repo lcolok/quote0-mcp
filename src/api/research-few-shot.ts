@@ -136,9 +136,11 @@ function minimumCoverageContract(decision: ResearchTriageDecision): string {
   if (decision.researchMode === 'digest') {
     return `在允许 Marginal-gain stop 之前，digest 至少完成：
 - seed URL 可访问时确认 canonical 正文、作者/机构与发布时间；
-- 至少追踪 1 个正文直接给出的 primary/official/upstream 线索，或针对最关键事实执行 1 次 freshness/provenance targeted search；
+- **必须执行至少 1 次 freshness/provenance targeted search**，不能只 crawl seed 就宣布研究完成；
+- 搜索若发现有价值的 primary/official/upstream 或独立 corroboration，必须在剩余预算内 crawl/snapshot 后才能支持最终 claim；
+- 尝试取得至少 ${decision.budget?.targetIndependentClusters ?? 2} 个 provenance 独立来源簇；若客观上只有单一第一方/作者来源，必须先完成上述 targeted search 并确认没有新增独立高价值证据，才可 degraded stop；
 - 任何会改变标题或最终结论的新增硬事实，必须来自已 crawl/snapshot 的证据。
-若 seed 本身就是 primary/official 且正文完整，确认 provenance/freshness 后可以很快停止，不机械耗尽 4 次预算。`;
+即使 seed 本身就是 primary/official 且正文完整，也至少做一次定向 freshness/provenance search；随后若只有重复/低价值结果即可提前停止，不机械耗尽 4 次预算。`;
   }
   return '最低覆盖由当前 gap map 决定；一旦关键缺口已补齐且新增调用不再增加独立来源或可支持主张，即可提前停止。';
 }

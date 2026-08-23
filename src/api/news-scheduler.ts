@@ -25,6 +25,7 @@ import { weatherPlugin } from '../react-widgets/plugins/weather-plugin.js';
 import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWidget.js';
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { RECOMMENDED_RSS_SOURCE_IDS } from '../react-widgets/core/data-sources/rss-source-registry.js';
+import { buildRssIdentityKey } from '../react-widgets/core/data-sources/rss-data-source.js';
 import { recordRssSourceFailure, recordRssSourceSuccess } from './rss-source-health.js';
 import { MindResetDeviceClient } from '../image-sender/services/api/device-client.js';
 
@@ -144,6 +145,32 @@ interface CandidateArticle {
   pushCount: number;
   lastPushedAt?: string | null;
   context: NewsPushContext;
+}
+
+interface RssFingerprintAliasRow {
+  fingerprint?: string | null;
+  link?: string | null;
+  title?: string | null;
+}
+
+export function buildRssFingerprintAliasMap(
+  sourceId: string,
+  rows: RssFingerprintAliasRow[],
+): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const row of rows) {
+    const fingerprint = typeof row.fingerprint === 'string' ? row.fingerprint.trim() : '';
+    if (!fingerprint) continue;
+    const subjectKey = buildRssIdentityKey({
+      sourceId,
+      link: typeof row.link === 'string' ? row.link : undefined,
+      title: typeof row.title === 'string' ? row.title : undefined,
+    });
+    // Query rows newest-first. Keep the newest legacy fingerprint for a subject
+    // so rolling out stable subject identity does not create a one-time duplicate wave.
+    if (subjectKey && !aliases.has(subjectKey)) aliases.set(subjectKey, fingerprint);
+  }
+  return aliases;
 }
 
 interface LayerAttemptLog {
@@ -1478,16 +1505,49 @@ export class NewsScheduler {
 
     this.prepareIndexSequence(job, rawItems);
 
+    // Compatibility bridge for the stable RSS subject identity rollout. Existing
+    // inventory rows use the legacy fingerprint formula; reuse that fingerprint
+    // when the same canonical RSS subject is still in the active article window.
+    // Brand-new subjects receive the new stable subject fingerprint immediately.
+    const identityLookbackHours = Math.max(REPLAY_WINDOW_HOURS, this.strategyConfig.maxArticleAgeHoursRelaxed);
+    const aliasRows = await this.postgres.query(
+      `SELECT fingerprint, link, title
+         FROM content_inventory
+        WHERE source = $1
+          AND created_at >= CURRENT_TIMESTAMP - ($2 * INTERVAL '1 hour')
+          AND fingerprint IS NOT NULL
+        ORDER BY created_at DESC`,
+      [currentRssSource, identityLookbackHours],
+    );
+    const fingerprintAliases = buildRssFingerprintAliasMap(
+      currentRssSource,
+      aliasRows.rows as RssFingerprintAliasRow[],
+    );
+    let reusedLegacyFingerprintCount = 0;
+
     const candidates = rawItems.map((item, idx) => {
       const originalIndex = item.metadata?.originalIndex ?? item.metadata?.index ?? idx;
-      const fingerprint = computeNewsFingerprint({
+      const rssIdentityKey = typeof item.metadata?.rssIdentityKey === 'string'
+        ? item.metadata.rssIdentityKey
+        : '';
+      const stableFingerprint = computeNewsFingerprint({
         title: item.title,
         link: item.link,
         publishTime: item.publishTime,
+        identityKey: rssIdentityKey || null,
+        // RSS freshness/display time may be synthesized from the fetch clock when
+        // pubDate is missing or clamped. Explicit null means "identity has no time"
+        // rather than falling back to that unstable effective publishTime.
+        identityPublishTime: typeof item.metadata?.identityPublishTime === 'string'
+          ? item.metadata.identityPublishTime
+          : null,
         source: item.source,
         category: item.category || job.config.category,
         fallback: `${job.config.dataSource}:${job.config.rssSource}:${originalIndex}`
       });
+      const legacyAlias = rssIdentityKey ? fingerprintAliases.get(rssIdentityKey) : undefined;
+      const fingerprint = legacyAlias || stableFingerprint;
+      if (legacyAlias) reusedLegacyFingerprintCount += 1;
       const context: NewsPushContext = {
         title: item.title,
         link: item.link,
@@ -1501,6 +1561,12 @@ export class NewsScheduler {
       };
       return { index: originalIndex, fingerprint, publishTime: item.publishTime, context };
     });
+    if (reusedLegacyFingerprintCount > 0) {
+      console.log(
+        `🪪 RSS stable-identity compatibility: source=${currentRssSource} `
+          + `reusedLegacy=${reusedLegacyFingerprintCount}/${candidates.length}`,
+      );
+    }
 
     const stats = await this.postgres.getPushStatsForFingerprints(candidates.map((c) => c.fingerprint));
 
@@ -2184,18 +2250,30 @@ export class NewsScheduler {
         LIMIT 1
       `, [REPLAY_WINDOW_HOURS]);
 
-      // 2. Fallback to pushed items (LRU 循环复播：仅复播 created_at 在 REPLAY_WINDOW_HOURS 时间窗内的历史库存)
+      // 2. Fallback to pushed items using source-fair LRU.
+      // Historical plain item-LRU made display share proportional to inventory size,
+      // so high-volume DEV/HN could visually drown low-volume sources such as Solidot
+      // even though the producer itself rotates sources fairly. Rank the source by its
+      // most recent display first, then the oldest item inside that source. The existing
+      // replay window still bounds staleness and fresh `ready` content remains FIFO-first.
       if (item.rows.length === 0) {
         item = await this.postgres.query(`
-          SELECT * FROM content_inventory
-          WHERE state='pushed'
-            AND COALESCE(processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
-            AND (
-              COALESCE(processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
-              OR processed_content->'metadata'->'researchGate'->>'state' = 'ready'
-            )
-            AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
-          ORDER BY last_pushed_at ASC NULLS FIRST
+          SELECT ranked.*
+          FROM (
+            SELECT ci.*,
+                   MAX(ci.last_pushed_at) OVER (PARTITION BY ci.source) AS source_last_pushed_at
+            FROM content_inventory ci
+            WHERE ci.state='pushed'
+              AND COALESCE(ci.processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
+              AND (
+                COALESCE(ci.processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
+                OR ci.processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+              )
+              AND ci.created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
+          ) ranked
+          ORDER BY ranked.source_last_pushed_at ASC NULLS FIRST,
+                   ranked.last_pushed_at ASC NULLS FIRST,
+                   ranked.created_at ASC
           LIMIT 1
         `, [REPLAY_WINDOW_HOURS]);
       }

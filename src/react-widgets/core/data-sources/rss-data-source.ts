@@ -16,21 +16,74 @@ import {
 } from './rss-source-registry.js';
 
 const MAX_FUTURE_PUBLISH_SKEW_MS = 5 * 60 * 1000;
+const RSS_TRACKING_QUERY_PARAM = /^(?:utm_.+|fbclid|gclid|mc_cid|mc_eid)$/i;
+
+export function normalizeRssIdentityValue(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = '';
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (RSS_TRACKING_QUERY_PARAM.test(key)) parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+export function buildRssIdentityKey(input: {
+  sourceId: string;
+  guid?: string;
+  link?: string;
+  title?: string;
+  identityPublishTime?: string;
+}): string {
+  // Prefer link because it is persisted in legacy inventory and is therefore
+  // available for rollout aliasing even when a feed's guid uses another format.
+  const stableSubject = normalizeRssIdentityValue(input.link)
+    || normalizeRssIdentityValue(input.guid);
+  if (stableSubject) return `${input.sourceId}::${stableSubject}`;
+  return [input.sourceId, input.title?.trim(), input.identityPublishTime?.trim()]
+    .filter(Boolean)
+    .join('::');
+}
 
 export function normalizeRssPublishTime(raw: string | undefined, nowMs = Date.now()): {
+  /** Display/freshness time. This may be clamped to `nowMs`. */
   publishTime: string;
+  /** Stable time identity derived from the feed value; never synthesized from fetch time. */
+  identityPublishTime?: string;
   rawPublishTime?: string;
   futureClamped: boolean;
 } {
   if (!raw) return { publishTime: new Date(nowMs).toISOString(), futureClamped: false };
-  const parsed = new Date(raw).getTime();
+  const rawTrimmed = raw.trim();
+  const parsed = new Date(rawTrimmed).getTime();
   if (!Number.isFinite(parsed)) {
-    return { publishTime: new Date(nowMs).toISOString(), rawPublishTime: raw, futureClamped: false };
+    return {
+      publishTime: new Date(nowMs).toISOString(),
+      identityPublishTime: rawTrimmed || undefined,
+      rawPublishTime: raw,
+      futureClamped: false,
+    };
   }
+  const identityPublishTime = new Date(parsed).toISOString();
   if (parsed > nowMs + MAX_FUTURE_PUBLISH_SKEW_MS) {
-    return { publishTime: new Date(nowMs).toISOString(), rawPublishTime: raw, futureClamped: true };
+    return {
+      publishTime: new Date(nowMs).toISOString(),
+      identityPublishTime,
+      rawPublishTime: raw,
+      futureClamped: true,
+    };
   }
-  return { publishTime: new Date(parsed).toISOString(), rawPublishTime: raw, futureClamped: false };
+  return {
+    publishTime: identityPublishTime,
+    identityPublishTime,
+    rawPublishTime: raw,
+    futureClamped: false,
+  };
 }
 
 export class RSSDataSourceModule extends BaseDataSourceModule {
@@ -90,6 +143,14 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
       const nowMs = Date.now();
       const rawDataItems: RawDataItem[] = selectedItems.map((item, index) => {
         const normalizedTime = normalizeRssPublishTime(item.pubDate, nowMs);
+        const identitySource = params.source || rssUrl;
+        const rssIdentityKey = buildRssIdentityKey({
+          sourceId: identitySource,
+          guid: item.guid,
+          link: item.link,
+          title: item.title,
+          identityPublishTime: normalizedTime.identityPublishTime,
+        });
         return {
           id: `rss_${params.source || 'custom'}_${startIndex + index}_${nowMs}`,
           title: item.title || '无标题',
@@ -103,6 +164,8 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
             rssSource: params.source || 'custom',
             originalIndex: startIndex + index,
             guid: item.guid,
+            rssIdentityKey,
+            identityPublishTime: normalizedTime.identityPublishTime,
             rawPublishTime: normalizedTime.rawPublishTime,
             publishTimeFutureClamped: normalizedTime.futureClamped,
           }

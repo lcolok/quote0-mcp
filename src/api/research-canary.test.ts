@@ -129,6 +129,64 @@ describe('research canary adapter', () => {
     expect(result.evidencePacket).toContain('Official MCP evidence');
   });
 
+  it('fails closed when universal digest finishes without the required targeted search', async () => {
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。',
+      source: 'Example',
+      link: 'https://example.com/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    const tools = [
+      { name: 'crawl', status: 'completed', input: { url: digestSeed.link }, output: { content: 'Canonical product update' } },
+      { name: 'crawl', status: 'completed', input: { url: 'https://example.com/docs' }, output: { content: 'Related first-party docs' } },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-digest')) return jsonResponse({ jobId: 'job-digest', threadId: 'thread-digest', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-digest')) return jsonResponse({ turns: phaseATurns(tools) });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed: digestSeed, decision: digestDecision, jobId: 'job-digest', threadId: 'thread-digest', phase: 'research',
+    }, config, fetchImpl);
+
+    expect(digestDecision.researchMode).toBe('digest');
+    expect(result.status).toBe('invalid');
+    expect(result.retryable).toBe(false);
+    expect(result.errors.join(' ')).toContain('至少需要 1 次 freshness/provenance targeted search');
+  });
+
+  it('allows universal digest to advance once targeted search evidence is present', async () => {
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。',
+      source: 'Example',
+      link: 'https://example.com/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    const tools = [
+      { name: 'crawl', status: 'completed', input: { url: digestSeed.link }, output: { content: 'Canonical product update' } },
+      { name: 'search', status: 'completed', input: { q: 'product update freshness provenance' }, output: { results: [] } },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-digest')) return jsonResponse({ jobId: 'job-digest', threadId: 'thread-digest', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-digest')) return jsonResponse({ turns: phaseATurns(tools) });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed: digestSeed, decision: digestDecision, jobId: 'job-digest', threadId: 'thread-digest', phase: 'research',
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('research_complete');
+    expect(result.runtime.searchRequests).toBe(1);
+  });
+
   it('unwraps duplicate Straylight envelopes and supports a decision-sized evidence packet', () => {
     const huge = 'x'.repeat(10_000);
     const crawlEnvelope = JSON.stringify({

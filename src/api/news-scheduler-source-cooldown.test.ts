@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { NewsScheduler } from './news-scheduler.js';
+import { buildRssFingerprintAliasMap, NewsScheduler } from './news-scheduler.js';
 import { getSchedulerStrategyConfig } from './scheduler-strategy-config.js';
 
 function makeJob() {
@@ -52,6 +52,25 @@ function makeScheduler() {
   };
   return scheduler;
 }
+
+describe('scheduler RSS stable identity compatibility', () => {
+  it('reuses the newest legacy fingerprint for the same canonical RSS subject during rollout', () => {
+    const aliases = buildRssFingerprintAliasMap('infoq-cn', [
+      {
+        fingerprint: 'newer-legacy-fingerprint',
+        link: 'https://www.infoq.cn/article/abc?utm_source=rss&utm_medium=article',
+        title: 'Corrected title',
+      },
+      {
+        fingerprint: 'older-legacy-fingerprint',
+        link: 'https://www.infoq.cn/article/abc?utm_source=old',
+        title: 'Old title',
+      },
+    ]);
+
+    expect(aliases.get('infoq-cn::https://www.infoq.cn/article/abc')).toBe('newer-legacy-fingerprint');
+  });
+});
 
 describe('scheduler RSS source cooldown', () => {
   it('达到失败阈值后同一 run 直接跳到健康源，并建立真正的 cooldown', async () => {

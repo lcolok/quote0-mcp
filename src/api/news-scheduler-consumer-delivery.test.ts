@@ -21,6 +21,12 @@ const enqueueMock = mock(async (input: any) => {
 
 mock.module('./delivery-enqueue.js', () => ({
   enqueueDeliveriesForContent: enqueueMock,
+  enqueuePreRenderedImageDeliveries: mock(async () => ({
+    payloadVersion: 1,
+    created: 0,
+    targeted: 0,
+    deviceIds: [],
+  })),
 }));
 
 // consumer 绝不该再碰它：本文件的核心断言之一。
@@ -157,6 +163,25 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     expect(historyUpdates).toHaveLength(1);
     expect(historyUpdates[0].pushStatus).toBe('success');
     expect(historyUpdates[0].pushReason).toBe('inventory_consumed');
+  });
+
+  it('ready 为空时使用 source-fair LRU，而不是按文章数量瓜分屏幕曝光', async () => {
+    inventoryRow = null;
+
+    await scheduler.runConsumerJob(makeJob());
+    restore();
+
+    const fallbackSelect = executedQueries.find((q) =>
+      /FROM content_inventory ci/i.test(q.sql)
+      && /source_last_pushed_at/i.test(q.sql),
+    );
+    expect(fallbackSelect).toBeDefined();
+    expect(fallbackSelect?.sql).toContain('MAX(ci.last_pushed_at) OVER (PARTITION BY ci.source)');
+    expect(fallbackSelect?.sql).toContain('ranked.source_last_pushed_at ASC NULLS FIRST');
+    expect(fallbackSelect?.sql).toContain('ranked.last_pushed_at ASC NULLS FIRST');
+    expect(fallbackSelect?.params).toEqual([24]);
+    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(historyUpdates[0]?.pushReason).toBe('inventory_empty');
   });
 
   it('payload_version 由 enqueue 返回并写入运行历史', async () => {

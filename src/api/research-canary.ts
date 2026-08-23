@@ -311,6 +311,22 @@ function addRuntime(a: ResearchRuntimeReceipt | undefined, b: ResearchRuntimeRec
   };
 }
 
+export function researchMinimumCoverageErrors(
+  runtime: ResearchRuntimeReceipt,
+  decision: ResearchTriageDecision,
+): string[] {
+  const errors: string[] = [];
+  // Universal digest used to accept a single canonical crawl as sufficient.
+  // Production telemetry showed that this made the dominant lane look like
+  // Neuromancer Research while doing no independent freshness/provenance lookup.
+  // Keep the bounded four-call budget, but make one targeted search an enforced
+  // floor before Phase A can advance to synthesis.
+  if (decision.researchMode === 'digest' && runtime.searchRequests < 1) {
+    errors.push('digest minimum coverage 未满足: 至少需要 1 次 freshness/provenance targeted search');
+  }
+  return errors;
+}
+
 function hasPendingInteraction(turns: StraylightThreadTurn[]): boolean {
   return turns.some((turn) => turn.state === 'waiting_user'
     || (Array.isArray(turn.blocks) && turn.blocks.some((block) => block.type === 'interaction' && block.interactionStatus !== 'resolved')));
@@ -599,11 +615,23 @@ export async function inspectResearchCanary(
 
     const successfulTools = phaseRuntime.toolCalls - phaseRuntime.failedToolCalls;
     if (successfulTools > 0 && (jobStatus === 'completed' || jobStatus === 'error' || jobResult.missing || ['completed', 'error'].includes(cleanString(latestAgent?.state)))) {
+      const evidencePacket = buildResearchEvidencePacket(turns, budget.maxEvidenceChars);
+      const coverageErrors = researchMinimumCoverageErrors(phaseRuntime, params.decision);
+      if (coverageErrors.length > 0) {
+        return {
+          ...base,
+          status: 'invalid',
+          jobStatus,
+          evidencePacket,
+          errors: [...errors, ...coverageErrors],
+          retryable: false,
+        };
+      }
       return {
         ...base,
         status: 'research_complete',
         jobStatus,
-        evidencePacket: buildResearchEvidencePacket(turns, budget.maxEvidenceChars),
+        evidencePacket,
         errors: latestError ? [...errors, `Phase A agent 尾部错误已降级为 evidence-only: ${latestError}`] : errors,
         retryable: false,
       };

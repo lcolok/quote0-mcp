@@ -58,9 +58,12 @@ describe('Neuromancer research prompts', () => {
     const decision = triageResearchCandidate({ seed, universal: true });
     const prompt = buildNeuromancerResearchPrompt(seed, decision, 'run-digest');
     expect(decision.researchMode).toBe('digest');
+    expect(decision.budget?.targetIndependentClusters).toBe(2);
     expect(prompt).toContain('研究模式：digest');
     expect(prompt).toContain('最多 4 次工具调用');
-    expect(prompt).toContain('若 seed 本身就是 primary/official 且正文完整');
+    expect(prompt).toContain('必须执行至少 1 次 freshness/provenance targeted search');
+    expect(prompt).toContain('尝试取得至少 2 个 provenance 独立来源簇');
+    expect(prompt).toContain('即使 seed 本身就是 primary/official 且正文完整');
     expect(prompt).toContain('不机械耗尽 4 次预算');
   });
 

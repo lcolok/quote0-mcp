@@ -93,7 +93,10 @@ function budgetFor(mode: ResearchMode): ResearchBudget {
       maxPublishableClaims: 4,
       maxFinalizationRetries: 2,
       maxEvidenceChars: 5_000,
-      targetIndependentClusters: 1,
+      // Universal digest is the dominant production lane. A target of one lets
+      // a canonical seed crawl satisfy the entire Research phase, which is
+      // provenance confirmation rather than information-gain research.
+      targetIndependentClusters: 2,
     };
   }
   return {

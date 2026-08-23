@@ -564,19 +564,41 @@ export function computeNewsFingerprint(payload: {
   title?: string;
   link?: string;
   publishTime?: string;
+  /** Stable subject identity (for example RSS source + canonical guid/link). */
+  identityKey?: string | null;
+  /**
+   * Stable publication identity. When explicitly present (including null), it
+   * overrides publishTime for fingerprinting so display-time clamps/fetch time
+   * can never manufacture a new content identity.
+   */
+  identityPublishTime?: string | null;
   source?: string;
   category?: string;
   fallback: string;
 }): string {
   const normalizedLink = payload.link?.trim().toLowerCase() || '';
   const normalizedTitle = payload.title?.trim() || '';
-  const normalizedPublishTime = payload.publishTime ? new Date(payload.publishTime).toISOString() : '';
+  const hasIdentityPublishTime = Object.prototype.hasOwnProperty.call(payload, 'identityPublishTime');
+  const fingerprintTime = hasIdentityPublishTime ? payload.identityPublishTime : payload.publishTime;
+  const normalizedPublishTime = (() => {
+    if (typeof fingerprintTime !== 'string' || !fingerprintTime.trim()) return '';
+    const trimmed = fingerprintTime.trim();
+    const parsed = new Date(trimmed).getTime();
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : trimmed.toLowerCase();
+  })();
   const normalizedSource = payload.source?.trim().toLowerCase() || '';
   const normalizedCategory = payload.category?.trim().toLowerCase() || '';
+  const normalizedIdentityKey = typeof payload.identityKey === 'string'
+    ? payload.identityKey.trim()
+    : '';
 
-  const base = [normalizedLink, normalizedTitle, normalizedPublishTime, normalizedSource, normalizedCategory]
-    .filter(Boolean)
-    .join('||');
+  // A caller-provided subject key is authoritative and deliberately excludes title/time.
+  // This lets RSS keep one identity while feed metadata is corrected after publication.
+  const base = normalizedIdentityKey
+    ? `subject||${normalizedIdentityKey}`
+    : [normalizedLink, normalizedTitle, normalizedPublishTime, normalizedSource, normalizedCategory]
+      .filter(Boolean)
+      .join('||');
 
   const seed = base || payload.fallback;
   return createHash('sha256').update(seed).digest('hex').substring(0, 32);
