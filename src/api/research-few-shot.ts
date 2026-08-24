@@ -1,7 +1,7 @@
 import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
 import { NEUROMANCER_RESEARCH_RECEIPT_VERSION } from './renderable-news-intake.js';
 
-export const EINK_NEWS_FEW_SHOT_VERSION = 'eink-news-few-shot/v2';
+export const EINK_NEWS_FEW_SHOT_VERSION = 'eink-news-few-shot/v3';
 export const RESEARCH_PHASE_A_DONE = 'RESEARCH_PHASE_A_DONE';
 
 export interface EinkNewsFewShot {
@@ -71,8 +71,8 @@ function finalJsonContract(runId: string, decision: ResearchTriageDecision): str
   return `最终只输出一个可被 JSON.parse 直接解析的 JSON object，不要 Markdown、代码围栏、研究过程或前后解释。真正输出必须是单行紧凑 JSON：不要缩进、不要换行、不要重复字段。契约：
 {
   "id": "quote0-neuromancer-${runId}",
-  "title": "短标题，目标不超过28 display units（约14个全角字）",
-  "message": "约55~80个中文字符，只保留2~3个最高价值且已核验事实",
+  "title": "优先不超过22 display units（约11个全角字），确有必要可到28 units",
+  "message": "默认约80~105个中文字符；证据充足且标题较短时可扩至110~130字，优先保留3~5个互不重复的高价值已核验事实",
   "signature": "神经漫游者",
   "source": "不超过18字符的关键来源组合",
   "publishTime": "ISO-8601时间",
@@ -96,7 +96,7 @@ function finalJsonContract(runId: string, decision: ResearchTriageDecision): str
 }
 
 Quote0 会自行注入 threadId/runId/generatedAt/真实工具计数和 token telemetry 状态；不要编造 usage/token 数值。
-硬约束：title 的 validator 上限是32 display units，但生成目标必须控制在28以内留安全余量（ASCII/数字约1 unit，汉字约2 units）；若 Direct Draft 的短标题在 Evidence Packet 中得到支持，优先沿用或轻改其紧凑结构，不要为了体现 Research 把标题写长；message 最多约80个全角字；highlights 必须逐字出现在 message；sources 总数最多 ${maxSources}（含 seed）；claims 最多 ${maxClaims}；同一个 canonical URL 只能出现一次，禁止通过 UTM/fragment/不同 source id 把同一页面伪装成多个来源；如果 crawl 后 canonical URL 只是 seed URL 的尾斜杠/追踪参数规范化结果，两者必须合并成一个 source id，并保留更强的 source role；source.note 默认省略，只有确实需要解释来源角色/转载关系时才写且不超过80字符；不写“详情见原文”“引发关注”等空话。最终 title/message 中的每个可核验主张都必须对应 status=supported；context/unresolved/conflict 只能作为内部舍弃理由，不能留在最终可推送卡片的 claims 中。最终 message 优先保留跨来源支持、能改变理解或行动的事实；若来源冲突或证据不足，删掉该主张或改写成可被来源支持的明确归因，禁止把争议写成定论。`;
+硬约束：title 的 validator 上限是32 display units，但生成目标优先控制在22以内（约11个全角字）以给正文留下最大空间，确有必要才可到28以内留安全余量（ASCII/数字约1 unit，汉字约2 units）；若 Direct Draft 的短标题在 Evidence Packet 中得到支持，优先沿用或轻改其紧凑结构，不要为了体现 Research 把标题写长。message 的物理上限随标题长度动态计算：title<=22 units 时最多280 message units（约140个全角字），较长标题最多220 units（约110个全角字）；编辑目标通常为80~105个中文字符，证据充足且短标题时可扩到110~130字。不要把物理上限误当成必须填满的字数，也不要再为了“极简”主动压回50~60字：Evidence Packet 若支持3个以上互不重复、能改变理解的高价值事实，应优先在容量内保留3~5个；只有证据本身单薄/degraded 时才合理短于70字。highlights 必须逐字出现在 message；sources 总数最多 ${maxSources}（含 seed）；claims 最多 ${maxClaims}；同一个 canonical URL 只能出现一次，禁止通过 UTM/fragment/不同 source id 把同一页面伪装成多个来源；如果 crawl 后 canonical URL 只是 seed URL 的尾斜杠/追踪参数规范化结果，两者必须合并成一个 source id，并保留更强的 source role；source.note 默认省略，只有确实需要解释来源角色/转载关系时才写且不超过80字符；不写“详情见原文”“引发关注”等空话。最终 title/message 中的每个可核验主张都必须对应 status=supported；context/unresolved/conflict 只能作为内部舍弃理由，不能留在最终可推送卡片的 claims 中。最终 message 优先保留跨来源支持、能改变理解或行动的事实、关键时间线、数字、因果/行动信息；若来源冲突或证据不足，删掉该主张或改写成可被来源支持的明确归因，禁止把争议写成定论。`;
 }
 
 /** Phase A: only collect evidence. Quote0 compacts tool outputs deterministically afterwards. */
@@ -198,7 +198,7 @@ export function buildNeuromancerEvidenceFinalizationPrompt(
   return `你是“神经漫游者”。这是 Quote0 bounded research canary 的 Phase B finalizer。Phase A 已结束；下面的 Evidence Packet 是 Quote0 从真实 tool output 确定性压缩得到的唯一证据集。researchMode=${decision.researchMode || 'exploration'}。
 
 绝对禁止调用任何工具，禁止 search/crawl/browser，禁止向用户提问。只基于 Seed + Evidence Packet 生成最终卡片；证据不足就删掉主张或标 unresolved，不得自行补资料。
-先在内部完成 claim-level 取舍：优先 primary/official + 独立 corroboration 支持的事实；同一转载链不能当多源确认；遇到冲突/过时信息要降措辞强度。最终卡片不是“研究报告摘要”，而是把最有信息增益的 2~3 条事实压缩成可快速阅读的新闻。
+先在内部完成 claim-level 取舍：优先 primary/official + 独立 corroboration 支持的事实；同一转载链不能当多源确认；遇到冲突/过时信息要降措辞强度。最终卡片不是“研究报告摘要”，也不是“越短越好”的一句话摘要；应在真实墨水屏容量内尽可能保留最有信息增益的 3~5 条事实，尤其是关键背景、时间线、数字、因果或行动信息，同时避免重复和无效铺陈。
 
 Direct Draft 只是编辑草稿，不是证据。可以保留它更紧凑、更具体的表达，但其中任何事实都必须能在 Seed/Evidence Packet 找到支持；若 Research 发现草稿过度断言、遗漏关键限定或事实错误，必须以证据为准修正。不要为了彰显 Research 而主动丢掉已被证据支持的高价值细节。
 Direct Draft：

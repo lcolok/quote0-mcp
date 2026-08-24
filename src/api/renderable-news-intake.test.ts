@@ -37,10 +37,23 @@ describe('validateRenderableNews', () => {
     if (!result.ok) expect(result.errors).toContain('highlight 不在 message 中: 无状态');
   });
 
-  it('returns layout feedback instead of truncating an oversized message', () => {
-    const result = validateRenderableNews({ ...VALID, message: '很长'.repeat(100) });
+  it('uses real title geometry to admit denser copy instead of the old fixed 80-CJK ceiling', () => {
+    const longTitle = '较长标题需要占用两行显示空间';
+    const twoLineRich = validateRenderableNews({ ...VALID, title: longTitle, message: '事实'.repeat(50), highlights: [] });
+    expect(twoLineRich.ok).toBe(true); // 200 message units <= 220 two-line budget
+
+    const shortTitleRich = validateRenderableNews({ ...VALID, title: '短标题', message: '事实'.repeat(65), highlights: [] });
+    expect(shortTitleRich.ok).toBe(true); // 260 message units <= 280 one-line budget
+  });
+
+  it('returns dynamic layout feedback instead of truncating an oversized message', () => {
+    const longTitle = '较长标题需要占用两行显示空间';
+    const result = validateRenderableNews({ ...VALID, title: longTitle, message: '很长'.repeat(60), highlights: [] });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors.some((error) => error.includes('message 超出墨水屏容量'))).toBe(true);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes('message 超出墨水屏容量'))).toBe(true);
+      expect(result.errors.some((error) => error.includes('最多 220 display units'))).toBe(true);
+    }
   });
 
   it('accepts a compact research receipt and normalizes runtime evidence', () => {

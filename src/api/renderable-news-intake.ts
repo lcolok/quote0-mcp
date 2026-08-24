@@ -93,6 +93,23 @@ function textUnits(value: string): number {
   return units;
 }
 
+/**
+ * The authoritative 296×152 Satori card has materially more body capacity than
+ * the historical fixed 160-unit guard assumed. With a two-line 24px title the
+ * 12px/14px body still has roughly five 24-cell lines; a one-line title exposes
+ * roughly seven. 296×128 scales typography down and is not the tighter target.
+ *
+ * Keep a physical safety margin instead of using the theoretical edge:
+ * - compact/one-line title (<=22 units, ~11 CJK glyphs): 280 units (~140 CJK)
+ * - longer/two-line title: 220 units (~110 CJK)
+ *
+ * This is a rendering capacity guard, not an editorial target. The finalizer
+ * should normally stay below it and use extra space only when evidence warrants.
+ */
+function messageCapacityUnits(title: string): number {
+  return textUnits(title) <= 22 ? 280 : 220;
+}
+
 function cleanString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -433,10 +450,16 @@ export function validateRenderableNews(input: unknown): RenderableNewsValidation
   if (!publishTime || Number.isNaN(Date.parse(publishTime))) errors.push('publishTime 必须是合法时间');
   if (id.length > 128) errors.push('id 过长（最多 128 字符）');
 
-  // 296×152 few-shot 的保守容量门。超出时应该把 validator feedback
-  // 返回给 Neuromancer 同一 thread 自修，而不是由 Quote0 截断正文。
-  if (textUnits(title) > 32) errors.push('title 超出墨水屏容量（最多 32 display units，约 16 个全角字）');
-  if (textUnits(message) > 160) errors.push('message 超出墨水屏容量（最多 160 display units，约 80 个全角字）');
+  // Capacity follows the actual 296×152 title/body/footer geometry instead of
+  // the old fixed 80-CJK summary envelope. Overflow still fails closed and is
+  // returned to Neuromancer for a retry; Quote0 never silently truncates text.
+  const titleUnits = textUnits(title);
+  const messageUnits = textUnits(message);
+  const maxMessageUnits = messageCapacityUnits(title);
+  if (titleUnits > 32) errors.push('title 超出墨水屏容量（最多 32 display units，约 16 个全角字）');
+  if (messageUnits > maxMessageUnits) {
+    errors.push(`message 超出墨水屏容量（当前标题下最多 ${maxMessageUnits} display units，约 ${Math.floor(maxMessageUnits / 2)} 个全角字）`);
+  }
   if (textUnits(source) > 36) errors.push('source 过长（最多 36 display units）');
 
   if (link && !validateHttpUrl(link)) errors.push('link 必须是合法 http/https URL');

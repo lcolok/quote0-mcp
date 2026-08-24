@@ -93,6 +93,12 @@ describe('Neuromancer research prompts', () => {
     expect(prompt).toContain('Direct Draft');
     expect(prompt).toContain('Direct 中的具体细节');
     expect(prompt).toContain('Direct Draft 只是编辑草稿，不是证据');
+    expect(EINK_NEWS_FEW_SHOT_VERSION).toBe('eink-news-few-shot/v3');
+    expect(prompt).toContain('不是“越短越好”的一句话摘要');
+    expect(prompt).toContain('3~5 条事实');
+    expect(prompt).toContain('title<=22 units 时最多280 message units');
+    expect(prompt).toContain('较长标题最多220 units');
+    expect(prompt).toContain('不要再为了“极简”主动压回50~60字');
   });
 
   it('caps rich seed content at 1000 chars in Phase B while Phase A keeps the full seed', () => {
