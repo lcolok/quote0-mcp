@@ -31,6 +31,9 @@ export interface NewsLayoutSpec {
   footerHeightPx: number;
   footerFontPx: number;
   footerLineHeightPx: number;
+  /** 可选：矢量字体 family（须已在 SatoriRenderer.initialize 注册）；缺省走像素字体（FusionPixel 整数倍）。 */
+  titleFontFamily?: string;
+  bodyFontFamily?: string;
 }
 
 function scaledEven(value: number, scale: number, minimum: number): number {
@@ -40,7 +43,7 @@ function scaledEven(value: number, scale: number, minimum: number): number {
 /** 把 296x152 基准版式按整数倍放大：像素字体（fusion-pixel 8/10/12px）只有整数倍才锐利。 */
 export function scaleNewsLayout(base: NewsLayoutSpec, k: number): NewsLayoutSpec {
   const out = {} as NewsLayoutSpec;
-  for (const [key, value] of Object.entries(base)) (out as any)[key] = Math.round(value * k);
+  for (const [key, value] of Object.entries(base)) (out as any)[key] = typeof value === 'number' ? Math.round(value * k) : value;
   return out;
 }
 
@@ -50,7 +53,18 @@ export function scaleNewsLayout(base: NewsLayoutSpec, k: number): NewsLayoutSpec
  * 2026-08-25 用户目视三档预览（1×/2×/3×）后选定 3×。
  */
 const LARGE_EINK_LAYOUT_PROFILES: Record<string, () => NewsLayoutSpec> = {
-  '800x480': () => scaleNewsLayout(deriveNewsLayout(296, 152), 3),
+  // 2026-08-25 定型：235ppi 上矢量字体吃到分辨率红利——得意黑标题 72px + 普惠体 Regular 正文 36px（行高 1.3），
+  // 用户在真屏上对比像素字体 3× / 普惠 Heavy / 文楷 / Regular 后选定 Regular。
+  '800x480': () => ({
+    ...scaleNewsLayout(deriveNewsLayout(296, 152), 3),
+    titleFontFamily: 'SmileySans',
+    bodyFontFamily: 'AlibabaPuHuiTi-Regular',
+    titleLineHeightPx: 82,
+    bodyLineHeightPx: 46,
+    footerFontPx: 28,
+    footerLineHeightPx: 34,
+    footerHeightPx: 44,
+  }),
 };
 
 /**
@@ -87,8 +101,8 @@ export function deriveNewsLayout(widthPx: number, heightPx: number): NewsLayoutS
 }
 
 /** 已知面板的物理参数（按几何命中；未登记的面板沿用默认 dpi 250）。尺寸为标称对角线换算的估值。 */
-const EINK_PANEL_PHYSICAL: Record<string, { dpi: number; physical: { widthMm: number; heightMm: number } }> = {
-  '800x480': { dpi: 235, physical: { widthMm: 86.4, heightMm: 51.9 } },   // 3.97" GDEY0397T81P
+const EINK_PANEL_PHYSICAL: Record<string, { dpi: number; physical: { widthMm: number; heightMm: number }; fontStack?: string[] }> = {
+  '800x480': { dpi: 235, physical: { widthMm: 86.4, heightMm: 51.9 }, fontStack: ['SmileySans', 'AlibabaPuHuiTi-Regular'] },   // 3.97" GDEY0397T81P
 };
 
 /** 构造一个可直接用于 Satori 的电子纸 RenderTarget。 */
@@ -102,7 +116,7 @@ export function createEinkTarget(widthPx: number, heightPx: number, id = `eink-$
     dpi: panel?.dpi ?? 250,
     colorMode: 'mono-1bit',
     ...(panel ? { physical: { ...panel.physical } } : {}),
-    defaultFontStack: ['fusion-pixel-12'],
+    defaultFontStack: panel?.fontStack ?? ['fusion-pixel-12'],
     newsLayout: deriveNewsLayout(widthPx, heightPx),
   };
 }

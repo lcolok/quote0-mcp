@@ -22,9 +22,14 @@ describe('deriveNewsLayout', () => {
     const l = deriveNewsLayout(800, 480);
     expect(l.titleFontPx).toBe(72);
     expect(l.bodyFontPx).toBe(36);
-    expect(l.bodyLineHeightPx).toBe(42);
-    expect(l.footerHeightPx).toBe(48);
-    expect(l.footerFontPx).toBe(36);
+    expect(l.bodyLineHeightPx).toBe(46);
+    expect(l.footerHeightPx).toBe(44);
+    expect(l.footerFontPx).toBe(28);
+    expect(l.bodyLineHeightPx).toBe(46);
+    expect(l.titleFontFamily).toBe('SmileySans');
+    expect(l.bodyFontFamily).toBe('AlibabaPuHuiTi-Regular');
+    expect(deriveNewsLayout(296, 152).bodyFontFamily).toBeUndefined();   // 小屏仍像素字体
+    expect(deriveNewsLayout(600, 320).bodyFontFamily).toBeUndefined();   // 未登记大屏：像素字体整数倍
   });
 
   it('scales unknown large targets by an integer factor (pixel-font crisp)', () => {
@@ -40,6 +45,7 @@ describe('createEinkTarget', () => {
     expect(EINK_800X480_TARGET.dpi).toBe(235);
     expect(EINK_800X480_TARGET.physical?.widthMm).toBeCloseTo(86.4);
     expect(EINK_800X480_TARGET.newsLayout?.bodyFontPx).toBe(36);
+    expect(EINK_800X480_TARGET.defaultFontStack).toEqual(['SmileySans', 'AlibabaPuHuiTi-Regular']);
     expect(createEinkTarget(800, 480).newsLayout).toEqual(EINK_800X480_TARGET.newsLayout);
     expect(EINK_TARGET.dpi).toBe(250);
     expect(EINK_TARGET.physical).toBeUndefined();

@@ -54,9 +54,12 @@ function pixelFontStyle(targetSize: number): {
 export const SatoriNewsWidget: React.FC<SatoriNewsWidgetProps> = ({ data, target = EINK_TARGET }) => {
   const { title, message, source, highlights } = data;
   const layout = target.newsLayout ?? deriveNewsLayout(target.widthPx, target.heightPx);
-  const bodyFont = pixelFontStyle(layout.bodyFontPx);
-  const titleFont = pixelFontStyle(layout.titleFontPx);
-  const footerFont = pixelFontStyle(layout.footerFontPx);
+  // 大屏 target 的版式可指定矢量字体（family 已在 SatoriRenderer 注册）；未指定走像素字体整数倍。
+  const vectorFont = (family: string | undefined, px: number) =>
+    family ? { fontFamily: family, fontSize: `${px}px` } : null;
+  const bodyFont = vectorFont(layout.bodyFontFamily, layout.bodyFontPx) ?? pixelFontStyle(layout.bodyFontPx);
+  const titleFont = vectorFont(layout.titleFontFamily, layout.titleFontPx) ?? pixelFontStyle(layout.titleFontPx);
+  const footerFont = vectorFont(layout.bodyFontFamily, layout.footerFontPx) ?? pixelFontStyle(layout.footerFontPx);
   
   // 渲染带高亮的文本
   const renderHighlightedText = (text: string, highlights: HighlightedWord[] = []) => {

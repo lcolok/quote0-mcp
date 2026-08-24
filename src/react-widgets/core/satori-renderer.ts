@@ -161,6 +161,21 @@ export class SatoriRenderer {
         style: 'normal'
       });
 
+      // 矢量字体（大屏 target 用）：得意黑做标题、普惠体 55 Regular（GB2312 子集 1.66MB）做正文。
+      // 小屏（≤296 宽）仍走像素字体；由 RenderTarget.newsLayout 的 titleFontFamily/bodyFontFamily 选择。
+      const vectorFonts: Array<{ name: string; file: string }> = [
+        { name: 'SmileySans', file: 'smiley-sans/SmileySans-Oblique.ttf' },
+        { name: 'AlibabaPuHuiTi-Regular', file: 'alibaba-puhuiti/AlibabaPuHuiTi-3-55-Regular-gb2312.ttf' },
+      ];
+      for (const font of vectorFonts) {
+        try {
+          const buffer = await readFile(join(fontsPath, font.file));
+          this.fonts.push({ name: font.name, data: buffer.buffer as ArrayBuffer, weight: 400, style: 'normal' });
+          console.log(`✅ 加载矢量字体: ${font.name} (${font.file})`);
+        } catch (e) {
+          console.warn(`⚠️ 矢量字体 ${font.name} 加载失败，使用该字体的 target 将退回像素字体: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       this.initialized = true;
       console.log('✅ Satori 渲染器初始化完成');
     })();
