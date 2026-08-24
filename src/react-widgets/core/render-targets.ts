@@ -37,9 +37,35 @@ function scaledEven(value: number, scale: number, minimum: number): number {
   return Math.max(minimum, Math.round((value * scale) / 2) * 2);
 }
 
-/** 根据物理目标尺寸生成新闻版式，基准是原 C3 的 296x152。 */
+/** 把 296x152 基准版式按整数倍放大：像素字体（fusion-pixel 8/10/12px）只有整数倍才锐利。 */
+export function scaleNewsLayout(base: NewsLayoutSpec, k: number): NewsLayoutSpec {
+  const out = {} as NewsLayoutSpec;
+  for (const [key, value] of Object.entries(base)) (out as any)[key] = Math.round(value * k);
+  return out;
+}
+
+/**
+ * 大屏专属版式 profile（按几何命中，SSoT 与 296x128/296x152 同源）。
+ * 800x480 = 3.97" GDEY0397T81P（≈235ppi）：3× → 正文 36px≈3.9mm、标题 72px，每行 22 汉字、约 8 行。
+ * 2026-08-25 用户目视三档预览（1×/2×/3×）后选定 3×。
+ */
+const LARGE_EINK_LAYOUT_PROFILES: Record<string, () => NewsLayoutSpec> = {
+  '800x480': () => scaleNewsLayout(deriveNewsLayout(296, 152), 3),
+};
+
+/**
+ * 根据物理目标尺寸生成新闻版式，基准是原 C3 的 296x152。
+ * - 小于基准：按比例缩小（原逻辑，逐字节不变）；
+ * - 命中大屏 profile：用 profile；
+ * - 未登记的大屏：按 floor(min(w/296, h/152)) 整数倍放大（≥2 才放大，保守），
+ *   历史坑：此前 scale 被 Math.min(1, …) 封顶，800x480 被原样贴上 296x152 版式，下半屏全空。
+ */
 export function deriveNewsLayout(widthPx: number, heightPx: number): NewsLayoutSpec {
-  const scale = Math.min(1, widthPx / 296, heightPx / 152);
+  const profile = LARGE_EINK_LAYOUT_PROFILES[`${widthPx}x${heightPx}`];
+  if (profile) return profile();
+  const rawScale = Math.min(widthPx / 296, heightPx / 152);
+  if (rawScale >= 2) return scaleNewsLayout(deriveNewsLayout(296, 152), Math.floor(rawScale));
+  const scale = Math.min(1, rawScale);
   const titleFontPx = scaledEven(24, scale, 12);
   const bodyFontPx = Math.max(8, Math.round(12 * scale));
   const footerFontPx = Math.max(8, Math.round(12 * scale));
@@ -60,15 +86,22 @@ export function deriveNewsLayout(widthPx: number, heightPx: number): NewsLayoutS
   };
 }
 
+/** 已知面板的物理参数（按几何命中；未登记的面板沿用默认 dpi 250）。尺寸为标称对角线换算的估值。 */
+const EINK_PANEL_PHYSICAL: Record<string, { dpi: number; physical: { widthMm: number; heightMm: number } }> = {
+  '800x480': { dpi: 235, physical: { widthMm: 86.4, heightMm: 51.9 } },   // 3.97" GDEY0397T81P
+};
+
 /** 构造一个可直接用于 Satori 的电子纸 RenderTarget。 */
 export function createEinkTarget(widthPx: number, heightPx: number, id = `eink-${widthPx}x${heightPx}`): RenderTarget {
+  const panel = EINK_PANEL_PHYSICAL[`${widthPx}x${heightPx}`];
   return {
     id,
     kind: 'eink',
     widthPx,
     heightPx,
-    dpi: 250,
+    dpi: panel?.dpi ?? 250,
     colorMode: 'mono-1bit',
+    ...(panel ? { physical: { ...panel.physical } } : {}),
     defaultFontStack: ['fusion-pixel-12'],
     newsLayout: deriveNewsLayout(widthPx, heightPx),
   };
@@ -91,6 +124,7 @@ export function targetFromRenderConfig(
 
 export const EINK_TARGET: RenderTarget = createEinkTarget(296, 152, 'eink-296x152');
 export const EINK_296X128_TARGET: RenderTarget = createEinkTarget(296, 128, 'eink-296x128');
+export const EINK_800X480_TARGET: RenderTarget = createEinkTarget(800, 480, 'eink-800x480');   // 3.97" 3× 版式
 
 export const LABEL_T40X20_TARGET: RenderTarget = {
   id: 'label-T40x20-320',
@@ -119,6 +153,7 @@ export const LABEL_T20X8_TARGET: RenderTarget = {
 export const BUILTIN_TARGETS: RenderTarget[] = [
   EINK_TARGET,
   EINK_296X128_TARGET,
+  EINK_800X480_TARGET,
   LABEL_T40X20_TARGET,
   LABEL_T20X8_TARGET,
 ];
