@@ -19,6 +19,7 @@ import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
 import { devicesApp } from './devices-api.js';
+import { reconcileDeviceBaseUrl } from './device-base-url-reconcile.js';
 import inventoryApp from './inventory-api.js';
 import researchCanaryApp from './research-canary-api.js';
 import trmnlCanaryApp from './trmnl-canary-api.js';
@@ -2280,8 +2281,20 @@ app.get('/api/eink/frame', async (c) => {
     return c.json({ success: false, error: 'Unauthorized' }, 401);
   }
 
+  // 设备自报 LAN 地址 → 自愈 push 链 base_url（DHCP 漂移零人工；鉴权已过，只采信私网 IPv4，host 不同才写库）
+  const reportedLocalIp = c.req.header('X-Local-IP');
+  if (reportedLocalIp) {
+    const healed = await reconcileDeviceBaseUrl(
+      { updatePushDevice: (id, patch) => db.updatePushDevice(id, patch) },
+      { id: row.id, base_url: row.base_url },
+      reportedLocalIp,
+    );
+    if (healed) row.base_url = healed;
+  }
+
   const telemetry = {
     frameId: c.req.header('X-Frame-Id') || undefined,
+    localIp: reportedLocalIp || undefined,
     firmware: c.req.header('X-Firmware') || undefined,
     freeHeap: c.req.header('X-Free-Heap') || undefined,
     uptime: c.req.header('X-Uptime') || undefined,
@@ -2367,6 +2380,17 @@ app.post('/api/eink/ack', async (c) => {
   const deviceToken = row.token || '';
   if (deviceToken && presentedToken !== deviceToken) {
     return c.json({ success: false, error: 'Unauthorized' }, 401);
+  }
+
+  // 设备自报 LAN 地址 → 自愈 push 链 base_url（DHCP 漂移零人工；鉴权已过，只采信私网 IPv4，host 不同才写库）
+  const reportedLocalIp = c.req.header('X-Local-IP');
+  if (reportedLocalIp) {
+    const healed = await reconcileDeviceBaseUrl(
+      { updatePushDevice: (id, patch) => db.updatePushDevice(id, patch) },
+      { id: row.id, base_url: row.base_url },
+      reportedLocalIp,
+    );
+    if (healed) row.base_url = healed;
   }
 
   let rawBody: unknown;
