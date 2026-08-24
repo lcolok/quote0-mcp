@@ -109,7 +109,8 @@ function normalizeSourceKey(sourceKey: string): string {
   return normalized;
 }
 
-async function writeFramesFromPngBuffer(devices: EinkDevice[], pngBuffer: Buffer): Promise<void> {
+/** 把一张已渲染 PNG 按各设备几何转 1-bit 后写进 pull 帧缓存（直推路径也要调用，否则 pull 会用旧帧覆盖刚推的内容）。 */
+export async function writeFramesFromPngBuffer(devices: EinkDevice[], pngBuffer: Buffer): Promise<void> {
   for (const device of devices) {
     try {
       const bitmap = await pngTo1BitBitmap(pngBuffer, device.width, device.height);

@@ -1,6 +1,8 @@
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
 import { renderingRegistry } from '../react-widgets/core/rendering-modules.js';
 import { devicePusher } from './device-pusher.js';
+import { writeFramesFromPngBuffer } from './delivery-enqueue.js';
+import { readFile } from 'fs/promises';
 import {
   getEinkDevices,
   resolveEinkRenderTarget,
@@ -225,6 +227,29 @@ export async function renderAndPushLocalEinkByTarget(
       errorCode: classifyPushError(reason),
     });
   });
+
+  // 4. 直推成功的设备同步写 pull 帧缓存。双栈并存下 pull 每 2s 轮询"当前帧"，直推（定向补发等）
+  //    若不写缓存，2~3s 后就会被旧帧覆盖，屏上看到的是"刷两次、内容还退回去"（真机实录 2026-08-25）。
+  //    失败只告警，不影响推送结果。
+  const okDeviceIds = new Set(pushResults.filter((r) => r.ok).map((r) => r.deviceId));
+  const deviceById = new Map(resolved.map((entry) => [entry.device.id, entry.device] as const));
+  for (const image of renderedImages) {
+    const okDevices = image.deviceIds
+      .filter((id) => okDeviceIds.has(id))
+      .map((id) => deviceById.get(id))
+      .filter((d): d is NonNullable<typeof d> => Boolean(d));
+    if (okDevices.length === 0) continue;
+    const source = image.localImagePath || image.imageUrl;
+    if (!source) continue;
+    try {
+      const png = image.localImagePath
+        ? await readFile(image.localImagePath)
+        : Buffer.from(await (await fetch(source)).arrayBuffer());
+      await writeFramesFromPngBuffer(okDevices as any, png);
+    } catch (error) {
+      console.warn(`⚠️ 直推后写 pull 帧缓存失败（${image.targetId}）: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   const summary = summarizePushResults(pushResults);
   return {
