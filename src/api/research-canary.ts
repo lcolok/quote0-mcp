@@ -239,6 +239,7 @@ export async function dispatchResearchExtension(
   seed: ResearchSeed,
   evidencePacket: string,
   decision: ResearchTriageDecision,
+  plan: { reason?: DigestResearchExtensionDecision['reason'] } = {},
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
 ): Promise<StraylightCanaryDispatch> {
@@ -253,7 +254,7 @@ export async function dispatchResearchExtension(
     },
     body: JSON.stringify({
       threadId,
-      message: buildNeuromancerResearchExtensionPrompt(seed, evidencePacket, decision, runId),
+      message: buildNeuromancerResearchExtensionPrompt(seed, evidencePacket, decision, runId, plan),
       agentId: config.agentId,
       providerId: config.researchProviderId,
       source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
@@ -938,7 +939,8 @@ function searchCandidateUrls(evidencePacket: string): string[] {
 
 export interface DigestResearchExtensionDecision {
   extend: boolean;
-  reason: 'not-staged-digest' | 'initial-budget-not-reached' | 'max-budget-reached' | 'coverage-sufficient' | 'no-novel-search-candidate' | 'novel-evidence-candidate';
+  required: boolean;
+  reason: 'not-staged-digest' | 'initial-budget-not-reached' | 'max-budget-reached' | 'minimum-evidence-repair' | 'minimum-search-repair' | 'coverage-sufficient' | 'no-novel-search-candidate' | 'novel-evidence-candidate';
   candidateUrls: string[];
   existingClusters: string[];
 }
@@ -954,12 +956,18 @@ export function shouldExtendDigestResearch(
   const ledger = parseEvidenceLedger(evidencePacket);
   const existingEntries = ledger?.entries ?? [];
   const existingClusters = [...new Set(existingEntries.map((entry) => evidenceDomainKey(entry.canonicalUrl)).filter(Boolean))];
-  const base = { candidateUrls: [] as string[], existingClusters };
+  const base = { candidateUrls: [] as string[], existingClusters, required: false };
   if (decision.researchMode !== 'digest' || initial < 1 || extension < 1 || !budget) {
     return { ...base, extend: false, reason: 'not-staged-digest' };
   }
   if (runtime.toolCalls < initial) return { ...base, extend: false, reason: 'initial-budget-not-reached' };
   if (runtime.toolCalls >= budget.maxToolCalls) return { ...base, extend: false, reason: 'max-budget-reached' };
+  if (existingEntries.length === 0) {
+    return { ...base, extend: true, required: true, reason: 'minimum-evidence-repair' };
+  }
+  if (runtime.searchRequests < 1) {
+    return { ...base, extend: true, required: true, reason: 'minimum-search-repair' };
+  }
   if (existingClusters.length >= budget.targetIndependentClusters) {
     return { ...base, extend: false, reason: 'coverage-sufficient' };
   }
@@ -976,6 +984,7 @@ export function shouldExtendDigestResearch(
   }
   return {
     extend: true,
+    required: false,
     reason: 'novel-evidence-candidate',
     candidateUrls: candidateUrls.slice(0, 5),
     existingClusters,
@@ -1386,7 +1395,13 @@ export async function inspectResearchCanary(
     if (successfulTools > 0 && (jobStatus === 'completed' || jobStatus === 'error' || jobResult.missing || ['completed', 'error'].includes(cleanString(latestAgent?.state)))) {
       const evidencePacket = buildResearchEvidencePacket(turns, budget.maxEvidenceChars, params.seed);
       const coverageErrors = researchMinimumCoverageErrors(phaseRuntime, params.decision);
-      if (coverageErrors.length > 0) {
+      const initialToolCalls = budget.initialToolCalls ?? 0;
+      const stagedRepairAvailable = params.decision.researchMode === 'digest'
+        && (budget.extensionToolCalls ?? 0) > 0
+        && initialToolCalls > 0
+        && phaseRuntime.toolCalls >= initialToolCalls
+        && phaseRuntime.toolCalls < budget.maxToolCalls;
+      if (coverageErrors.length > 0 && !stagedRepairAvailable) {
         return {
           ...base,
           status: 'invalid',
@@ -1396,12 +1411,17 @@ export async function inspectResearchCanary(
           retryable: false,
         };
       }
+      const completionErrors = [
+        ...errors,
+        ...(coverageErrors.length > 0 ? coverageErrors : []),
+        ...(latestError ? [`Phase A agent 尾部错误已降级为 evidence-only: ${latestError}`] : []),
+      ];
       return {
         ...base,
         status: 'research_complete',
         jobStatus,
         evidencePacket,
-        errors: latestError ? [...errors, `Phase A agent 尾部错误已降级为 evidence-only: ${latestError}`] : errors,
+        errors: completionErrors,
         retryable: false,
       };
     }

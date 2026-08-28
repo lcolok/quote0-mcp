@@ -389,6 +389,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           run.inputSnapshot,
           inspection.evidencePacket,
           run.triage,
+          { reason: extensionDecision.reason },
         );
         const updated = await markResearchRunResearchExtended(
           postgres,
@@ -408,12 +409,30 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           data: publicRun(updated),
         }, 202);
       } catch (error) {
-        console.warn(
-          `Research conditional extension degraded run=${run.id}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        // The initial stage has already passed minimum coverage. If the optional
-        // marginal-gain extension cannot be dispatched, finalize from frozen evidence
-        // instead of failing or re-running Phase A.
+        const message = error instanceof Error ? error.message : String(error);
+        if (extensionDecision.required) {
+          const failed = await markResearchRunState(postgres, run.id, {
+            state: 'failed',
+            runtimeReceipt: inspection.runtime,
+            evidenceSnapshot: inspection.evidencePacket,
+            validationErrors: [...inspection.errors, `required extension dispatch failed: ${message}`],
+            error: `Required Research extension dispatch failed: ${message}`,
+          });
+          return c.json({
+            success: false,
+            reconciled: true,
+            retryable: true,
+            researchExtension: {
+              reason: extensionDecision.reason,
+              required: true,
+            },
+            error: failed.error,
+            data: publicRun(failed),
+          }, 502);
+        }
+        console.warn(`Research optional extension degraded run=${run.id}: ${message}`);
+        // Minimum coverage is already satisfied for optional marginal-gain extension.
+        // Finalize from frozen evidence instead of failing or re-running Phase A.
       }
     }
 

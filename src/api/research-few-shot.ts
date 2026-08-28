@@ -194,18 +194,24 @@ export function buildNeuromancerResearchExtensionPrompt(
   evidencePacket: string,
   decision: ResearchTriageDecision,
   runId: string,
+  plan: { reason?: string } = {},
 ): string {
   const extension = decision.budget?.extensionToolCalls ?? 0;
   if (decision.researchMode !== 'digest' || extension < 1) {
     throw new Error('只有 staged digest 才能构建 Research extension prompt');
   }
-  return `你是“神经漫游者”。这是 Quote0 bounded research run=${runId} 的 Phase A 条件扩展段。第一段已经结束，Quote0 的 deterministic coverage gate 判断仍有一个高价值证据缺口，因此只额外授权 ${extension} 次工具调用。
+  const reason = plan.reason || 'novel-evidence-candidate';
+  const actionContract = reason === 'minimum-search-repair'
+    ? `本次扩展是**最低覆盖修复**：第一段没有完成 mandatory freshness/provenance search。\n- 这唯一一次工具调用**必须是 targeted search**，禁止 crawl/browser。\n- 查询必须围绕 Seed 的核心实体/事件 + provenance/freshness，避免宽泛搜索；搜索结果仅作为线索，本次不把未 crawl 的结果升级成 supported evidence。`
+    : reason === 'minimum-evidence-repair'
+      ? `本次扩展是**最低证据修复**：第一段尚未获得任何 support-eligible crawl。\n- 这唯一一次工具调用**必须是 crawl**，禁止新的 search。\n- 优先恢复 Seed canonical/primary 页面；若同一 URL 的某引擎已失败，可换已知可用引擎重试，但不要改去无关页面。`
+      : `本次扩展是**边际信息增益**：最低覆盖已满足，但仍缺一个高价值独立证据簇。\n- 这唯一一次工具调用应是 **crawl**，禁止新的 search。\n- 只从第一段 search 已发现但尚未 crawl 的候选中，选择与 Seed 核心事件真正相关、能增加独立 provenance cluster、primary/official 证据或解决冲突的最高信息增益 URL。\n- 若候选明显无关、重复、低价值或只是搜索噪声，可以不调用工具直接结束；绝不要为了“第二域”而抓取不相关页面。`;
+  return `你是“神经漫游者”。这是 Quote0 bounded research run=${runId} 的 Phase A 条件扩展段。第一段已经结束；Quote0 deterministic gate 的扩展原因是 ${reason}，因此只额外授权 ${extension} 次工具调用。
 
 这是硬预算扩展，不是重新研究：
-- **只允许再调用 ${extension} 次工具**，严禁并行，不能重复第一段已完成的 crawl/search。
-- Evidence Packet 顶部 Ledger 是当前已确认可支持证据；search 结果只是候选线索。
-- 优先从第一段 search 已发现但尚未 crawl 的候选中，选择能增加独立 provenance cluster、primary/official 证据或解决冲突的最高信息增益 URL。
-- 若候选明显重复/低价值/不可访问，也不要用新的宽泛 search 消耗额度；可以直接结束。
+- **只允许再调用 ${extension} 次工具**，严禁并行；不要重新执行第一段已经成功完成的动作。
+- Evidence Packet 顶部 Ledger 是当前已确认可支持证据；search snippet 永远只是候选线索。
+${actionContract}
 - 这段仍然不写新闻、不生成最终 JSON、不向用户提问。
 
 Seed：

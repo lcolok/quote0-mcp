@@ -206,12 +206,14 @@ describe('research canary adapter', () => {
     capturedHeaders = undefined;
     captured = undefined;
     const extended = await dispatchResearchExtension(
-      'run-digest', 'thread-digest', digestSeed, initialPacket, digestDecision, config, fetchImpl,
+      'run-digest', 'thread-digest', digestSeed, initialPacket, digestDecision,
+      { reason: extensionDecision.reason }, config, fetchImpl,
     );
     expect(extended).toEqual({ jobId: 'job-digest', threadId: 'thread-digest' });
     expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('1');
     expect(captured.threadId).toBe('thread-digest');
     expect(captured.message).toContain('只额外授权 1 次工具调用');
+    expect(captured.message).toContain('禁止新的 search');
 
     const enoughPacket = buildResearchEvidencePacket(phaseATurns([
       initialTools[0],
@@ -278,6 +280,66 @@ describe('research canary adapter', () => {
     expect(result.status).toBe('invalid');
     expect(result.retryable).toBe(false);
     expect(result.errors.join(' ')).toContain('至少需要 1 次 freshness/provenance targeted search');
+  });
+
+  it('defers a three-call digest coverage failure into one required search repair', async () => {
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。',
+      source: 'Example',
+      link: 'https://example.com/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    const tools = [
+      {
+        name: 'crawl', status: 'completed', input: { url: digestSeed.link },
+        output: { status: 'completed', url: digestSeed.link, engine: 'scrapling', result: { title: 'Seed', url: digestSeed.link, text: 'Canonical product update' } },
+      },
+      {
+        name: 'crawl', status: 'failed', isError: true, input: { url: digestSeed.link, engine: 'stealth' },
+        output: { status: 'failed', url: digestSeed.link, engine: 'stealth', error: 'blocked' },
+      },
+      {
+        name: 'crawl', status: 'failed', isError: true, input: { url: digestSeed.link, engine: 'camoufox' },
+        output: { status: 'failed', url: digestSeed.link, engine: 'camoufox', error: 'blocked' },
+      },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-repair')) return jsonResponse({ jobId: 'job-repair', threadId: 'thread-repair', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-repair')) return jsonResponse({ turns: phaseATurns(tools) });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed: digestSeed, decision: digestDecision, jobId: 'job-repair', threadId: 'thread-repair', phase: 'research',
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('research_complete');
+    expect(result.runtime).toEqual({ toolCalls: 3, searchRequests: 0, crawlRequests: 3, failedToolCalls: 2 });
+    expect(result.errors.join(' ')).toContain('至少需要 1 次 freshness/provenance targeted search');
+    const extensionDecision = shouldExtendDigestResearch(result.evidencePacket || '', result.runtime, digestDecision);
+    expect(extensionDecision).toEqual(expect.objectContaining({
+      extend: true,
+      required: true,
+      reason: 'minimum-search-repair',
+    }));
+
+    let captured: any;
+    let capturedHeaders: Headers | undefined;
+    const extensionFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body));
+      capturedHeaders = new Headers(init?.headers);
+      return jsonResponse({ jobId: 'job-repair-2', threadId: 'thread-repair' }, 202);
+    }) as typeof fetch;
+    await dispatchResearchExtension(
+      'run-1', 'thread-repair', digestSeed, result.evidencePacket || '', digestDecision,
+      { reason: extensionDecision.reason }, config, extensionFetch,
+    );
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('1');
+    expect(captured.message).toContain('唯一一次工具调用**必须是 targeted search**');
+    expect(captured.message).toContain('禁止 crawl/browser');
   });
 
   it('allows universal digest to advance once targeted search evidence is present', async () => {
