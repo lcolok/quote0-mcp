@@ -190,7 +190,7 @@ describe('research canary adapter', () => {
       },
       {
         name: 'search', status: 'completed', input: { q: 'product update official independent' },
-        output: { query: 'product update official independent', results: [{ title: 'Independent', url: 'https://independent.example/report', content: 'corroboration', engine: 'anysearch' }] },
+        output: { query: 'product update official independent', results: [{ title: '普通产品更新独立验证', url: 'https://independent.example/report', content: '产品新增离线模式并改善启动速度的独立报道', engine: 'anysearch', score: 0.8 }] },
       },
       {
         name: 'crawl', status: 'completed', input: { url: `${digestSeed.link}?utm_source=dup` },
@@ -220,12 +220,56 @@ describe('research canary adapter', () => {
       initialTools[1],
       {
         name: 'crawl', status: 'completed', input: { url: 'https://independent.example/report' },
-        output: { status: 'completed', url: 'https://independent.example/report', engine: 'scrapling', result: { title: 'Independent', url: 'https://independent.example/report', text: 'independent body' } },
+        output: { status: 'completed', url: 'https://independent.example/report', engine: 'scrapling', result: { title: '普通产品更新独立验证', url: 'https://independent.example/report', text: 'independent body' } },
       },
     ]), 5_000, digestSeed);
     expect(shouldExtendDigestResearch(enoughPacket, initialRuntime, digestDecision)).toEqual(expect.objectContaining({
       extend: false,
       reason: 'coverage-sufficient',
+    }));
+  });
+
+  it('rejects irrelevant scholarly search noise instead of spending the conditional fourth call', () => {
+    const noiseSeed = {
+      title: 'OpenAI research and deployment company overview',
+      content: 'OpenAI describes itself as an AI research and deployment company. Its mission is to ensure artificial general intelligence benefits all of humanity.',
+      source: 'manual',
+      link: 'https://openai.com/about/',
+      category: 'technology',
+    };
+    const noiseDecision = triageResearchCandidate({ seed: noiseSeed, universal: true });
+    const tools = [
+      {
+        name: 'crawl', status: 'completed', input: { url: noiseSeed.link },
+        output: { status: 'completed', url: noiseSeed.link, engine: 'camoufox', result: { title: 'About | OpenAI', url: noiseSeed.link, text: 'OpenAI is an AI research and deployment company.' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'OpenAI research deployment company mission' },
+        output: {
+          query: 'OpenAI research deployment company mission',
+          results: [
+            { title: 'Changing Data Sources in the Age of Machine Learning for Official Statistics', url: 'http://arxiv.org/abs/2306.04338v1', content: 'Official statistics and machine learning data sources.', engine: 'arxiv', score: 0.5 },
+            { title: 'OpenAI o1 System Card', url: 'http://arxiv.org/abs/2412.16720v2', content: 'Safety evaluations for the OpenAI o1 model series.', engine: 'arxiv', score: 0.2 },
+            { title: 'Learning Dexterous In-Hand Manipulation', url: 'http://arxiv.org/abs/1808.00177v5', content: 'Policies trained with the system used for OpenAI Five.', engine: 'arxiv', score: 1 },
+          ],
+        },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${noiseSeed.link}?utm_source=duplicate` },
+        output: { status: 'completed', url: `${noiseSeed.link}?utm_source=duplicate`, engine: 'scrapling', result: { title: 'About | OpenAI', url: `${noiseSeed.link}?utm_source=duplicate`, text: 'same canonical page' } },
+      },
+    ];
+    const packet = buildResearchEvidencePacket(phaseATurns(tools), 5_000, noiseSeed);
+    const runtime: ResearchRuntimeReceipt = { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 };
+    const extension = shouldExtendDigestResearch(packet, runtime, noiseDecision);
+
+    expect(packet).toContain('"rejectedScholarlyNoise":3');
+    expect(packet).toContain('"searchCandidates":[]');
+    expect(extension).toEqual(expect.objectContaining({
+      extend: false,
+      required: false,
+      reason: 'no-novel-search-candidate',
+      candidateUrls: [],
     }));
   });
 

@@ -740,10 +740,28 @@ interface EvidenceLedgerEntry {
   engine?: string;
 }
 
+interface EvidenceSearchCandidate {
+  id: string;
+  canonicalUrl: string;
+  urlDigest: string;
+  title: string;
+  domain: string;
+  engine?: string;
+  score?: number;
+  matchedAnchors: string[];
+}
+
 interface EvidenceLedgerV2 {
   version: typeof RESEARCH_EVIDENCE_LEDGER_VERSION;
   entries: EvidenceLedgerEntry[];
   supportUrlDigests: string[];
+  searchCandidates: EvidenceSearchCandidate[];
+  searchCandidateStats: {
+    total: number;
+    relevant: number;
+    rejectedScholarlyNoise: number;
+    rejectedLowRelevance: number;
+  };
   retrieval: {
     status: 'healthy' | 'degraded' | 'unknown';
     enginesUsed: string[];
@@ -791,6 +809,119 @@ function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: Rese
   return entries;
 }
 
+const SEARCH_RELEVANCE_STOPWORDS = new Set([
+  'about', 'after', 'before', 'from', 'into', 'latest', 'new', 'official', 'overview',
+  'that', 'the', 'these', 'this', 'those', 'under', 'using', 'what', 'when', 'where',
+  'which', 'with', 'without', 'your', 'their', 'there', 'have', 'has', 'will', 'would',
+]);
+
+function normalizeRelevanceText(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase('en-US').replace(/\s+/gu, ' ').trim();
+}
+
+function seedRelevanceAnchors(seed?: ResearchSeed): {
+  wordAnchors: string[];
+  titleWordAnchors: string[];
+  hanBigrams: string[];
+  scholarly: boolean;
+} {
+  const title = cleanString(seed?.title).normalize('NFKC');
+  const contentLead = [...cleanString(seed?.content)].slice(0, 500).join('').normalize('NFKC');
+  const collectWords = (value: string) => [...new Set(
+    (value.match(/[\p{L}\p{N}][\p{L}\p{N}._+/-]{2,}/gu) || [])
+      .filter((token) => !/\p{Script=Han}/u.test(token))
+      .map((token) => normalizeRelevanceText(token))
+      .filter((token) => token.length >= 4 && !SEARCH_RELEVANCE_STOPWORDS.has(token)),
+  )].slice(0, 40);
+  const titleWordAnchors = collectWords(title);
+  const wordAnchors = [...new Set([...titleWordAnchors, ...collectWords(contentLead)])].slice(0, 48);
+  const hanBigrams = new Set<string>();
+  for (const chunk of title.match(/\p{Script=Han}{2,}/gu) || []) {
+    const chars = [...chunk];
+    for (let index = 0; index < chars.length - 1; index += 1) {
+      hanBigrams.add(`${chars[index]}${chars[index + 1]}`);
+    }
+  }
+  let seedDomain = '';
+  try { seedDomain = evidenceDomainKey(cleanString(seed?.link)); } catch { /* ignore */ }
+  const scholarly = seedDomain === 'arxiv.org'
+    || /(?:\barxiv\b|\bpaper\b|\bstudy\b|\bsystem card\b|论文|研究论文|预印本|学术)/iu.test(`${title}\n${contentLead}`);
+  return { wordAnchors, titleWordAnchors, hanBigrams: [...hanBigrams].slice(0, 48), scholarly };
+}
+
+function searchCandidateLedger(calls: StraylightToolCall[], seed?: ResearchSeed): {
+  candidates: EvidenceSearchCandidate[];
+  stats: EvidenceLedgerV2['searchCandidateStats'];
+} {
+  const anchors = seedRelevanceAnchors(seed);
+  const seen = new Set<string>();
+  const candidates: EvidenceSearchCandidate[] = [];
+  const stats = { total: 0, relevant: 0, rejectedScholarlyNoise: 0, rejectedLowRelevance: 0 };
+
+  for (const call of calls) {
+    if (!cleanString(call.name).toLowerCase().includes('search') || call.isError) continue;
+    const payload = unwrapToolPayload(call.output);
+    if (!Array.isArray(payload?.results)) continue;
+    for (const raw of payload.results.slice(0, 12)) {
+      if (!isPlainObject(raw)) continue;
+      const canonicalUrl = canonicalEvidenceUrl(cleanString(raw.url));
+      if (!canonicalUrl || seen.has(canonicalUrl)) continue;
+      seen.add(canonicalUrl);
+      stats.total += 1;
+      const title = cleanString(raw.title).slice(0, 180);
+      const content = cleanString(raw.content).slice(0, 900);
+      const engine = cleanString(raw.engine).toLowerCase();
+      const score = typeof raw.score === 'number' && Number.isFinite(raw.score) ? Math.max(0, raw.score) : undefined;
+      const titleNormalized = normalizeRelevanceText(title);
+      const combinedNormalized = normalizeRelevanceText(`${title}\n${content}`);
+      const titleMatches = anchors.titleWordAnchors.filter((anchor) => titleNormalized.includes(anchor));
+      const bodyMatches = anchors.wordAnchors.filter((anchor) => combinedNormalized.includes(anchor));
+      const candidateHanBigrams = new Set<string>();
+      for (const chunk of title.match(/\p{Script=Han}{2,}/gu) || []) {
+        const chars = [...chunk];
+        for (let index = 0; index < chars.length - 1; index += 1) candidateHanBigrams.add(`${chars[index]}${chars[index + 1]}`);
+      }
+      const hanMatches = anchors.hanBigrams.filter((anchor) => candidateHanBigrams.has(anchor));
+      const scholarlyNoise = engine === 'arxiv' && !anchors.scholarly;
+      if (scholarlyNoise) {
+        stats.rejectedScholarlyNoise += 1;
+        continue;
+      }
+      const strongTitleMatch = titleMatches.length >= 1;
+      const strongBodyMatch = bodyMatches.length >= 2;
+      const relevant = hanMatches.length >= 2
+        || (strongTitleMatch && (strongBodyMatch || (score ?? 0) >= 0.3))
+        || (strongBodyMatch && (score ?? 0) >= 0.5);
+      if (!relevant) {
+        stats.rejectedLowRelevance += 1;
+        continue;
+      }
+      const urlDigest = evidenceUrlDigest(canonicalUrl);
+      const domain = evidenceDomainKey(canonicalUrl);
+      if (!urlDigest || !domain) continue;
+      const matchedAnchors = [...new Set([...titleMatches, ...bodyMatches, ...hanMatches])].slice(0, 12);
+      candidates.push({
+        id: `C${candidates.length + 1}`,
+        canonicalUrl,
+        urlDigest,
+        title: title || domain,
+        domain,
+        ...(engine ? { engine } : {}),
+        ...(score !== undefined ? { score } : {}),
+        matchedAnchors,
+      });
+      stats.relevant += 1;
+    }
+  }
+
+  candidates.sort((left, right) => {
+    const anchorDelta = right.matchedAnchors.length - left.matchedAnchors.length;
+    if (anchorDelta) return anchorDelta;
+    return (right.score ?? 0) - (left.score ?? 0);
+  });
+  return { candidates: candidates.slice(0, 8), stats };
+}
+
 function evidenceRetrievalLedger(calls: StraylightToolCall[]): EvidenceLedgerV2['retrieval'] {
   const enginesUsed = new Set<string>();
   const unavailableEngines = new Set<string>();
@@ -826,10 +957,13 @@ function evidenceRetrievalLedger(calls: StraylightToolCall[]): EvidenceLedgerV2[
 
 function buildEvidenceLedger(calls: StraylightToolCall[], seed?: ResearchSeed): EvidenceLedgerV2 {
   const entries = successfulCrawlEvidenceEntries(calls, seed);
+  const searchCandidates = searchCandidateLedger(calls, seed);
   return {
     version: RESEARCH_EVIDENCE_LEDGER_VERSION,
     entries,
     supportUrlDigests: entries.map((entry) => entry.urlDigest).sort(),
+    searchCandidates: searchCandidates.candidates,
+    searchCandidateStats: searchCandidates.stats,
     retrieval: evidenceRetrievalLedger(calls),
   };
 }
@@ -863,6 +997,41 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
         ...(cleanString(item.engine) ? { engine: cleanString(item.engine) } : {}),
       });
     }
+    const searchCandidates: EvidenceSearchCandidate[] = [];
+    if (Array.isArray(raw.searchCandidates)) {
+      for (const item of raw.searchCandidates.slice(0, 8)) {
+        if (!isPlainObject(item)) continue;
+        const id = cleanString(item.id);
+        const canonicalUrl = canonicalEvidenceUrl(cleanString(item.canonicalUrl));
+        const urlDigest = cleanString(item.urlDigest);
+        const title = cleanString(item.title);
+        const domain = cleanString(item.domain) || (canonicalUrl ? evidenceDomainKey(canonicalUrl) : '');
+        const engine = cleanString(item.engine);
+        const score = typeof item.score === 'number' && Number.isFinite(item.score) ? Math.max(0, item.score) : undefined;
+        const matchedAnchors = Array.isArray(item.matchedAnchors)
+          ? [...new Set(item.matchedAnchors.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean))].slice(0, 12)
+          : [];
+        if (!id || !canonicalUrl || !domain || !/^[a-f0-9]{24}$/.test(urlDigest)) continue;
+        searchCandidates.push({
+          id,
+          canonicalUrl,
+          urlDigest,
+          title: title || domain,
+          domain,
+          ...(engine ? { engine } : {}),
+          ...(score !== undefined ? { score } : {}),
+          matchedAnchors,
+        });
+      }
+    }
+    const statsRaw = isPlainObject(raw.searchCandidateStats) ? raw.searchCandidateStats : {};
+    const statNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+    const searchCandidateStats = {
+      total: statNumber(statsRaw.total),
+      relevant: statNumber(statsRaw.relevant),
+      rejectedScholarlyNoise: statNumber(statsRaw.rejectedScholarlyNoise),
+      rejectedLowRelevance: statNumber(statsRaw.rejectedLowRelevance),
+    };
     const retrievalRaw = isPlainObject(raw.retrieval) ? raw.retrieval : {};
     const status = ['healthy', 'degraded', 'unknown'].includes(cleanString(retrievalRaw.status))
       ? cleanString(retrievalRaw.status) as EvidenceLedgerV2['retrieval']['status']
@@ -874,6 +1043,8 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
       version: RESEARCH_EVIDENCE_LEDGER_VERSION,
       entries,
       supportUrlDigests: entries.map((entry) => entry.urlDigest).sort(),
+      searchCandidates,
+      searchCandidateStats,
       retrieval: {
         status,
         enginesUsed: strings(retrievalRaw.enginesUsed),
@@ -974,7 +1145,11 @@ export function shouldExtendDigestResearch(
 
   const crawled = new Set(existingEntries.map((entry) => entry.canonicalUrl));
   const existingClusterSet = new Set(existingClusters);
-  const candidateUrls = searchCandidateUrls(evidencePacket).filter((url) =>
+  const relevanceGoverned = Boolean(ledger && (ledger.searchCandidateStats.total > 0 || ledger.searchCandidates.length > 0));
+  const discoveredCandidates = relevanceGoverned
+    ? ledger!.searchCandidates.map((candidate) => candidate.canonicalUrl)
+    : searchCandidateUrls(evidencePacket);
+  const candidateUrls = discoveredCandidates.filter((url) =>
     !crawled.has(url)
     && Boolean(evidenceDomainKey(url))
     && !existingClusterSet.has(evidenceDomainKey(url))
