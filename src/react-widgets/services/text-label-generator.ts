@@ -271,7 +271,7 @@ export class TextLabelGenerator {
     }
 
     // 7.7 v1.5.6: forceDecoration fallback —— LLM 完全不出装饰时强制注入
-    // 适配 Kimi-for-coding 不听 forceDecoration hint / 短 prompt LLM 偷懒等场景
+    // 防御短 prompt LLM 忽略 forceDecoration hint / 偷懒等场景
     const hasFrames = Array.isArray(props.frameSvgPaths) && props.frameSvgPaths.length > 0;
     if (override?.forceDecoration && !hasFrames) {
       console.log(`🌸 forceDecoration fallback: LLM (${llmConfig.model}) 未出装饰，注入默认 sparkle 装饰`);

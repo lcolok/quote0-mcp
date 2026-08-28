@@ -161,7 +161,9 @@ run=${runId}；policy=${decision.policyVersion}；触发原因=${decision.reason
 目标：${researchObjective(decision)}
 
 研究预算：
-- 最多 ${budget.maxToolCalls} 次工具调用；达到上限立即停止。
+- 最多 ${budget.maxToolCalls} 次工具调用；达到上限立即停止。运行时也会在该上限硬终止，不要尝试超额调用。
+- **严禁并行工具调用**：每个模型轮次只允许发起 1 个工具调用，必须等待该工具结果返回后再决定下一步。
+- 你必须在内部维护工具计数 1/${budget.maxToolCalls}、2/${budget.maxToolCalls}…；下一次调用若会超过上限，直接停止研究并输出完成标记。
 - seed 之外最多形成 ${budget.maxPostSeedArtifacts} 个高价值来源制品；目标独立来源簇至少 ${budget.targetIndependentClusters} 个（若客观上不可获得则如实降级）。
 - 最终 Evidence Packet 上限 ${budget.maxEvidenceChars} 字符；不要用低价值重复页面挤占证据预算。
 - 不要向用户提问，不要产生 ask_user / interaction。

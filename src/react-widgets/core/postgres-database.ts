@@ -128,6 +128,37 @@ export class PostgresDatabase {
       // Universal Evidence Research: preserve the pre-Research Direct draft as immutable
       // comparison/editorial context even after the inventory is replaced by the grounded final.
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS direct_snapshot JSONB`,
+      // v1.21.100: Quote0 LLM SSoT becomes LocalQwen-only. This migration is intentionally
+      // destructive for the Quote0 provider registry: there is no hidden paid-provider fallback.
+      `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type, enabled)
+       VALUES ('local-qwen', 'Local Qwen3.8 27B', 'https://copilot.logic.heiyu.space/providers/local-qwen/v1', 'dummy', 'openai-completions', true)
+       ON CONFLICT (slug) DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         base_url = EXCLUDED.base_url,
+         api_key = EXCLUDED.api_key,
+         api_type = EXCLUDED.api_type,
+         enabled = true,
+         updated_at = now()`,
+      `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning, enabled)
+       SELECT p.id, 'qwen3.8-27b', 'Qwen3.8 27B', 262144, 16384, false, true
+       FROM llm_providers p WHERE p.slug = 'local-qwen'
+       ON CONFLICT (provider_id, model_id) DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         context_window = EXCLUDED.context_window,
+         max_tokens = EXCLUDED.max_tokens,
+         reasoning = EXCLUDED.reasoning,
+         enabled = true`,
+      `INSERT INTO llm_active_setting (id, active_provider_id, active_model_id, updated_at)
+       SELECT 1, p.id, m.id, now()
+       FROM llm_providers p
+       JOIN llm_models m ON m.provider_id = p.id AND m.model_id = 'qwen3.8-27b'
+       WHERE p.slug = 'local-qwen'
+       ON CONFLICT (id) DO UPDATE SET
+         active_provider_id = EXCLUDED.active_provider_id,
+         active_model_id = EXCLUDED.active_model_id,
+         updated_at = now()`,
+      `DELETE FROM llm_fallback_chain`,
+      `DELETE FROM llm_providers WHERE slug <> 'local-qwen'`,
       // v1.21.65: inventory auto-canary provenance. Keep the trigger and source inventory id
       // in Quote0 domain state so the worker can enforce daily caps/idempotency without
       // scraping Straylight or overloading input_snapshot with control-plane metadata.
@@ -221,9 +252,6 @@ export class PostgresDatabase {
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS font_family text`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS icon_svg text`,
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS parent_revision_id uuid REFERENCES labels(id) ON DELETE SET NULL`,
-      // v1.4.4: kimi-for-coding provider 改用 dummy api_key（与 siliconflow 一致，
-      // 依赖 Copilot 网关自动注入真实 key，避免硬编码 sk-kimi-... 暴露）
-      `UPDATE llm_providers SET api_key = 'dummy', updated_at = now() WHERE slug = 'kimi-for-coding' AND api_key LIKE 'sk-kimi-%'`,
       // v1.5.0: widget 装饰层 SVG paths（绝对定位边缘装饰）
       `ALTER TABLE labels ADD COLUMN IF NOT EXISTS frame_svg_paths jsonb`,
       // v1.5.1: 装饰函数代码（LLM 写的 JS generator，sandbox 执行产 frameSvgPaths）
@@ -1466,73 +1494,24 @@ export class PostgresDatabase {
       throw error;
     }
 
-    // Seed LLM providers & models (幂等，单条失败不阻断其他)
+    // Seed the single Quote0 LLM provider. Existing databases are converged by the
+    // v1.21.100 migration above; fresh databases start in the same Qwen-only state.
     const llmSeedStatements = [
-      { name: 'siliconflow provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-        SELECT 'siliconflow', 'SiliconFlow (via copilot)', 'https://copilot.logic.heiyu.space/providers/siliconflow/v1', 'dummy', 'openai-completions'
-        WHERE NOT EXISTS (SELECT 1 FROM llm_providers)` },
-      { name: 'kimi-for-coding provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-        SELECT 'kimi-for-coding', 'Kimi For Coding (via copilot)', 'https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1', 'dummy', 'openai-completions'
-        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='kimi-for-coding')` },
-      { name: 'DeepSeek-V4-Flash model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-        SELECT p.id, 'deepseek-ai/DeepSeek-V4-Flash', 'DeepSeek V4-Flash', 64000, 8192, true
-        FROM llm_providers p WHERE p.slug='siliconflow'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V4-Flash')` },
-      { name: 'DeepSeek-V3 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-        SELECT p.id, 'deepseek-ai/DeepSeek-V3', 'DeepSeek V3', 64000, 8192, true
-        FROM llm_providers p WHERE p.slug='siliconflow'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-ai/DeepSeek-V3')` },
-      { name: 'GLM 5.1 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-        SELECT p.id, 'Pro/zai-org/GLM-5.1', 'GLM 5.1', 32000, 8192, true
-        FROM llm_providers p WHERE p.slug='siliconflow'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='Pro/zai-org/GLM-5.1')` },
-      { name: 'kimi-for-coding model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens)
-        SELECT p.id, 'kimi-for-coding', 'Kimi For Coding', 128000, 8192
-        FROM llm_providers p WHERE p.slug='kimi-for-coding'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='kimi-for-coding')` },
-      // === v1.21.42: 多端点 fallback 链供端点（codebuddy/longcat/deepseek）===
-      // 命名以考古报告 §2.5 为准，禁止改动：hy3 / LongCat-2.0 / deepseek-v4-flash
-      { name: 'codebuddy provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-        SELECT 'codebuddy', 'CodeBuddy / Hunyuan (via copilot)', 'https://copilot.logic.heiyu.space/providers/codebuddy/v1', 'dummy', 'openai-completions'
-        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='codebuddy')` },
-      { name: 'longcat provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-        SELECT 'longcat', 'LongCat (via copilot longchat_official)', 'https://copilot.logic.heiyu.space/providers/longchat_official/v1', 'dummy', 'openai-completions'
-        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='longcat')` },
-      { name: 'deepseek provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type)
-        SELECT 'deepseek', 'DeepSeek (via copilot deepseek)', 'https://copilot.logic.heiyu.space/providers/deepseek/v1', 'dummy', 'openai-completions'
-        WHERE NOT EXISTS (SELECT 1 FROM llm_providers WHERE slug='deepseek')` },
-      // hy3：腾讯混元，网关实测 200；context_window/max_tokens 给通用文本模型合理值。
-      { name: 'hy3 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-        SELECT p.id, 'hy3', 'Hunyuan hy3', 64000, 8192, false
-        FROM llm_providers p WHERE p.slug='codebuddy'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='hy3')` },
-      // LongCat-2.0：网关实测仅映射 2.0（LongCat/longcat 被拒）；reasoning 关（非推理模型）。
-      { name: 'LongCat-2.0 model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-        SELECT p.id, 'LongCat-2.0', 'LongCat 2.0', 64000, 8192, false
-        FROM llm_providers p WHERE p.slug='longcat'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='LongCat-2.0')` },
-      // deepseek-v4-flash：与 siliconflow 命名空间版 deepseek-ai/DeepSeek-V4-Flash 不同；推理模型，reasoning 开。
-      { name: 'deepseek-v4-flash model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning)
-        SELECT p.id, 'deepseek-v4-flash', 'DeepSeek V4 Flash', 64000, 8192, true
-        FROM llm_providers p WHERE p.slug='deepseek'
-        AND NOT EXISTS (SELECT 1 FROM llm_models m WHERE m.provider_id=p.id AND m.model_id='deepseek-v4-flash')` },
-      // fallback 链 seed：priority 1 → longcat/LongCat-2.0，priority 2 → deepseek/deepseek-v4-flash
-      // 注意：链仅含「备跳」，不含 active；active 由 llm_active_setting 管理，这里绝不触碰后者。
-      { name: 'fallback chain p1 longcat', sql: `INSERT INTO llm_fallback_chain (priority, provider_id, model_id)
+      { name: 'local-qwen provider', sql: `INSERT INTO llm_providers (slug, display_name, base_url, api_key, api_type, enabled)
+        VALUES ('local-qwen', 'Local Qwen3.8 27B', 'https://copilot.logic.heiyu.space/providers/local-qwen/v1', 'dummy', 'openai-completions', true)
+        ON CONFLICT (slug) DO NOTHING` },
+      { name: 'qwen3.8-27b model', sql: `INSERT INTO llm_models (provider_id, model_id, display_name, context_window, max_tokens, reasoning, enabled)
+        SELECT p.id, 'qwen3.8-27b', 'Qwen3.8 27B', 262144, 16384, false, true
+        FROM llm_providers p WHERE p.slug='local-qwen'
+        ON CONFLICT (provider_id, model_id) DO NOTHING` },
+      { name: 'active setting', sql: `INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
         SELECT 1, p.id, m.id
         FROM llm_providers p JOIN llm_models m ON m.provider_id=p.id
-        WHERE p.slug='longcat' AND m.model_id='LongCat-2.0'
-        AND NOT EXISTS (SELECT 1 FROM llm_fallback_chain WHERE priority=1)` },
-      { name: 'fallback chain p2 deepseek', sql: `INSERT INTO llm_fallback_chain (priority, provider_id, model_id)
-        SELECT 2, p.id, m.id
-        FROM llm_providers p JOIN llm_models m ON m.provider_id=p.id
-        WHERE p.slug='deepseek' AND m.model_id='deepseek-v4-flash'
-        AND NOT EXISTS (SELECT 1 FROM llm_fallback_chain WHERE priority=2)` },
-      { name: 'active setting', sql: `INSERT INTO llm_active_setting (id, active_provider_id, active_model_id)
-        SELECT 1,
-          (SELECT id FROM llm_providers WHERE slug='siliconflow'),
-          (SELECT id FROM llm_models WHERE model_id='deepseek-ai/DeepSeek-V3')
-        WHERE NOT EXISTS (SELECT 1 FROM llm_active_setting)` },
+        WHERE p.slug='local-qwen' AND m.model_id='qwen3.8-27b'
+        ON CONFLICT (id) DO UPDATE SET
+          active_provider_id=EXCLUDED.active_provider_id,
+          active_model_id=EXCLUDED.active_model_id,
+          updated_at=CURRENT_TIMESTAMP` },
     ];
     const llmResult = await this.runSeedStatements(client, llmSeedStatements);
     console.log(`🔧 LLM providers seed: ${llmResult.ok} ok, ${llmResult.failed} failed`);

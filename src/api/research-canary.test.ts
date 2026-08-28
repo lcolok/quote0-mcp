@@ -3,6 +3,7 @@ import {
   buildResearchEvidencePacket,
   dispatchResearchCanary,
   dispatchResearchFinalization,
+  getResearchCanaryConfig,
   inspectResearchCanary,
   RESEARCH_EVIDENCE_PACKET_VERSION,
   researchCanaryIdentity,
@@ -15,12 +16,11 @@ const config: ResearchCanaryConfig = {
   enabled: true,
   baseUrl: 'https://straylight.example/api',
   agentId: 'pi-mono',
+  researchProviderId: 'local-qwen',
+  finalizerProviderId: 'local-qwen',
   requestTimeoutMs: 5_000,
 };
-const finalizerConfig: ResearchCanaryConfig = {
-  ...config,
-  finalizerProviderId: 'hy3',
-};
+const finalizerConfig: ResearchCanaryConfig = { ...config };
 
 const seed = {
   title: 'MCP 新规范取消会话',
@@ -88,10 +88,19 @@ function phaseBTurns(text: string, toolCalls: Array<Record<string, unknown>> = [
 }
 
 describe('research canary adapter', () => {
+  it('fails closed when Quote0 Research is configured to a non-Qwen provider', () => {
+    expect(() => getResearchCanaryConfig({
+      QUOTE0_RESEARCH_CANARY_ENABLED: 'true',
+      STRAYLIGHT_RESEARCH_PROVIDER_ID: 'kimi-for-coding',
+    } as NodeJS.ProcessEnv)).toThrow('仅允许 local-qwen');
+  });
+
   it('dispatches seed-only Phase A as a deeper recovery run to pi-mono', async () => {
     let captured: any;
+    let capturedHeaders: Headers | undefined;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body));
+      capturedHeaders = new Headers(init?.headers);
       return jsonResponse({ jobId: 'job-a', threadId: 'thread-a' }, 202);
     }) as typeof fetch;
 
@@ -99,6 +108,9 @@ describe('research canary adapter', () => {
 
     expect(dispatched).toEqual({ jobId: 'job-a', threadId: 'thread-a' });
     expect(captured.agentId).toBe('pi-mono');
+    expect(captured.providerId).toBe('local-qwen');
+    expect(capturedHeaders?.get('x-straylight-provider-fallback')).toBe('off');
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('10');
     expect(captured.source).toEqual({ channel: 'agent', identity: researchCanaryIdentity('run-1') });
     expect(captured.message).toContain('Phase A：只负责检索和事实核验');
     expect(captured.message).toContain('研究模式：recovery');
@@ -223,8 +235,10 @@ describe('research canary adapter', () => {
 
   it('dispatches Phase B on a fresh thread with the frozen packet and v3 decision', async () => {
     let captured: any;
+    let capturedHeaders: Headers | undefined;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       captured = JSON.parse(String(init?.body));
+      capturedHeaders = new Headers(init?.headers);
       return jsonResponse({ jobId: 'job-b', threadId: 'thread-b' }, 202);
     }) as typeof fetch;
 
@@ -240,7 +254,9 @@ describe('research canary adapter', () => {
 
     expect(dispatched).toEqual({ jobId: 'job-b', threadId: 'thread-b' });
     expect(captured.threadId).toBeUndefined();
-    expect(captured.providerId).toBe('hy3');
+    expect(captured.providerId).toBe('local-qwen');
+    expect(capturedHeaders?.get('x-straylight-provider-fallback')).toBe('off');
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('0');
     expect(captured.message).toContain('Phase B finalizer');
     expect(captured.message).toContain('researchMode=recovery');
     expect(captured.message).toContain('绝对禁止调用任何工具');

@@ -37,7 +37,7 @@ const MULTIMODAL_TIMEOUT_MS = 60_000;
 export class MultimodalLLMClient {
   /**
    * 调多模态 LLM（OpenAI Chat Completions v1 vision schema）。
-   * 实测 kimi-for-coding 支持，但 image_url 必须是 base64 inline (data:...;base64,...)，
+   * Quote0 当前 LocalQwen 通路支持 base64 inline image_url (data:...;base64,...),
    * 不接受外网 URL。调用者负责把图片预先编码成 base64 data URL。
    */
   async chat(cfg: ActiveLLMConfig, req: MultimodalRequest): Promise<MultimodalResponse> {

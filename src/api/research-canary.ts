@@ -16,6 +16,7 @@ import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js'
 export const RESEARCH_CANARY_MODE = 'straylight-jobs-canary/v1';
 export const RESEARCH_CANARY_SOURCE_PREFIX = 'quote0-research-canary';
 export const RESEARCH_EVIDENCE_PACKET_VERSION = 'quote0-evidence-packet/v1';
+export const QUOTE0_RESEARCH_PROVIDER_ID = 'local-qwen';
 
 export type ResearchCanaryPhase = 'research' | 'finalization';
 
@@ -23,8 +24,8 @@ export interface ResearchCanaryConfig {
   enabled: boolean;
   baseUrl?: string;
   agentId: string;
-  researchProviderId?: string;
-  finalizerProviderId?: string;
+  researchProviderId: string;
+  finalizerProviderId: string;
   bearerToken?: string;
   requestTimeoutMs: number;
 }
@@ -113,6 +114,14 @@ function normalizeBaseUrl(value: string): string {
   return parsed.toString().replace(/\/$/u, '');
 }
 
+function quote0OnlyResearchProvider(value: string | undefined, envName: string): string {
+  const providerId = cleanString(value) || QUOTE0_RESEARCH_PROVIDER_ID;
+  if (providerId !== QUOTE0_RESEARCH_PROVIDER_ID) {
+    throw new Error(`${envName} 仅允许 ${QUOTE0_RESEARCH_PROVIDER_ID}；Quote0 已禁用其它 Research provider`);
+  }
+  return providerId;
+}
+
 export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): ResearchCanaryConfig {
   const enabled = String(env.QUOTE0_RESEARCH_CANARY_ENABLED || '').toLowerCase() === 'true';
   const baseUrlRaw = cleanString(env.STRAYLIGHT_RESEARCH_BASE_URL);
@@ -121,12 +130,8 @@ export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): R
     enabled,
     ...(baseUrlRaw ? { baseUrl: normalizeBaseUrl(baseUrlRaw) } : {}),
     agentId: cleanString(env.STRAYLIGHT_RESEARCH_AGENT_ID) || 'pi-mono',
-    ...(cleanString(env.STRAYLIGHT_RESEARCH_PROVIDER_ID)
-      ? { researchProviderId: cleanString(env.STRAYLIGHT_RESEARCH_PROVIDER_ID) }
-      : {}),
-    ...(cleanString(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID)
-      ? { finalizerProviderId: cleanString(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID) }
-      : {}),
+    researchProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_PROVIDER_ID'),
+    finalizerProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID'),
     ...(cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN)
       ? { bearerToken: cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN) }
       : {}),
@@ -157,6 +162,7 @@ export function researchCanaryIdempotencyKey(seed: ResearchSeed, decision: Resea
 function headers(config: ResearchCanaryConfig): HeadersInit {
   return {
     'Content-Type': 'application/json',
+    'X-Straylight-Provider-Fallback': 'off',
     ...(config.bearerToken ? { Authorization: `Bearer ${config.bearerToken}` } : {}),
   };
 }
@@ -200,10 +206,13 @@ export async function dispatchResearchCanary(
 ): Promise<StraylightCanaryDispatch> {
   const payload = await requestJson(config, '/jobs', {
     method: 'POST',
+    headers: {
+      'X-Straylight-Max-Tool-Calls': String(decision.budget?.maxToolCalls ?? 0),
+    },
     body: JSON.stringify({
       message: buildNeuromancerResearchPrompt(seed, decision, runId),
       agentId: config.agentId,
-      ...(config.researchProviderId ? { providerId: config.researchProviderId } : {}),
+      providerId: config.researchProviderId,
       source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
     }),
   }, fetchImpl);
@@ -231,6 +240,9 @@ export async function dispatchResearchFinalization(
 ): Promise<StraylightCanaryDispatch> {
   const payload = await requestJson(config, '/jobs', {
     method: 'POST',
+    headers: {
+      'X-Straylight-Max-Tool-Calls': '0',
+    },
     body: JSON.stringify({
       message: buildNeuromancerEvidenceFinalizationPrompt(
         seed,
@@ -241,7 +253,7 @@ export async function dispatchResearchFinalization(
         options.directDraft,
       ),
       agentId: config.agentId,
-      ...(config.finalizerProviderId ? { providerId: config.finalizerProviderId } : {}),
+      providerId: config.finalizerProviderId,
       source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
     }),
   }, fetchImpl);

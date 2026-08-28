@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.99
+version: 1.21.101
 
 # 应用名称
 name: Quote0 新闻服务
@@ -92,10 +92,10 @@ application:
     MINDRESET_DEVICE_ID: E4B063CC0F10
     MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
     LLM_PROVIDER: custom
-    LLM_BASE_URL: https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1
-    LLM_API_KEY: sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP
-    LLM_MODEL: kimi-for-coding
-    LLM_FAST_MODEL: kimi-for-coding
+    LLM_BASE_URL: https://copilot.logic.heiyu.space/providers/local-qwen/v1
+    LLM_API_KEY: dummy
+    LLM_MODEL: qwen3.8-27b
+    LLM_FAST_MODEL: qwen3.8-27b
     LLM_MAX_TOKENS: "1000"
     LLM_TEMPERATURE: "0.7"
     # 新闻调度器
@@ -208,7 +208,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.14-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.99
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.101
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1
@@ -233,10 +233,11 @@ services:
       QUOTE0_RESEARCH_CANARY_ENABLED: "true"
       STRAYLIGHT_RESEARCH_BASE_URL: https://profilmai.logic.heiyu.space/api
       STRAYLIGHT_RESEARCH_AGENT_ID: pi-mono
-      # Phase A keeps Straylight's default provider for tool-heavy research. Phase B is a
-      # no-tools JSON finalizer and is pinned independently because production Kimi/pi-json
-      # has shown intermittent no-event failures on larger frozen evidence packets.
-      STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID: hy3
+      # Quote0 Research is single-provider and fail-closed: both phases are pinned to
+      # LocalQwen. The adapter also sends X-Straylight-Provider-Fallback: off so an
+      # unhealthy Qwen endpoint fails/retries instead of silently switching providers.
+      STRAYLIGHT_RESEARCH_PROVIDER_ID: local-qwen
+      STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID: local-qwen
       STRAYLIGHT_RESEARCH_REQUEST_TIMEOUT_MS: "15000"
       # Universal Evidence Research：每条 producer 新闻都必须先经过 Neuromancer evidence digestion。
       # 取消按天“研究几条”的采样上限；初版仍固定 concurrency=1，并由每条 digest=4 / enrichment=6 /
@@ -254,10 +255,10 @@ services:
       MINDRESET_DEVICE_ID: E4B063CC0F10
       MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr
       LLM_PROVIDER: custom
-      LLM_BASE_URL: https://copilot.logic.heiyu.space/providers/kimi-for-coding/v1
-      LLM_API_KEY: sk-kimi-6CEsG7VymIssuaj9A3CMnFClXIIrigTbIRKXRvdSJar95QbcfNIpYX2B1mHPcgJP
-      LLM_MODEL: kimi-for-coding
-      LLM_FAST_MODEL: kimi-for-coding
+      LLM_BASE_URL: https://copilot.logic.heiyu.space/providers/local-qwen/v1
+      LLM_API_KEY: dummy
+      LLM_MODEL: qwen3.8-27b
+      LLM_FAST_MODEL: qwen3.8-27b
       LLM_MAX_TOKENS: "1000"
       LLM_TEMPERATURE: "0.7"
       EINK_DEVICES_JSON: '<set-via-lazycat-console>'
