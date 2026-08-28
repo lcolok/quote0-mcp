@@ -236,12 +236,11 @@ export function buildNeuromancerServerOwnedEditorialPrompt(
     : '';
   return `你是“神经漫游者”的 Quote0 墨水屏编辑器。Phase A 已结束，Evidence Packet 顶部的 Ledger v2 是证据 SSoT；只有 ledger.entries 中的 E1/E2/... 可以支撑最终事实。search snippet 只用于发现线索，绝不能自行变成来源。
 
-这一步只做编辑决策，不生成完整新闻 artifact。Quote0 服务器会自行生成 researchReceipt、sources、source、highlights、signature、category、usage、run/thread id 与 retrieval telemetry。你禁止输出 URL、source role、claim status 或任何 ledger 中不存在的证据。
+这一步只做编辑决策，不生成完整新闻 artifact。Quote0 服务器会自行生成 researchReceipt、sources、source、highlights、signature、category、publishTime、usage、run/thread id 与 retrieval telemetry。你禁止输出 URL、publishTime、source role、claim status 或任何 ledger 中不存在的证据。
 
 输出语义：
 - titleCandidates：恰好 3 个不同的紧凑中文标题候选，按优先级排序；保留关键实体/动作/数字，优先 <=22 display units，必要时 <=28。
 - facts：1~${decision.budget?.maxPublishableClaims ?? 4} 条按信息增益排序的完整事实句。每条 text 必须是一句可以独立放进新闻卡片的完整中文句子，不写半句，不写来源列表；evidenceIds 只能引用 Ledger 中 supportEligible=true 的 E 编号。Quote0 会按真实 display units 逐句装箱，放不下的整句会被丢弃，所以最重要事实放最前。
-- publishTime：只在 Seed/Evidence 中有依据时给出对应 ISO-8601 时间；无法确定时使用当前生成时间也不要杜撰具体历史日期。
 - linkEvidenceId：选择最适合继续阅读的一个 Ledger E 编号，优先 canonical/primary/official 对应页面。
 
 Direct Draft 只是编辑参考，不是证据；任何事实必须由 Ledger E 编号支撑：
@@ -256,7 +255,7 @@ ${errorSection}
 296×152 文案 few-shot（version=${EINK_NEWS_FEW_SHOT_VERSION}；只学习信息密度和中文表达，不复制事实）：
 ${renderFewShots()}
 
-不要输出 researchReceipt/source/highlights/URL。严格服从 structured schema。`;
+不要输出 researchReceipt/source/highlights/URL/publishTime。严格服从 structured schema。`;
 }
 
 export function buildNeuromancerEvidenceFinalizationPrompt(

@@ -33,6 +33,7 @@ const seed = {
   source: 'InfoQ',
   link: 'https://www.infoq.cn/example',
   category: 'technology',
+  publishTime: '2026-08-17T00:00:00.000Z',
 };
 const seedDecision = triageResearchCandidate({ seed });
 
@@ -124,7 +125,6 @@ function validEditorialDecision() {
       { text: 'MCP新规范取消协议会话和初始化握手', evidenceIds: ['E1'] },
       { text: '请求新增Mcp-Method与Mcp-Name标头，网关可据此路由和限流', evidenceIds: ['E1'] },
     ],
-    publishTime: '2026-08-17T00:00:00.000Z',
     linkEvidenceId: 'E1',
   };
 }
@@ -473,7 +473,9 @@ describe('research canary adapter', () => {
     expect(captured.jsonSchema.name).toBe('quote0_server_owned_editorial');
     expect(captured.jsonSchema.schema.properties.facts.items.properties.evidenceIds.items.enum).toEqual(['E1', 'E2']);
     expect(captured.jsonSchema.schema.properties.metadata).toBeUndefined();
+    expect(captured.jsonSchema.schema.properties.publishTime).toBeUndefined();
     expect(captured.messages[0].content).toContain('Quote0 服务器会自行生成 researchReceipt');
+    expect(captured.messages[0].content).toContain('publishTime');
     expect(captured.agentId).toBeUndefined();
     expect(result.candidate.titleCandidates).toEqual(validEditorialDecision().titleCandidates);
     expect(result.telemetry).toEqual({
@@ -508,7 +510,7 @@ describe('research canary adapter', () => {
           providerId: 'local-qwen',
           model: 'qwen3.8-27b',
           latencyMs: 1200,
-          attempt: 1,
+          attempt: 2,
           usage: { input: 100, output: 40, total: 140, cacheRead: 5 },
         },
       },
@@ -521,7 +523,10 @@ describe('research canary adapter', () => {
     expect(result.artifact?.source).toBe('modelcontextprotocol.io');
     expect(result.artifact?.highlights).toBeUndefined();
     expect(result.artifact?.metadata?.researchArtifactOwnership).toBe('quote0-server/v1');
+    expect(result.artifact?.publishTime).toBe('2026-08-17T00:00:00.000Z');
+    expect(result.artifact?.metadata?.publishTimeSource).toBe('seed');
     expect(result.artifact?.metadata?.researchReceipt?.threadId).toBe('phase-a-thread');
+    expect(result.artifact?.metadata?.researchReceipt?.seed?.publishTime).toBe('2026-08-17T00:00:00.000Z');
     expect(result.artifact?.metadata?.researchReceipt?.sources).toEqual([
       expect.objectContaining({ id: 'E1', url: 'https://modelcontextprotocol.io/example', role: 'secondary' }),
     ]);
@@ -532,6 +537,7 @@ describe('research canary adapter', () => {
     expect(result.artifact?.metadata?.researchReceipt?.usage?.providerReportedTokens).toEqual({
       status: 'reported', input: 100, output: 40, total: 140, cacheRead: 5,
     });
+    expect(result.artifact?.metadata?.researchReceipt?.usage?.llmCalls).toBe(2);
   });
 
   it('skips an over-capacity fact as a whole instead of truncating a sentence', () => {
@@ -549,7 +555,6 @@ describe('research canary adapter', () => {
             { text: '这是一条故意制造的超长事实句'.repeat(40), evidenceIds: ['E1'] },
             { text: 'MCP新规范取消协议会话和初始化握手', evidenceIds: ['E1'] },
           ],
-          publishTime: '2026-08-17T00:00:00.000Z',
           linkEvidenceId: 'E1',
         },
         telemetry: {

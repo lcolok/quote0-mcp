@@ -115,12 +115,17 @@ export function inventoryRowToResearchSeed(row: InventoryResearchRow): ResearchS
   const source = cleanString(raw.source) || cleanString(row.source);
   const link = cleanString(raw.link) || cleanString(row.link);
   const category = cleanString(raw.category) || cleanString(row.category) || 'news';
+  const publishTimeRaw = cleanString(raw.publishTime);
+  const publishTime = publishTimeRaw && !Number.isNaN(Date.parse(publishTimeRaw))
+    ? new Date(publishTimeRaw).toISOString()
+    : '';
   return {
     title,
     ...(content ? { content } : {}),
     ...(source ? { source } : {}),
     ...(link ? { link } : {}),
     category,
+    ...(publishTime ? { publishTime } : {}),
   };
 }
 

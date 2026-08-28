@@ -8,6 +8,8 @@ export interface ResearchSeed {
   source?: string;
   link?: string;
   category?: string;
+  /** Source publication timestamp when the ingestion layer has one. */
+  publishTime?: string;
 }
 
 export interface ResearchTriageInput {

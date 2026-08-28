@@ -158,6 +158,7 @@ export function researchCanaryFingerprint(seed: ResearchSeed): string {
     link: seed.link || '',
     source: seed.source || '',
     category: seed.category || '',
+    publishTime: seed.publishTime || '',
   })).digest('hex');
 }
 
@@ -372,10 +373,9 @@ function structuredFinalizationSchema(
             required: ['text', 'evidenceIds'],
           },
         },
-        publishTime: { type: 'string' },
         linkEvidenceId: { type: 'string', enum: evidenceIds },
       },
-      required: ['titleCandidates', 'facts', 'publishTime', 'linkEvidenceId'],
+      required: ['titleCandidates', 'facts', 'linkEvidenceId'],
     };
   }
   const source = {
@@ -1071,6 +1071,9 @@ function seedReceipt(seed: ResearchSeed): NonNullable<NeuromancerResearchReceipt
     ...(content ? { content } : {}),
     ...(cleanString(seed.source) ? { source: cleanString(seed.source) } : {}),
     ...(cleanString(seed.link) ? { link: cleanString(seed.link) } : {}),
+    ...(cleanString(seed.publishTime) && !Number.isNaN(Date.parse(cleanString(seed.publishTime)))
+      ? { publishTime: new Date(cleanString(seed.publishTime)).toISOString() }
+      : {}),
   };
 }
 
@@ -1180,10 +1183,12 @@ function materializeServerOwnedEditorialArtifact(input: {
     return { errors: ['最终 artifact 缺少可用 link evidence'], policyViolation: false };
   }
 
-  const publishTime = cleanString(candidate.publishTime);
-  if (!publishTime || Number.isNaN(Date.parse(publishTime))) {
-    return { errors: ['publishTime 必须是 Evidence/Seed 支持的合法 ISO-8601 时间'], policyViolation: false };
-  }
+  const seedPublishTime = cleanString(input.seed.publishTime);
+  const publishTimeFromSeed = seedPublishTime && !Number.isNaN(Date.parse(seedPublishTime));
+  const publishTime = publishTimeFromSeed
+    ? new Date(seedPublishTime).toISOString()
+    : new Date().toISOString();
+  const publishTimeSource = publishTimeFromSeed ? 'seed' : 'research-completion';
 
   const reportedTokens = telemetry.usage;
   const receipt: NeuromancerResearchReceipt = {
@@ -1209,7 +1214,7 @@ function materializeServerOwnedEditorialArtifact(input: {
       providerReportedTokens: reportedTokens
         ? { status: 'reported', ...reportedTokens }
         : { status: 'unavailable' },
-      llmCalls: 1,
+      llmCalls: Math.max(1, telemetry.attempt),
       toolCalls: input.runtime.toolCalls,
       searchRequests: input.runtime.searchRequests,
       crawlRequests: input.runtime.crawlRequests,
@@ -1221,7 +1226,7 @@ function materializeServerOwnedEditorialArtifact(input: {
     message,
     signature: '神经漫游者',
     source: sourceLabelFromEvidence(sources),
-    publishTime: new Date(publishTime).toISOString(),
+    publishTime,
     category: 'news',
     link: linkEntry.canonicalUrl,
     highlights: [],
@@ -1230,6 +1235,7 @@ function materializeServerOwnedEditorialArtifact(input: {
       researchReceipt: receipt,
       researchFinalizer: telemetry,
       researchArtifactOwnership: 'quote0-server/v1',
+      publishTimeSource,
     },
   };
   const validation = validateRenderableNews(artifactCandidate);

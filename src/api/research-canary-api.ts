@@ -45,12 +45,17 @@ function normalizeSeed(value: unknown): ResearchSeed | undefined {
   const raw = value as Record<string, unknown>;
   const title = cleanString(raw.title);
   if (!title) return undefined;
+  const publishTimeRaw = cleanString(raw.publishTime);
+  const publishTime = publishTimeRaw && !Number.isNaN(Date.parse(publishTimeRaw))
+    ? new Date(publishTimeRaw).toISOString()
+    : '';
   return {
     title,
     ...(cleanString(raw.content) ? { content: cleanString(raw.content) } : {}),
     ...(cleanString(raw.source) ? { source: cleanString(raw.source) } : {}),
     ...(cleanString(raw.link) ? { link: cleanString(raw.link) } : {}),
     ...(cleanString(raw.category) ? { category: cleanString(raw.category) } : {}),
+    ...(publishTime ? { publishTime } : {}),
   };
 }
 
@@ -72,6 +77,10 @@ function boundedMetricsHours(value: string | undefined): number {
   const parsed = Number.parseInt(value || '24', 10);
   if (!Number.isFinite(parsed)) return 24;
   return Math.max(1, Math.min(168, parsed));
+}
+
+function metricsTrigger(value: string | undefined): 'inventory-auto' | 'manual' | 'all' {
+  return value === 'manual' || value === 'all' ? value : 'inventory-auto';
 }
 
 function canaryUnavailable() {
@@ -272,6 +281,7 @@ async function completeWithStructuredFinalizer(
 
 app.get('/api/news/research/canary/metrics', async (c) => {
   const hours = boundedMetricsHours(c.req.query('hours'));
+  const trigger = metricsTrigger(c.req.query('trigger'));
   await postgres.initialize();
   const summaryResult = await postgres.query(
     `WITH r AS (
@@ -294,6 +304,7 @@ app.get('/api/news/research/canary/metrics', async (c) => {
          FROM research_runs
         WHERE policy_version = $2
           AND created_at >= NOW() - ($1::text || ' hours')::interval
+          AND ($3='all' OR trigger=$3)
      )
      SELECT COUNT(*)::int AS total,
             COUNT(*) FILTER (WHERE state='completed')::int AS completed,
@@ -316,17 +327,18 @@ app.get('/api/news/research/canary/metrics', async (c) => {
             ROUND(AVG(NULLIF(finalizer_latency_ms,0))::numeric, 1) AS avg_finalizer_latency_ms,
             ROUND(AVG(NULLIF(finalizer_tokens,0))::numeric, 1) AS avg_finalizer_tokens
        FROM r`,
-    [String(hours), RESEARCH_TRIAGE_POLICY_VERSION],
+    [String(hours), RESEARCH_TRIAGE_POLICY_VERSION, trigger],
   );
   const reasonResult = await postgres.query(
     `SELECT research_extension_receipt->>'reason' AS reason, COUNT(*)::int AS count
        FROM research_runs
       WHERE policy_version=$2
         AND created_at >= NOW() - ($1::text || ' hours')::interval
+        AND ($3='all' OR trigger=$3)
         AND research_extension_receipt IS NOT NULL
       GROUP BY research_extension_receipt->>'reason'
       ORDER BY COUNT(*) DESC, reason ASC`,
-    [String(hours), RESEARCH_TRIAGE_POLICY_VERSION],
+    [String(hours), RESEARCH_TRIAGE_POLICY_VERSION, trigger],
   );
   const row = summaryResult.rows[0] || {};
   const total = Number(row.total || 0);
@@ -334,6 +346,7 @@ app.get('/api/news/research/canary/metrics', async (c) => {
   return c.json({
     success: true,
     windowHours: hours,
+    trigger,
     policyVersion: RESEARCH_TRIAGE_POLICY_VERSION,
     summary: {
       total,
