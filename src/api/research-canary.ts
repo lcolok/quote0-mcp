@@ -8,6 +8,7 @@ import {
   type NeuromancerResearchReceipt,
 } from './renderable-news-intake.js';
 import {
+  EINK_NEWS_FEW_SHOT_VERSION,
   buildNeuromancerEvidenceFinalizationPrompt,
   buildNeuromancerResearchPrompt,
   type NeuromancerEditorialDraft,
@@ -28,6 +29,7 @@ export interface ResearchCanaryConfig {
   agentId: string;
   researchProviderId: string;
   finalizerProviderId: string;
+  structuredFinalizer: boolean;
   bearerToken?: string;
   requestTimeoutMs: number;
 }
@@ -134,6 +136,7 @@ export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): R
     agentId: cleanString(env.STRAYLIGHT_RESEARCH_AGENT_ID) || 'pi-mono',
     researchProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_PROVIDER_ID'),
     finalizerProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID'),
+    structuredFinalizer: String(env.QUOTE0_RESEARCH_STRUCTURED_FINALIZER || '').toLowerCase() === 'true',
     ...(cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN)
       ? { bearerToken: cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN) }
       : {}),
@@ -265,6 +268,173 @@ export async function dispatchResearchFinalization(
   const threadId = cleanString(payload.threadId);
   if (!jobId || !threadId) throw new Error('Straylight finalization /jobs 缺少 jobId/threadId');
   return { jobId, threadId };
+}
+
+export interface StructuredFinalizationTelemetry {
+  mode: 'structured-inference';
+  providerId: string;
+  model: string;
+  latencyMs: number;
+  finishReason?: string;
+  attempt: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    total?: number;
+  };
+}
+
+export interface StructuredResearchFinalization {
+  candidate: Record<string, unknown>;
+  telemetry: StructuredFinalizationTelemetry;
+}
+
+function structuredFinalizationSchema(runId: string, decision: ResearchTriageDecision): Record<string, unknown> {
+  if (!decision.budget) throw new Error('finalization 缺少 Research budget');
+  const maxSources = decision.budget.maxPostSeedArtifacts + 1;
+  const maxClaims = decision.budget.maxPublishableClaims;
+  const source = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'string' },
+      url: { type: 'string' },
+      title: { type: 'string' },
+      role: { type: 'string', enum: ['seed', 'primary', 'official', 'secondary', 'syndicated', 'community'] },
+    },
+    required: ['id', 'url', 'title', 'role'],
+  };
+  const claim = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      text: { type: 'string' },
+      sourceIds: { type: 'array', minItems: 1, maxItems: maxSources, items: { type: 'string' } },
+      // Final publishable cards never need context/unresolved/conflict claims.
+      // If evidence cannot support a claim, the model must omit it instead.
+      status: { type: 'string', const: 'supported' },
+    },
+    required: ['text', 'sourceIds', 'status'],
+  };
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'string', const: `quote0-neuromancer-${runId}` },
+      title: { type: 'string' },
+      message: { type: 'string' },
+      signature: { type: 'string', const: '神经漫游者' },
+      source: { type: 'string' },
+      publishTime: { type: 'string' },
+      category: { type: 'string', const: 'news' },
+      link: { type: 'string' },
+      highlights: { type: 'array', maxItems: 4, items: { type: 'string' } },
+      metadata: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          fewShotVersion: { type: 'string', const: EINK_NEWS_FEW_SHOT_VERSION },
+          researchReceipt: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              schemaVersion: { type: 'string', const: NEUROMANCER_RESEARCH_RECEIPT_VERSION },
+              agent: { type: 'string', const: 'neuromancer' },
+              sources: { type: 'array', minItems: 1, maxItems: maxSources, items: source },
+              claims: { type: 'array', minItems: 1, maxItems: maxClaims, items: claim },
+              retrieval: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  status: { type: 'string', enum: ['healthy', 'degraded', 'unknown'] },
+                  enginesUsed: { type: 'array', maxItems: 8, items: { type: 'string' } },
+                  unavailableEngines: { type: 'array', maxItems: 8, items: { type: 'string' } },
+                },
+                required: ['status', 'enginesUsed', 'unavailableEngines'],
+              },
+            },
+            required: ['schemaVersion', 'agent', 'sources', 'claims', 'retrieval'],
+          },
+        },
+        required: ['fewShotVersion', 'researchReceipt'],
+      },
+    },
+    required: ['id', 'title', 'message', 'signature', 'source', 'publishTime', 'category', 'link', 'highlights', 'metadata'],
+  };
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
+export async function dispatchStructuredResearchFinalization(
+  runId: string,
+  seed: ResearchSeed,
+  evidencePacket: string,
+  decision: ResearchTriageDecision,
+  options: { errors?: string[]; directDraft?: NeuromancerEditorialDraft; attempt?: number } = {},
+  config: ResearchCanaryConfig = getResearchCanaryConfig(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<StructuredResearchFinalization> {
+  const payload = await requestJson(config, '/inference/structured', {
+    method: 'POST',
+    body: JSON.stringify({
+      providerId: config.finalizerProviderId,
+      messages: [{
+        role: 'user',
+        content: buildNeuromancerEvidenceFinalizationPrompt(
+          seed,
+          evidencePacket,
+          runId,
+          decision,
+          options.errors || [],
+          options.directDraft,
+        ),
+      }],
+      jsonSchema: {
+        name: 'quote0_research_final_artifact',
+        schema: structuredFinalizationSchema(runId, decision),
+      },
+      temperature: 0.1,
+      maxTokens: 4_096,
+    }),
+  }, fetchImpl);
+  if (!isPlainObject(payload) || !isPlainObject(payload.parsed)) {
+    throw new Error('Straylight structured finalization 返回格式无效');
+  }
+  const providerId = cleanString(payload.providerId);
+  const model = cleanString(payload.model);
+  if (providerId !== config.finalizerProviderId) {
+    throw new Error(`Straylight structured finalization provider 漂移: ${providerId || 'missing'}`);
+  }
+  const rawUsage = isPlainObject(payload.usage) ? payload.usage : {};
+  const promptTokens = nonNegativeInteger(rawUsage.prompt_tokens);
+  const completionTokens = nonNegativeInteger(rawUsage.completion_tokens);
+  const totalTokens = nonNegativeInteger(rawUsage.total_tokens);
+  const promptDetails = isPlainObject(rawUsage.prompt_tokens_details) ? rawUsage.prompt_tokens_details : {};
+  const cachedTokens = nonNegativeInteger(promptDetails.cached_tokens);
+  return {
+    candidate: payload.parsed,
+    telemetry: {
+      mode: 'structured-inference',
+      providerId,
+      model,
+      latencyMs: nonNegativeInteger(payload.latencyMs) ?? 0,
+      ...(cleanString(payload.finishReason) ? { finishReason: cleanString(payload.finishReason) } : {}),
+      attempt: Math.max(1, Math.floor(options.attempt || 1)),
+      ...(promptTokens !== undefined || completionTokens !== undefined || totalTokens !== undefined || cachedTokens !== undefined
+        ? {
+            usage: {
+              ...(promptTokens !== undefined ? { input: promptTokens } : {}),
+              ...(completionTokens !== undefined ? { output: completionTokens } : {}),
+              ...(cachedTokens !== undefined ? { cacheRead: cachedTokens } : {}),
+              ...(totalTokens !== undefined ? { total: totalTokens } : {}),
+            },
+          }
+        : {}),
+    },
+  };
 }
 
 async function tryGetJob(
@@ -610,6 +780,7 @@ function materializeArtifact(
   runtime: ResearchRuntimeReceipt,
   decision: ResearchTriageDecision,
   evidencePacket?: string,
+  finalizerTelemetry?: StructuredFinalizationTelemetry,
 ): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
   const normalizedCandidate = normalizeNeuromancerFinalArtifact(candidate) as Record<string, unknown>;
   const metadata = isPlainObject(normalizedCandidate.metadata) ? { ...normalizedCandidate.metadata } : {};
@@ -626,6 +797,7 @@ function materializeArtifact(
   if (rawSources.length > sourceCap) policyErrors.push(`Research source artifact budget 超限: ${rawSources.length} > ${sourceCap}`);
   if (rawClaims.length > claimCap) policyErrors.push(`Research claim budget 超限: ${rawClaims.length} > ${claimCap}`);
 
+  const reportedTokens = finalizerTelemetry?.usage;
   const receipt = {
     ...rawReceipt,
     schemaVersion: NEUROMANCER_RESEARCH_RECEIPT_VERSION,
@@ -634,9 +806,13 @@ function materializeArtifact(
     runId: jobId,
     generatedAt: new Date().toISOString(),
     seed: seedReceipt(seed),
-    // Accounting evidence is runtime-derived. Any model-authored usage is discarded.
+    // Tool accounting is runtime-derived. Structured Phase B additionally exposes
+    // real provider token telemetry; model-authored usage is always discarded.
     usage: {
-      providerReportedTokens: { status: 'unavailable' },
+      providerReportedTokens: reportedTokens
+        ? { status: 'reported', ...reportedTokens }
+        : { status: 'unavailable' },
+      ...(finalizerTelemetry ? { llmCalls: 1 } : {}),
       toolCalls: runtime.toolCalls,
       searchRequests: runtime.searchRequests,
       crawlRequests: runtime.crawlRequests,
@@ -644,7 +820,11 @@ function materializeArtifact(
   };
   const validation = validateRenderableNews({
     ...normalizedCandidate,
-    metadata: { ...metadata, researchReceipt: receipt },
+    metadata: {
+      ...metadata,
+      ...(finalizerTelemetry ? { researchFinalizer: finalizerTelemetry } : {}),
+      researchReceipt: receipt,
+    },
   });
   if (!validation.ok) {
     return { errors: [...policyErrors, ...validation.errors], policyViolation: policyErrors.length > 0 };
@@ -657,6 +837,27 @@ function materializeArtifact(
     // budget overruns are runtime policy violations and must fail closed.
     policyViolation: policyErrors.length > 0,
   };
+}
+
+export function materializeStructuredResearchFinalization(input: {
+  runId: string;
+  phaseAThreadId: string;
+  seed: ResearchSeed;
+  evidencePacket: string;
+  decision: ResearchTriageDecision;
+  runtime: ResearchRuntimeReceipt;
+  finalization: StructuredResearchFinalization;
+}): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
+  return materializeArtifact(
+    input.finalization.candidate,
+    input.seed,
+    input.phaseAThreadId,
+    input.runId,
+    input.runtime,
+    input.decision,
+    input.evidencePacket,
+    input.finalization.telemetry,
+  );
 }
 
 export async function inspectResearchCanary(

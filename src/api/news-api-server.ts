@@ -868,6 +868,7 @@ app.get('/api/health', (c) => {
       agentId: research.agentId,
       phaseAProvider: research.researchProviderId,
       phaseBProvider: research.finalizerProviderId,
+      phaseBMode: research.structuredFinalizer ? 'structured-inference' : 'agent-job',
       strictProvider: true,
       fallback: 'none',
       triagePolicy: RESEARCH_TRIAGE_POLICY_VERSION,

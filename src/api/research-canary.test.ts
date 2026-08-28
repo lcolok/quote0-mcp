@@ -3,6 +3,7 @@ import {
   buildResearchEvidencePacket,
   dispatchResearchCanary,
   dispatchResearchFinalization,
+  dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
   inspectResearchCanary,
   RESEARCH_EVIDENCE_PACKET_VERSION,
@@ -18,6 +19,7 @@ const config: ResearchCanaryConfig = {
   agentId: 'pi-mono',
   researchProviderId: 'local-qwen',
   finalizerProviderId: 'local-qwen',
+  structuredFinalizer: false,
   requestTimeoutMs: 5_000,
 };
 const finalizerConfig: ResearchCanaryConfig = { ...config };
@@ -288,6 +290,55 @@ describe('research canary adapter', () => {
     expect(captured.message).toContain('Direct Draft');
     expect(captured.message).toContain('Direct detail');
     expect(captured.message).toContain('output=official');
+  });
+
+  it('uses Straylight structured inference for a no-session Qwen finalizer', async () => {
+    let capturedUrl = '';
+    let captured: any;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      captured = JSON.parse(String(init?.body));
+      return jsonResponse({
+        providerId: 'local-qwen',
+        model: 'qwen3.8-27b',
+        parsed: validCandidate(),
+        usage: {
+          prompt_tokens: 123,
+          completion_tokens: 45,
+          total_tokens: 168,
+          prompt_tokens_details: { cached_tokens: 7 },
+        },
+        finishReason: 'stop',
+        latencyMs: 1234,
+      });
+    }) as typeof fetch;
+
+    const result = await dispatchStructuredResearchFinalization(
+      'run-1',
+      seed,
+      validGroundingPacket(),
+      seedDecision,
+      { directDraft: { title: 'Direct', message: 'Direct detail' }, attempt: 2 },
+      { ...config, structuredFinalizer: true },
+      fetchImpl,
+    );
+
+    expect(capturedUrl).toEndWith('/inference/structured');
+    expect(captured.providerId).toBe('local-qwen');
+    expect(captured.messages).toHaveLength(1);
+    expect(captured.jsonSchema.name).toBe('quote0_research_final_artifact');
+    expect(captured.jsonSchema.schema.properties.metadata.properties.researchReceipt.properties.claims.items.properties.status.const).toBe('supported');
+    expect(captured.agentId).toBeUndefined();
+    expect(result.candidate.title).toBe(validCandidate().title);
+    expect(result.telemetry).toEqual({
+      mode: 'structured-inference',
+      providerId: 'local-qwen',
+      model: 'qwen3.8-27b',
+      latencyMs: 1234,
+      finishReason: 'stop',
+      attempt: 2,
+      usage: { input: 123, output: 45, cacheRead: 7, total: 168 },
+    });
   });
 
   it('derives cumulative usage from Phase-A runtime while Phase B remains zero-tool', async () => {

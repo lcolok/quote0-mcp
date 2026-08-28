@@ -4,8 +4,10 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import {
   dispatchResearchCanary,
   dispatchResearchFinalization,
+  dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
   inspectResearchCanary,
+  materializeStructuredResearchFinalization,
   RESEARCH_CANARY_MODE,
   researchCanaryFingerprint,
   researchCanaryIdempotencyKey,
@@ -57,7 +59,7 @@ function publicRun(run: ResearchRunRecord) {
     // Explicitly state that this is a compatibility canary and cannot be mistaken for
     // the future durable Straylight Run API contract.
     executionContract: RESEARCH_CANARY_MODE,
-    phase: run.attempts <= 1 ? 'research' : 'finalization',
+    phase: run.resultArtifact?.metadata?.researchFinalizer || run.attempts > 1 ? 'finalization' : 'research',
     promotable: run.state === 'completed',
     autoPublished: false,
   };
@@ -68,6 +70,164 @@ function canaryUnavailable() {
   if (!config.enabled) return 'QUOTE0_RESEARCH_CANARY_ENABLED 未启用';
   if (!config.baseUrl) return 'STRAYLIGHT_RESEARCH_BASE_URL 未配置';
   return undefined;
+}
+
+type StructuredCompletionResult =
+  | { kind: 'completed'; run: ResearchRunRecord; universalApply?: unknown }
+  | { kind: 'invalid'; run: ResearchRunRecord; errors: string[] }
+  | { kind: 'failed'; run: ResearchRunRecord; error: string }
+  | { kind: 'pending'; run: ResearchRunRecord; error: string };
+
+async function completeWithStructuredFinalizer(
+  run: ResearchRunRecord,
+  evidencePacket: string,
+  runtime: NonNullable<ResearchRunRecord['runtimeReceipt']>,
+): Promise<StructuredCompletionResult> {
+  if (!run.straylightThreadId) {
+    const error = 'structured finalization 缺少 Phase A threadId';
+    const failed = await markResearchRunState(postgres, run.id, { state: 'failed', error, validationErrors: [error] });
+    return { kind: 'failed', run: failed, error };
+  }
+
+  const maxAttempts = 1 + (run.triage.budget?.maxFinalizationRetries ?? 1);
+  let feedback: string[] = [];
+  let lastArtifact: ReturnType<typeof materializeStructuredResearchFinalization>['artifact'];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let structured;
+    try {
+      structured = await dispatchStructuredResearchFinalization(
+        run.id,
+        run.inputSnapshot,
+        evidencePacket,
+        run.triage,
+        {
+          errors: feedback,
+          directDraft: directDraftFromRun(run),
+          attempt,
+        },
+      );
+    } catch (error) {
+      const message = `Structured Phase B attempt ${attempt} 失败: ${error instanceof Error ? error.message : String(error)}`;
+      feedback = [message];
+      if (attempt < maxAttempts) continue;
+      const failed = await markResearchRunState(postgres, run.id, {
+        state: 'failed',
+        runtimeReceipt: runtime,
+        evidenceSnapshot: evidencePacket,
+        validationErrors: feedback,
+        error: message,
+      });
+      return { kind: 'failed', run: failed, error: message };
+    }
+
+    const materialized = materializeStructuredResearchFinalization({
+      runId: run.id,
+      phaseAThreadId: run.straylightThreadId,
+      seed: run.inputSnapshot,
+      evidencePacket,
+      decision: run.triage,
+      runtime,
+      finalization: structured,
+    });
+    lastArtifact = materialized.artifact;
+
+    if (materialized.policyViolation) {
+      const invalid = await markResearchRunState(postgres, run.id, {
+        state: 'invalid',
+        runtimeReceipt: runtime,
+        evidenceSnapshot: evidencePacket,
+        validationErrors: materialized.errors,
+        error: materialized.errors.join('; '),
+      });
+      return { kind: 'invalid', run: invalid, errors: materialized.errors };
+    }
+
+    if (!materialized.artifact) {
+      feedback = materialized.errors.length ? materialized.errors : ['Structured Phase B 未产出合法 artifact'];
+      if (attempt < maxAttempts) continue;
+      const invalid = await markResearchRunState(postgres, run.id, {
+        state: 'invalid',
+        runtimeReceipt: runtime,
+        evidenceSnapshot: evidencePacket,
+        validationErrors: feedback,
+        error: feedback.join('; '),
+      });
+      return { kind: 'invalid', run: invalid, errors: feedback };
+    }
+
+    const artifact = materialized.artifact;
+    if (run.trigger === 'inventory-auto' && run.sourceInventoryId) {
+      const materializationRun: ResearchRunRecord = {
+        ...run,
+        runtimeReceipt: runtime,
+        resultArtifact: artifact,
+        completedAt: new Date().toISOString(),
+      };
+      try {
+        const universalApply = await applyUniversalResearchArtifact(postgres, {
+          run: materializationRun,
+          artifact,
+        });
+        const completed = await markResearchRunState(postgres, run.id, {
+          state: 'completed',
+          runtimeReceipt: runtime,
+          evidenceSnapshot: evidencePacket,
+          resultArtifact: artifact,
+          validationErrors: [],
+        });
+        return { kind: 'completed', run: completed, universalApply };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const publishGateFailure = message.startsWith('universal Research final artifact 无效:');
+        if (publishGateFailure) {
+          feedback = [`universal publish gate: ${message}`];
+          if (attempt < maxAttempts) continue;
+          const invalid = await markResearchRunState(postgres, run.id, {
+            state: 'invalid',
+            runtimeReceipt: runtime,
+            evidenceSnapshot: evidencePacket,
+            resultArtifact: artifact,
+            validationErrors: feedback,
+            error: feedback.join('; '),
+          });
+          return { kind: 'invalid', run: invalid, errors: feedback };
+        }
+
+        // Rendering/storage failures are not editorial failures. Keep the frozen
+        // evidence + valid artifact so a later reconcile can retry without any
+        // new Phase-A tool calls.
+        const pending = await markResearchRunState(postgres, run.id, {
+          state: 'running',
+          runtimeReceipt: runtime,
+          evidenceSnapshot: evidencePacket,
+          resultArtifact: artifact,
+          validationErrors: [`structured materialization pending: ${message}`],
+        });
+        return { kind: 'pending', run: pending, error: message };
+      }
+    }
+
+    const completed = await markResearchRunState(postgres, run.id, {
+      state: 'completed',
+      runtimeReceipt: runtime,
+      evidenceSnapshot: evidencePacket,
+      resultArtifact: artifact,
+      validationErrors: [],
+    });
+    return { kind: 'completed', run: completed };
+  }
+
+  const fallbackErrors = feedback.length ? feedback : ['Structured Phase B exhausted without result'];
+  const invalid = await markResearchRunState(postgres, run.id, {
+    state: 'invalid',
+    runtimeReceipt: runtime,
+    evidenceSnapshot: evidencePacket,
+    ...(lastArtifact ? { resultArtifact: lastArtifact } : {}),
+    validationErrors: fallbackErrors,
+    error: fallbackErrors.join('; '),
+  });
+  return { kind: 'invalid', run: invalid, errors: fallbackErrors };
 }
 
 app.post('/api/news/research/canary/jobs', async (c) => {
@@ -175,12 +335,57 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
   }
 
   if (inspection.status === 'research_complete' && inspection.evidencePacket) {
-    await markResearchRunState(postgres, run.id, {
+    const persisted = await markResearchRunState(postgres, run.id, {
       state: 'running',
       runtimeReceipt: inspection.runtime,
       evidenceSnapshot: inspection.evidencePacket,
       validationErrors: inspection.errors,
     });
+
+    if (getResearchCanaryConfig().structuredFinalizer) {
+      const outcome = await completeWithStructuredFinalizer(
+        persisted,
+        inspection.evidencePacket,
+        inspection.runtime,
+      );
+      if (outcome.kind === 'completed') {
+        return c.json({
+          success: true,
+          reconciled: true,
+          phaseTransition: 'research->structured-finalization->completed',
+          structuredFinalizer: true,
+          ...(outcome.universalApply ? { universalApply: outcome.universalApply } : {}),
+          data: publicRun(outcome.run),
+        });
+      }
+      if (outcome.kind === 'pending') {
+        return c.json({
+          success: false,
+          reconciled: true,
+          retryable: true,
+          structuredFinalizer: true,
+          error: `Structured Research artifact 已合法，但 materialization 暂未成功: ${outcome.error}`,
+          data: publicRun(outcome.run),
+        }, 503);
+      }
+      if (outcome.kind === 'failed') {
+        return c.json({
+          success: false,
+          reconciled: true,
+          structuredFinalizer: true,
+          error: outcome.error,
+          data: publicRun(outcome.run),
+        }, 502);
+      }
+      return c.json({
+        success: false,
+        reconciled: true,
+        structuredFinalizer: true,
+        error: outcome.errors.join('; '),
+        data: publicRun(outcome.run),
+      }, 422);
+    }
+
     try {
       const finalized = await dispatchResearchFinalization(
         run.id,

@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.102
+version: 1.21.103
 
 # 应用名称
 name: Quote0 新闻服务
@@ -208,7 +208,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.14-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.102
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.103
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1
@@ -238,6 +238,7 @@ services:
       # unhealthy Qwen endpoint fails/retries instead of silently switching providers.
       STRAYLIGHT_RESEARCH_PROVIDER_ID: local-qwen
       STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID: local-qwen
+      QUOTE0_RESEARCH_STRUCTURED_FINALIZER: "true"
       STRAYLIGHT_RESEARCH_REQUEST_TIMEOUT_MS: "15000"
       # Universal Evidence Research：每条 producer 新闻都必须先经过 Neuromancer evidence digestion。
       # 取消按天“研究几条”的采样上限；初版仍固定 concurrency=1，并由每条 digest=4 / enrichment=6 /
