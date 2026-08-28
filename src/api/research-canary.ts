@@ -851,6 +851,13 @@ interface EvidenceLedgerV2 {
   version: typeof RESEARCH_EVIDENCE_LEDGER_VERSION;
   entries: EvidenceLedgerEntry[];
   supportUrlDigests: string[];
+  toolSummary: {
+    searchRequests: number;
+    successfulSearchRequests: number;
+    crawlRequests: number;
+    successfulCrawlRequests: number;
+    failedToolCalls: number;
+  };
   searchCandidates: EvidenceSearchCandidate[];
   searchCandidateStats: {
     total: number;
@@ -883,6 +890,10 @@ function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: Rese
       .map((value) => canonicalEvidenceUrl(cleanString(value)))
       .find((value): value is string => Boolean(value));
     if (!canonicalUrl || seen.has(canonicalUrl)) continue;
+    const crawlSurface = `${cleanString(result.title)}\n${cleanString(result.formatted)}\n${cleanString(result.text)}\n${cleanString(payload?.content)}`.slice(0, 1_200);
+    if (/(?:^|\b)(?:403 forbidden|404 not found|access denied|captcha)(?:\b|$)|enable javascript and cookies|just a moment\.\.\.|checking your browser/iu.test(crawlSurface)) {
+      continue;
+    }
     const urlDigest = evidenceUrlDigest(canonicalUrl);
     if (!urlDigest) continue;
     seen.add(canonicalUrl);
@@ -1054,6 +1065,28 @@ function evidenceRetrievalLedger(calls: StraylightToolCall[]): EvidenceLedgerV2[
   };
 }
 
+function evidenceToolSummary(calls: StraylightToolCall[]): EvidenceLedgerV2['toolSummary'] {
+  let searchRequests = 0;
+  let successfulSearchRequests = 0;
+  let crawlRequests = 0;
+  let successfulCrawlRequests = 0;
+  let failedToolCalls = 0;
+  for (const call of calls) {
+    const name = cleanString(call.name).toLowerCase();
+    const succeeded = toolCallSucceeded(call);
+    if (name.includes('search')) {
+      searchRequests += 1;
+      if (succeeded) successfulSearchRequests += 1;
+    }
+    if (name.includes('crawl')) {
+      crawlRequests += 1;
+      if (succeeded) successfulCrawlRequests += 1;
+    }
+    if (!succeeded) failedToolCalls += 1;
+  }
+  return { searchRequests, successfulSearchRequests, crawlRequests, successfulCrawlRequests, failedToolCalls };
+}
+
 function buildEvidenceLedger(calls: StraylightToolCall[], seed?: ResearchSeed): EvidenceLedgerV2 {
   const entries = successfulCrawlEvidenceEntries(calls, seed);
   const searchCandidates = searchCandidateLedger(calls, seed);
@@ -1061,6 +1094,7 @@ function buildEvidenceLedger(calls: StraylightToolCall[], seed?: ResearchSeed): 
     version: RESEARCH_EVIDENCE_LEDGER_VERSION,
     entries,
     supportUrlDigests: entries.map((entry) => entry.urlDigest).sort(),
+    toolSummary: evidenceToolSummary(calls),
     searchCandidates: searchCandidates.candidates,
     searchCandidateStats: searchCandidates.stats,
     retrieval: evidenceRetrievalLedger(calls),
@@ -1096,6 +1130,15 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
         ...(cleanString(item.engine) ? { engine: cleanString(item.engine) } : {}),
       });
     }
+    const toolSummaryRaw = isPlainObject(raw.toolSummary) ? raw.toolSummary : {};
+    const ledgerCount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+    const toolSummary: EvidenceLedgerV2['toolSummary'] = {
+      searchRequests: ledgerCount(toolSummaryRaw.searchRequests),
+      successfulSearchRequests: ledgerCount(toolSummaryRaw.successfulSearchRequests),
+      crawlRequests: ledgerCount(toolSummaryRaw.crawlRequests),
+      successfulCrawlRequests: ledgerCount(toolSummaryRaw.successfulCrawlRequests),
+      failedToolCalls: ledgerCount(toolSummaryRaw.failedToolCalls),
+    };
     const searchCandidates: EvidenceSearchCandidate[] = [];
     if (Array.isArray(raw.searchCandidates)) {
       for (const item of raw.searchCandidates.slice(0, 8)) {
@@ -1145,6 +1188,7 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
       version: RESEARCH_EVIDENCE_LEDGER_VERSION,
       entries,
       supportUrlDigests: entries.map((entry) => entry.urlDigest).sort(),
+      toolSummary,
       searchCandidates,
       searchCandidateStats,
       retrieval: {
@@ -1261,7 +1305,9 @@ export function shouldExtendDigestResearch(
   if (existingEntries.length === 0) {
     return { ...base, extend: true, required: true, reason: 'minimum-evidence-repair' };
   }
-  if (runtime.searchRequests < 1) {
+  const requireSuccessfulSearch = decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION;
+  const successfulSearchRequests = ledger?.toolSummary.successfulSearchRequests ?? 0;
+  if ((requireSuccessfulSearch && successfulSearchRequests < 1) || (!requireSuccessfulSearch && runtime.searchRequests < 1)) {
     return { ...base, extend: true, required: true, reason: 'minimum-search-repair' };
   }
   if (existingClusters.length >= budget.targetIndependentClusters) {
@@ -1715,6 +1761,16 @@ export async function inspectResearchCanary(
         };
       }
       const coverageErrors = researchMinimumCoverageErrors(phaseRuntime, params.decision);
+      if (params.decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION && params.decision.researchMode === 'digest') {
+        const ledger = parseEvidenceLedger(evidencePacket);
+        if (!ledger?.entries.length) {
+          coverageErrors.push('digest minimum coverage 未满足: 至少需要 1 个 support-eligible crawl');
+        }
+        if ((ledger?.toolSummary.successfulSearchRequests ?? 0) < 1
+          && !coverageErrors.some((error) => error.includes('成功的 freshness/provenance targeted search'))) {
+          coverageErrors.push('digest minimum coverage 未满足: 至少需要 1 次成功的 freshness/provenance targeted search');
+        }
+      }
       const initialToolCalls = budget.initialToolCalls ?? 0;
       const stagedRepairAvailable = params.decision.researchMode === 'digest'
         && (budget.extensionToolCalls ?? 0) > 0

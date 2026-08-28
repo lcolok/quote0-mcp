@@ -480,6 +480,83 @@ describe('research canary adapter', () => {
     expect(captured.message).toContain('禁止 crawl/browser');
   });
 
+  it('treats a failed search as missing minimum coverage and requires a successful repair', async () => {
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。'.repeat(4),
+      source: 'Example',
+      link: 'https://example.com/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    const tools = [
+      {
+        name: 'crawl', status: 'completed', input: { url: digestSeed.link },
+        output: { status: 'completed', url: digestSeed.link, engine: 'scrapling', result: { title: 'Seed', url: digestSeed.link, text: 'Canonical update body' } },
+      },
+      {
+        name: 'search', status: 'failed', isError: true, input: { q: 'product update provenance' },
+        output: { status: 'failed', error: 'search backend unavailable' },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${digestSeed.link}?utm_source=dup` },
+        output: { status: 'completed', url: `${digestSeed.link}?utm_source=dup`, engine: 'camoufox', result: { title: 'Seed duplicate', url: `${digestSeed.link}?utm_source=dup`, text: 'same body' } },
+      },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-search-failed')) return jsonResponse({ jobId: 'job-search-failed', threadId: 'thread-search-failed', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-search-failed')) return jsonResponse({ turns: phaseATurns(tools) });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed: digestSeed, decision: digestDecision, jobId: 'job-search-failed', threadId: 'thread-search-failed', phase: 'research',
+    }, config, fetchImpl);
+    expect(result.status).toBe('research_complete');
+    expect(result.runtime.searchRequests).toBe(1);
+    expect(result.errors.join(' ')).toContain('至少需要 1 次成功的 freshness/provenance targeted search');
+    const extension = shouldExtendDigestResearch(result.evidencePacket || '', result.runtime, digestDecision);
+    expect(extension).toEqual(expect.objectContaining({
+      extend: true,
+      required: true,
+      reason: 'minimum-search-repair',
+    }));
+    expect(result.evidencePacket).toContain('"successfulSearchRequests":0');
+  });
+
+  it('does not treat obvious access-denied crawl pages as support-eligible evidence', () => {
+    const blockedSeed = {
+      title: 'Blocked canonical page',
+      content: 'A sufficiently detailed digest seed that still needs provenance confirmation. '.repeat(5),
+      source: 'Example',
+      link: 'https://blocked.example/article',
+      category: 'technology',
+    };
+    const blockedDecision = triageResearchCandidate({ seed: blockedSeed, universal: true });
+    const packet = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: blockedSeed.link },
+        output: { status: 'completed', url: blockedSeed.link, engine: 'scrapling', result: { title: '403 Forbidden', url: blockedSeed.link, text: '403 Forbidden' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'blocked canonical provenance' },
+        output: { query: 'blocked canonical provenance', results: [] },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${blockedSeed.link}?retry=1` },
+        output: { status: 'completed', url: `${blockedSeed.link}?retry=1`, engine: 'camoufox', result: { title: 'Access Denied', url: `${blockedSeed.link}?retry=1`, text: 'Access Denied' } },
+      },
+    ]), 5_000, blockedSeed);
+    const runtime: ResearchRuntimeReceipt = { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 };
+    expect(packet).toContain('"entries":[]');
+    expect(shouldExtendDigestResearch(packet, runtime, blockedDecision)).toEqual(expect.objectContaining({
+      extend: true,
+      required: true,
+      reason: 'minimum-evidence-repair',
+    }));
+  });
+
   it('allows universal digest to advance once targeted search evidence is present', async () => {
     const digestSeed = {
       title: '普通产品更新',
