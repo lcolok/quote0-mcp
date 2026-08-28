@@ -173,6 +173,7 @@ export class PostgresDatabase {
       END $$`,
       `CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_research_runs_inventory_policy_state ON research_runs(source_inventory_id, policy_version, state) WHERE source_inventory_id IS NOT NULL`,
       // v1.21.20: component_labels 加 widget_id 并入主键(code,target_id,widget_id)。
       // 之前 code 命名空间在 component-code/component-value 两种 widget 间共享，
       // 理论上存在撞键后返回错误 widget 渲染结果的风险；加 widget_id 从结构上杜绝。
@@ -1191,6 +1192,7 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_research_runs_thread ON research_runs(straylight_thread_id) WHERE straylight_thread_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_research_runs_inventory_policy_state ON research_runs(source_inventory_id, policy_version, state) WHERE source_inventory_id IS NOT NULL;
 
       -- Neuromancer paired content Review：直接比较同一 inventory 的 direct processed artifact
       -- 与 Research result_artifact。盲测展示侧由 run id 确定性派生，表内保存 semantic truth，

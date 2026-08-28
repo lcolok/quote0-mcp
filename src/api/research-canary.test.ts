@@ -87,6 +87,31 @@ function phaseBTurns(text: string, toolCalls: Array<Record<string, unknown>> = [
   ];
 }
 
+function validGroundingPacket() {
+  return buildResearchEvidencePacket(phaseATurns([
+    {
+      name: 'crawl',
+      status: 'completed',
+      input: { url: 'https://modelcontextprotocol.io/example' },
+      output: {
+        status: 'completed',
+        url: 'https://modelcontextprotocol.io/example',
+        result: { url: 'https://modelcontextprotocol.io/example', text: 'Official MCP evidence' },
+      },
+    },
+    {
+      name: 'crawl',
+      status: 'completed',
+      input: { url: 'https://www.infoq.cn/example' },
+      output: {
+        status: 'completed',
+        url: 'https://www.infoq.cn/example',
+        result: { url: 'https://www.infoq.cn/example', text: 'Seed evidence' },
+      },
+    },
+  ]));
+}
+
 describe('research canary adapter', () => {
   it('fails closed when Quote0 Research is configured to a non-Qwen provider', () => {
     expect(() => getResearchCanaryConfig({
@@ -233,7 +258,7 @@ describe('research canary adapter', () => {
     expect(defaultPacket).toContain('tool=search');
   });
 
-  it('dispatches Phase B on a fresh thread with the frozen packet and v3 decision', async () => {
+  it('dispatches Phase B on a fresh thread with the frozen packet and current decision', async () => {
     let captured: any;
     let capturedHeaders: Headers | undefined;
     const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -275,7 +300,7 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime, priorEvidencePacket: validGroundingPacket(),
     }, config, fetchImpl);
 
     expect(result.status).toBe('completed');
@@ -285,6 +310,43 @@ describe('research canary adapter', () => {
     expect(result.artifact?.metadata?.researchReceipt?.usage?.providerReportedTokens).toEqual({ status: 'unavailable' });
     expect(result.artifact?.metadata?.researchReceipt?.seed?.content).toBe('点击查看原文>');
     expect(result.artifact?.message).toBe(candidate.message);
+  });
+
+  it('rejects supported claims that cite search-only URLs without a successful crawl', async () => {
+    const candidate = validCandidate();
+    const searchOnlyPacket = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'search',
+        status: 'completed',
+        input: { q: 'MCP official spec' },
+        output: {
+          query: 'MCP official spec',
+          results: [{ title: 'MCP official', url: 'https://modelcontextprotocol.io/example', content: 'search snippet only' }],
+        },
+      },
+    ]));
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-b')) return jsonResponse({ jobId: 'job-b', threadId: 'thread-b', status: 'completed', response: JSON.stringify(candidate) });
+      if (url.endsWith('/threads/thread-b')) return jsonResponse({ turns: phaseBTurns(JSON.stringify(candidate)) });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1',
+      seed,
+      decision: seedDecision,
+      jobId: 'job-b',
+      threadId: 'thread-b',
+      phase: 'finalization',
+      priorRuntime: { toolCalls: 1, searchRequests: 1, crawlRequests: 0, failedToolCalls: 0 },
+      priorEvidencePacket: searchOnlyPacket,
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('invalid');
+    expect(result.retryable).toBe(true);
+    expect(result.errors.join(' ')).toContain('未经过成功 crawl/snapshot');
+    expect(result.errors.join(' ')).toContain('search snippet 只能作为线索');
   });
 
   it('preserves the full rich seed in domain input while capping Receipt seed.content at 1000 chars', async () => {
@@ -299,7 +361,7 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed: richSeed, decision: richDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed: richSeed, decision: richDecision, jobId: 'job-b', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime, priorEvidencePacket: validGroundingPacket(),
     }, config, fetchImpl);
 
     expect(richSeed.content.length).toBeGreaterThan(1_000);
@@ -317,7 +379,7 @@ describe('research canary adapter', () => {
     }) as typeof fetch;
 
     const result = await inspectResearchCanary({
-      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-lost', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime,
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-lost', threadId: 'thread-b', phase: 'finalization', priorRuntime: phaseARuntime, priorEvidencePacket: validGroundingPacket(),
     }, config, fetchImpl);
 
     expect(result.status).toBe('completed');

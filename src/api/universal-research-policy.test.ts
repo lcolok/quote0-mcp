@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   markUniversalResearchPending,
+  markUniversalResearchQuarantined,
   markUniversalResearchReady,
   researchGateFrom,
   UNIVERSAL_RESEARCH_POLICY_VERSION,
@@ -29,6 +30,36 @@ describe('universal evidence research policy', () => {
       queuedAt: queuedAt.toISOString(),
     });
     expect(researchGateFrom(next)?.state).toBe('pending');
+  });
+
+  test('quarantines poison inventory without erasing existing metadata', () => {
+    const quarantinedAt = new Date('2026-08-21T00:02:00.000Z');
+    const next = markUniversalResearchQuarantined({
+      title: 'Direct',
+      metadata: {
+        contentQuality: { disposition: 'hold' },
+        researchGate: {
+          schemaVersion: UNIVERSAL_RESEARCH_POLICY_VERSION,
+          required: true,
+          state: 'pending',
+          queuedAt: '2026-08-21T00:00:00.000Z',
+        },
+      },
+    }, {
+      reason: '3 failures',
+      researchPolicyVersion: 'quote0-research-triage/v4',
+      failureCount: 3,
+      now: quarantinedAt,
+    });
+    expect(next.metadata.contentQuality.disposition).toBe('hold');
+    expect(next.metadata.researchGate).toEqual(expect.objectContaining({
+      state: 'quarantined',
+      quarantineReason: '3 failures',
+      researchPolicyVersion: 'quote0-research-triage/v4',
+      failureCount: 3,
+      quarantinedAt: quarantinedAt.toISOString(),
+    }));
+    expect(researchGateFrom(next)?.state).toBe('quarantined');
   });
 
   test('turns the evidence-grounded final artifact into the only ready version', () => {

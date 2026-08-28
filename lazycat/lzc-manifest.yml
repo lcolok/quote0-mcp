@@ -7,7 +7,7 @@ lzc-sdk-version: "0.1"
 package: me.friday.quote0-mcp
 
 # 应用版本号（遵循 SemVer）
-version: 1.21.101
+version: 1.21.102
 
 # 应用名称
 name: Quote0 新闻服务
@@ -208,7 +208,7 @@ services:
 #@build if env.DEV_MODE=1
     image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.14-dev
 #@build else
-    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.101
+    image: dev.logic.heiyu.space/friday/quote0-mcp-api:v1.21.102
 #@build end
     # 长生命周期服务自愈意图。⚠️ 实测此 pkgm 版本【忽略】该字段——安装后所有容器 RestartPolicy 仍是 no。
     # 真正生效需部署后手动补：docker -H unix:///lzcsys/run/lzc-docker/docker.sock update --restart=unless-stopped mefridayquote0-mcp-news-api-1
@@ -249,6 +249,7 @@ services:
       QUOTE0_RESEARCH_AUTO_LOOKBACK_HOURS: "24"
       QUOTE0_RESEARCH_AUTO_TICK_MS: "15000"
       QUOTE0_RESEARCH_AUTO_SCAN_LIMIT: "25"
+      QUOTE0_RESEARCH_AUTO_MAX_FAILURES_PER_POLICY: "3"
       # TRMNL 3.2 adaptive renderer canary: explicit-only, concurrency=1, never auto-selected.
       QUOTE0_TRMNL_CANARY_ENABLED: "true"
       MINDRESET_BASE_URL: https://dot.mindreset.tech/api

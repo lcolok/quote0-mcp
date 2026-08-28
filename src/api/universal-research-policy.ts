@@ -6,13 +6,17 @@ export const UNIVERSAL_RESEARCH_POLICY_VERSION = 'universal-evidence-research/v1
 export interface UniversalResearchGate {
   schemaVersion: typeof UNIVERSAL_RESEARCH_POLICY_VERSION;
   required: true;
-  state: 'pending' | 'ready';
+  state: 'pending' | 'ready' | 'quarantined';
   queuedAt?: string;
   researchRunId?: string;
   researchMode?: string;
   completedAt?: string;
   toolCalls?: number;
   evidenceChars?: number;
+  quarantinedAt?: string;
+  quarantineReason?: string;
+  researchPolicyVersion?: string;
+  failureCount?: number;
 }
 
 function asRecord(value: unknown): Record<string, any> {
@@ -51,8 +55,33 @@ export function researchGateFrom(value: unknown): UniversalResearchGate | undefi
   if (!gate || typeof gate !== 'object' || Array.isArray(gate)) return undefined;
   const record = gate as Record<string, unknown>;
   if (record.schemaVersion !== UNIVERSAL_RESEARCH_POLICY_VERSION || record.required !== true) return undefined;
-  if (record.state !== 'pending' && record.state !== 'ready') return undefined;
+  if (record.state !== 'pending' && record.state !== 'ready' && record.state !== 'quarantined') return undefined;
   return record as unknown as UniversalResearchGate;
+}
+
+export function markUniversalResearchQuarantined<T extends Record<string, any>>(
+  processedContent: T,
+  input: { reason: string; researchPolicyVersion: string; failureCount: number; now?: Date },
+): T {
+  const metadata = asRecord(processedContent.metadata);
+  const current = asRecord(metadata.researchGate);
+  const now = input.now || new Date();
+  return {
+    ...processedContent,
+    metadata: {
+      ...metadata,
+      researchGate: {
+        ...current,
+        schemaVersion: UNIVERSAL_RESEARCH_POLICY_VERSION,
+        required: true,
+        state: 'quarantined',
+        quarantinedAt: now.toISOString(),
+        quarantineReason: input.reason,
+        researchPolicyVersion: input.researchPolicyVersion,
+        failureCount: Math.max(1, Math.floor(input.failureCount)),
+      } satisfies UniversalResearchGate,
+    },
+  };
 }
 
 export function markUniversalResearchReady(

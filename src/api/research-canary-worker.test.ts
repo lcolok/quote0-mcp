@@ -16,6 +16,7 @@ describe('research auto-canary worker policy', () => {
       lookbackHours: 24,
       tickMs: 30_000,
       scanLimit: 25,
+      maxFailuresPerPolicy: 3,
     });
     expect(getResearchAutoWorkerConfig({
       QUOTE0_RESEARCH_AUTO_ENABLED: 'true',
@@ -24,6 +25,7 @@ describe('research auto-canary worker policy', () => {
       QUOTE0_RESEARCH_AUTO_LOOKBACK_HOURS: '0',
       QUOTE0_RESEARCH_AUTO_TICK_MS: '100',
       QUOTE0_RESEARCH_AUTO_SCAN_LIMIT: '2',
+      QUOTE0_RESEARCH_AUTO_MAX_FAILURES_PER_POLICY: '999',
     })).toEqual({
       enabled: true,
       universal: true,
@@ -31,6 +33,7 @@ describe('research auto-canary worker policy', () => {
       lookbackHours: 1,
       tickMs: 5_000,
       scanLimit: 5,
+      maxFailuresPerPolicy: 10,
     });
     expect(await runResearchAutoTick({
       enabled: false,
@@ -39,6 +42,7 @@ describe('research auto-canary worker policy', () => {
       lookbackHours: 24,
       tickMs: 30_000,
       scanLimit: 25,
+      maxFailuresPerPolicy: 3,
     })).toEqual({ action: 'disabled' });
   });
 
@@ -95,6 +99,7 @@ describe('research auto-canary worker policy', () => {
       {
         id: 1,
         research_attempts: 2,
+        policy_failures: 2,
         raw_content: {
           title: 'rich item',
           content: '这是已经很完整的普通新闻正文。'.repeat(30),
@@ -119,6 +124,7 @@ describe('research auto-canary worker policy', () => {
     expect(selected?.triage.researchMode).toBe('digest');
     expect(selected?.triage.budget?.maxToolCalls).toBe(4);
     expect(selected?.priorRuns).toBe(2);
+    expect(selected?.priorPolicyFailures).toBe(2);
     expect(selected?.directSnapshot?.message).toBe('Direct draft');
   });
 

@@ -134,7 +134,7 @@ function validateHttpUrl(value: string): boolean {
   }
 }
 
-function canonicalEvidenceUrl(value: string): string | undefined {
+export function canonicalEvidenceUrl(value: string): string | undefined {
   try {
     const parsed = new URL(value);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;

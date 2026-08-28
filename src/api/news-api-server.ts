@@ -22,6 +22,8 @@ import { devicesApp } from './devices-api.js';
 import { reconcileDeviceBaseUrl } from './device-base-url-reconcile.js';
 import inventoryApp from './inventory-api.js';
 import researchCanaryApp from './research-canary-api.js';
+import { getResearchCanaryConfig } from './research-canary.js';
+import { getResearchAutoWorkerConfig } from './research-canary-worker.js';
 import trmnlCanaryApp from './trmnl-canary-api.js';
 import adaptiveReviewApp from './adaptive-review-api.js';
 import rendererReviewApp from './renderer-review-api.js';
@@ -57,7 +59,7 @@ import {
   RECOMMENDED_RSS_SOURCE_IDS,
 } from '../react-widgets/core/data-sources/rss-source-registry.js';
 import { decodeReviewCursor, getStableReviewStatistics, listReviewSubjectSummaries } from './review-subject-store.js';
-import { triageResearchCandidate } from './research-triage.js';
+import { RESEARCH_TRIAGE_POLICY_VERSION, triageResearchCandidate } from './research-triage.js';
 import { NEWS_API_RELEASE_VERSION } from './release-version.js';
 
 // 时间格式化工具函数
@@ -853,12 +855,26 @@ app.get('/api/news/sources/health', async (c) => {
  * 健康检查 - 基础状态
  */
 app.get('/api/health', (c) => {
+  const research = getResearchCanaryConfig();
+  const worker = getResearchAutoWorkerConfig();
   return c.json({
     status: 'healthy',
     timestamp: formatToChinaTime(new Date()),
     service: 'Modular News API',
     version: NEWS_API_RELEASE_VERSION,
-    timezone: 'Asia/Shanghai (CST)'
+    timezone: 'Asia/Shanghai (CST)',
+    researchRoute: {
+      enabled: research.enabled,
+      agentId: research.agentId,
+      phaseAProvider: research.researchProviderId,
+      phaseBProvider: research.finalizerProviderId,
+      strictProvider: true,
+      fallback: 'none',
+      triagePolicy: RESEARCH_TRIAGE_POLICY_VERSION,
+      autoEnabled: worker.enabled,
+      universal: worker.universal,
+      maxFailuresPerPolicy: worker.maxFailuresPerPolicy,
+    },
   });
 });
 

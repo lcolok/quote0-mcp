@@ -161,6 +161,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
     phase,
     decision: run.triage,
     ...(phase === 'finalization' && run.runtimeReceipt ? { priorRuntime: run.runtimeReceipt } : {}),
+    ...(phase === 'finalization' && run.evidenceSnapshot ? { priorEvidencePacket: run.evidenceSnapshot } : {}),
   });
 
   if (inspection.status === 'running') {

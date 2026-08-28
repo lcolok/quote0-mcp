@@ -16,6 +16,7 @@ import {
   type ResearchRunRecord,
 } from './research-run-store.js';
 import {
+  RESEARCH_TRIAGE_POLICY_VERSION,
   triageResearchCandidate,
   type ResearchSeed,
   type ResearchTriageDecision,
@@ -23,6 +24,7 @@ import {
 import { contentQualityResearchPriority } from './content-quality.js';
 import {
   UNIVERSAL_RESEARCH_POLICY_VERSION,
+  markUniversalResearchQuarantined,
   universalResearchEnabled,
 } from './universal-research-policy.js';
 
@@ -36,6 +38,7 @@ export interface ResearchAutoWorkerConfig {
   lookbackHours: number;
   tickMs: number;
   scanLimit: number;
+  maxFailuresPerPolicy: number;
 }
 
 export interface InventoryResearchRow {
@@ -49,6 +52,7 @@ export interface InventoryResearchRow {
   processed_content?: Record<string, unknown> | null;
   created_at?: string | Date | null;
   research_attempts?: number | string | null;
+  policy_failures?: number | string | null;
 }
 
 export interface AutoResearchCandidate {
@@ -57,6 +61,7 @@ export interface AutoResearchCandidate {
   triage: ResearchTriageDecision;
   directSnapshot?: Record<string, unknown>;
   priorRuns: number;
+  priorPolicyFailures: number;
 }
 
 export type ResearchSelectionBucket = 'quality-gap' | 'high-risk' | 'exploration';
@@ -71,6 +76,7 @@ export type ResearchAutoTickResult =
   | { action: 'reconciled'; runId: string; state?: string }
   | { action: 'daily-cap'; count: number; limit: number }
   | { action: 'no-candidate' }
+  | { action: 'quarantined'; inventoryId: number; failureCount: number; policyVersion: string }
   | { action: 'idempotent'; run: ResearchRunRecord }
   | { action: 'dispatched'; run: ResearchRunRecord }
   | { action: 'dispatch-failed'; run: ResearchRunRecord; error: string };
@@ -95,6 +101,7 @@ export function getResearchAutoWorkerConfig(
     lookbackHours: boundedInt(env.QUOTE0_RESEARCH_AUTO_LOOKBACK_HOURS, 24, 1, 168),
     tickMs: boundedInt(env.QUOTE0_RESEARCH_AUTO_TICK_MS, 30_000, 5_000, 300_000),
     scanLimit: boundedInt(env.QUOTE0_RESEARCH_AUTO_SCAN_LIMIT, 25, 5, 100),
+    maxFailuresPerPolicy: boundedInt(env.QUOTE0_RESEARCH_AUTO_MAX_FAILURES_PER_POLICY, 3, 1, 10),
   };
 }
 
@@ -142,6 +149,7 @@ export function chooseAutoResearchCandidate(
       triage,
       ...(direct ? { directSnapshot: direct } : {}),
       priorRuns: Math.max(0, Number(row.research_attempts || 0)),
+      priorPolicyFailures: Math.max(0, Number(row.policy_failures || 0)),
       qualityPriority: contentQualityResearchPriority(row.processed_content),
       index,
     }];
@@ -169,6 +177,7 @@ export function chooseAutoResearchCandidate(
     triage: selected.triage,
     ...(selected.directSnapshot ? { directSnapshot: selected.directSnapshot } : {}),
     priorRuns: selected.priorRuns,
+    priorPolicyFailures: selected.priorPolicyFailures,
   };
 }
 
@@ -203,6 +212,11 @@ async function loop(config: ResearchAutoWorkerConfig): Promise<void> {
         console.log(`🧪 Research auto dispatched inventory=${result.run.sourceInventoryId} run=${result.run.id}`);
       } else if (result.action === 'reconciled' && result.state && result.state !== 'running') {
         console.log(`🧪 Research auto reconciled run=${result.runId} state=${result.state}`);
+      } else if (result.action === 'quarantined') {
+        console.warn(
+          `🧪 Research auto quarantined inventory=${result.inventoryId} `
+            + `failures=${result.failureCount} policy=${result.policyVersion}`,
+        );
       } else if (result.action === 'dispatch-failed') {
         console.warn(`🧪 Research auto dispatch failed run=${result.run.id}: ${result.error}`);
       }
@@ -259,7 +273,12 @@ export async function runResearchAutoTick(
     `SELECT ci.id, ci.fingerprint, ci.title, ci.link, ci.source, ci.category,
             ci.raw_content, ci.processed_content, ci.created_at,
             (SELECT COUNT(*)::int FROM research_runs history
-              WHERE history.trigger='inventory-auto' AND history.source_inventory_id=ci.id) AS research_attempts
+              WHERE history.trigger='inventory-auto' AND history.source_inventory_id=ci.id) AS research_attempts,
+            (SELECT COUNT(*)::int FROM research_runs policy_history
+              WHERE policy_history.trigger='inventory-auto'
+                AND policy_history.source_inventory_id=ci.id
+                AND policy_history.policy_version=$5
+                AND policy_history.state IN ('failed','invalid')) AS policy_failures
        FROM content_inventory ci
       WHERE ci.state IN ('ready','pushed')
         AND ($3::boolean = true OR ci.created_at >= now() - ($1 || ' hours')::interval)
@@ -288,7 +307,13 @@ export async function runResearchAutoTick(
         CASE WHEN $3::boolean THEN ci.created_at END ASC,
         CASE WHEN $3::boolean = false THEN ci.created_at END DESC
       LIMIT $2`,
-    [String(config.lookbackHours), config.scanLimit, config.universal, UNIVERSAL_RESEARCH_POLICY_VERSION],
+    [
+      String(config.lookbackHours),
+      config.scanLimit,
+      config.universal,
+      UNIVERSAL_RESEARCH_POLICY_VERSION,
+      RESEARCH_TRIAGE_POLICY_VERSION,
+    ],
   );
   // Legacy mode preserves the stratified daily canary. Universal mode admits every
   // pending item and uses oldest-first FIFO to prevent starvation while keeping
@@ -300,6 +325,28 @@ export async function runResearchAutoTick(
     config.universal,
   );
   if (!candidate) return { action: 'no-candidate' };
+
+  if (config.universal && candidate.priorPolicyFailures >= config.maxFailuresPerPolicy) {
+    const quarantinedContent = markUniversalResearchQuarantined(candidate.directSnapshot || {}, {
+      reason: `连续 ${candidate.priorPolicyFailures} 次 ${RESEARCH_TRIAGE_POLICY_VERSION} Research failed/invalid，停止自动重跑`,
+      researchPolicyVersion: RESEARCH_TRIAGE_POLICY_VERSION,
+      failureCount: candidate.priorPolicyFailures,
+    });
+    await db.query(
+      `UPDATE content_inventory
+          SET processed_content=$2::jsonb
+        WHERE id=$1
+          AND processed_content->'metadata'->'researchGate'->>'schemaVersion'=$3
+          AND processed_content->'metadata'->'researchGate'->>'state'='pending'`,
+      [candidate.inventoryId, JSON.stringify(quarantinedContent), UNIVERSAL_RESEARCH_POLICY_VERSION],
+    );
+    return {
+      action: 'quarantined',
+      inventoryId: candidate.inventoryId,
+      failureCount: candidate.priorPolicyFailures,
+      policyVersion: RESEARCH_TRIAGE_POLICY_VERSION,
+    };
+  }
 
   const candidateId = randomUUID();
   const requestKey = config.universal

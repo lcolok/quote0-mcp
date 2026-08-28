@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
 import {
   NEUROMANCER_RESEARCH_RECEIPT_VERSION,
+  canonicalEvidenceUrl,
   normalizeNeuromancerFinalArtifact,
   validateRenderableNews,
   type NeuromancerResearchReceipt,
@@ -16,6 +17,7 @@ import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js'
 export const RESEARCH_CANARY_MODE = 'straylight-jobs-canary/v1';
 export const RESEARCH_CANARY_SOURCE_PREFIX = 'quote0-research-canary';
 export const RESEARCH_EVIDENCE_PACKET_VERSION = 'quote0-evidence-packet/v1';
+export const RESEARCH_EVIDENCE_LEDGER_VERSION = 'quote0-evidence-ledger/v1';
 export const QUOTE0_RESEARCH_PROVIDER_ID = 'local-qwen';
 
 export type ResearchCanaryPhase = 'research' | 'finalization';
@@ -460,13 +462,103 @@ function compactToolOutput(call: StraylightToolCall): string {
  * same document in both formatted/text fields and can exceed megabytes, so unwrap the
  * structured tool envelope, keep one bounded body plus provenance, and cap the whole packet.
  */
+function evidenceUrlDigest(value: string): string | undefined {
+  const canonical = canonicalEvidenceUrl(value);
+  return canonical ? createHash('sha256').update(canonical).digest('hex').slice(0, 24) : undefined;
+}
+
+function supportEligibleCrawlDigests(calls: StraylightToolCall[]): string[] {
+  const digests = new Set<string>();
+  for (const call of calls) {
+    if (!cleanString(call.name).toLowerCase().includes('crawl') || call.isError) continue;
+    const status = cleanString(call.status).toLowerCase();
+    if (status === 'error' || status === 'failed') continue;
+    const payload = unwrapToolPayload(call.output);
+    const payloadStatus = cleanString(payload?.status).toLowerCase();
+    if (payloadStatus === 'error' || payloadStatus === 'failed') continue;
+    const input = isPlainObject(call.input) ? call.input : {};
+    const result = isPlainObject(payload?.result) ? payload.result : {};
+    for (const rawUrl of [input.url, payload?.url, result.url]) {
+      const digest = evidenceUrlDigest(cleanString(rawUrl));
+      if (digest) digests.add(digest);
+    }
+  }
+  return [...digests].sort();
+}
+
+function parseSupportEligibleDigests(evidencePacket?: string): Set<string> {
+  const packet = cleanString(evidencePacket);
+  if (!packet) return new Set();
+  const ledgerLine = packet.split('\n').find((line) => line.startsWith('ledger='));
+  if (ledgerLine) {
+    try {
+      const ledger = JSON.parse(ledgerLine.slice('ledger='.length)) as { version?: unknown; supportUrlDigests?: unknown };
+      if (ledger.version === RESEARCH_EVIDENCE_LEDGER_VERSION && Array.isArray(ledger.supportUrlDigests)) {
+        return new Set(ledger.supportUrlDigests.filter((item): item is string => typeof item === 'string' && /^[a-f0-9]{24}$/.test(item)));
+      }
+    } catch {
+      // Fall through to the legacy packet parser below.
+    }
+  }
+
+  // Backward-compatible recovery for Phase-A packets created before the ledger
+  // marker existed. Search snippets are deliberately ignored: only successful
+  // crawl inputs can become support-eligible evidence.
+  const digests = new Set<string>();
+  const pattern = /\[EVIDENCE \d+\] tool=([^\s]+) status=([^\s]+) isError=(true|false)\ninput=([^\n]+)/g;
+  for (const match of packet.matchAll(pattern)) {
+    if (!match[1].toLowerCase().includes('crawl') || match[3] === 'true') continue;
+    if (['error', 'failed'].includes(match[2].toLowerCase())) continue;
+    try {
+      const input = JSON.parse(match[4]) as { url?: unknown };
+      const digest = evidenceUrlDigest(cleanString(input.url));
+      if (digest) digests.add(digest);
+    } catch {
+      // A malformed/truncated legacy input is not support eligible.
+    }
+  }
+  return digests;
+}
+
+function evidenceGroundingErrors(rawReceipt: Record<string, unknown>, evidencePacket?: string): string[] {
+  const supportEligible = parseSupportEligibleDigests(evidencePacket);
+  const rawSources = Array.isArray(rawReceipt.sources) ? rawReceipt.sources : [];
+  const sourceDigests = new Map<string, string>();
+  for (const rawSource of rawSources) {
+    if (!isPlainObject(rawSource)) continue;
+    const id = cleanString(rawSource.id);
+    const digest = evidenceUrlDigest(cleanString(rawSource.url));
+    if (id && digest) sourceDigests.set(id, digest);
+  }
+
+  const errors: string[] = [];
+  const rawClaims = Array.isArray(rawReceipt.claims) ? rawReceipt.claims : [];
+  for (const [index, rawClaim] of rawClaims.entries()) {
+    if (!isPlainObject(rawClaim) || cleanString(rawClaim.status) !== 'supported') continue;
+    const sourceIds = Array.isArray(rawClaim.sourceIds)
+      ? rawClaim.sourceIds.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+      : [];
+    for (const sourceId of sourceIds) {
+      const digest = sourceDigests.get(sourceId);
+      if (!digest || !supportEligible.has(digest)) {
+        errors.push(`Research claim[${index}] sourceId=${sourceId} 未经过成功 crawl/snapshot；search snippet 只能作为线索，不能支撑 supported claim`);
+      }
+    }
+  }
+  return errors;
+}
+
 export function buildResearchEvidencePacket(turns: StraylightThreadTurn[], maxPacketChars = 6_000): string {
   const MAX_PACKET_CHARS = Math.max(2_000, Math.min(12_000, Math.round(maxPacketChars)));
   const calls = turns
     .filter((turn) => turn.participantType === 'agent')
     .flatMap((turn) => Array.isArray(turn.toolCalls) ? turn.toolCalls! : []);
+  const ledger = JSON.stringify({
+    version: RESEARCH_EVIDENCE_LEDGER_VERSION,
+    supportUrlDigests: supportEligibleCrawlDigests(calls),
+  });
 
-  const chunks: string[] = [`version=${RESEARCH_EVIDENCE_PACKET_VERSION}`];
+  const chunks: string[] = [`version=${RESEARCH_EVIDENCE_PACKET_VERSION}\nledger=${ledger}`];
   let used = chunks[0].length;
   for (let index = 0; index < calls.length; index += 1) {
     const call = calls[index];
@@ -517,6 +609,7 @@ function materializeArtifact(
   jobId: string,
   runtime: ResearchRuntimeReceipt,
   decision: ResearchTriageDecision,
+  evidencePacket?: string,
 ): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
   const normalizedCandidate = normalizeNeuromancerFinalArtifact(candidate) as Record<string, unknown>;
   const metadata = isPlainObject(normalizedCandidate.metadata) ? { ...normalizedCandidate.metadata } : {};
@@ -556,9 +649,12 @@ function materializeArtifact(
   if (!validation.ok) {
     return { errors: [...policyErrors, ...validation.errors], policyViolation: policyErrors.length > 0 };
   }
+  const groundingErrors = evidenceGroundingErrors(rawReceipt, evidencePacket);
   return {
-    ...(policyErrors.length ? {} : { artifact: validation.data }),
-    errors: policyErrors,
+    ...(policyErrors.length || groundingErrors.length ? {} : { artifact: validation.data }),
+    errors: [...policyErrors, ...groundingErrors],
+    // A model-authored grounding mismatch is repairable from the frozen packet;
+    // budget overruns are runtime policy violations and must fail closed.
     policyViolation: policyErrors.length > 0,
   };
 }
@@ -572,6 +668,7 @@ export async function inspectResearchCanary(
     phase: ResearchCanaryPhase;
     decision: ResearchTriageDecision;
     priorRuntime?: ResearchRuntimeReceipt;
+    priorEvidencePacket?: string;
   },
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
@@ -740,7 +837,15 @@ export async function inspectResearchCanary(
     };
   }
 
-  const materialized = materializeArtifact(candidate, params.seed, params.threadId, params.jobId, runtime, params.decision);
+  const materialized = materializeArtifact(
+    candidate,
+    params.seed,
+    params.threadId,
+    params.jobId,
+    runtime,
+    params.decision,
+    params.priorEvidencePacket,
+  );
   if (!materialized.artifact) {
     return {
       ...base,
