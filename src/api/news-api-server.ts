@@ -22,7 +22,7 @@ import { devicesApp } from './devices-api.js';
 import { reconcileDeviceBaseUrl } from './device-base-url-reconcile.js';
 import inventoryApp from './inventory-api.js';
 import researchCanaryApp from './research-canary-api.js';
-import { getResearchCanaryConfig } from './research-canary.js';
+import { getResearchCanaryConfig, RESEARCH_EVIDENCE_LEDGER_VERSION } from './research-canary.js';
 import { getResearchAutoWorkerConfig } from './research-canary-worker.js';
 import trmnlCanaryApp from './trmnl-canary-api.js';
 import adaptiveReviewApp from './adaptive-review-api.js';
@@ -872,6 +872,9 @@ app.get('/api/health', (c) => {
       strictProvider: true,
       fallback: 'none',
       triagePolicy: RESEARCH_TRIAGE_POLICY_VERSION,
+      evidenceLedger: RESEARCH_EVIDENCE_LEDGER_VERSION,
+      artifactOwnership: 'quote0-server/v1',
+      digestBudget: { initialToolCalls: 3, extensionToolCalls: 1, maxToolCalls: 4 },
       autoEnabled: worker.enabled,
       universal: worker.universal,
       maxFailuresPerPolicy: worker.maxFailuresPerPolicy,

@@ -22,7 +22,7 @@ import {
   markResearchRunState,
   type ResearchRunRecord,
 } from './research-run-store.js';
-import { triageResearchCandidate, type ResearchSeed } from './research-triage.js';
+import { RESEARCH_TRIAGE_POLICY_VERSION, triageResearchCandidate, type ResearchSeed } from './research-triage.js';
 import { applyUniversalResearchArtifact } from './universal-research-finalization.js';
 
 const app = new Hono();
@@ -66,6 +66,12 @@ function publicRun(run: ResearchRunRecord) {
     promotable: run.state === 'completed',
     autoPublished: false,
   };
+}
+
+function boundedMetricsHours(value: string | undefined): number {
+  const parsed = Number.parseInt(value || '24', 10);
+  if (!Number.isFinite(parsed)) return 24;
+  return Math.max(1, Math.min(168, parsed));
 }
 
 function canaryUnavailable() {
@@ -264,6 +270,101 @@ async function completeWithStructuredFinalizer(
   return { kind: 'invalid', run: invalid, errors: fallbackErrors };
 }
 
+app.get('/api/news/research/canary/metrics', async (c) => {
+  const hours = boundedMetricsHours(c.req.query('hours'));
+  await postgres.initialize();
+  const summaryResult = await postgres.query(
+    `WITH r AS (
+       SELECT state,
+              trigger,
+              triage,
+              runtime_receipt,
+              research_extension_receipt,
+              result_artifact,
+              created_at,
+              completed_at,
+              COALESCE((runtime_receipt->>'toolCalls')::int, 0) AS tool_calls,
+              COALESCE((result_artifact->'metadata'->'researchFinalizer'->>'attempt')::int, 0) AS finalizer_attempt,
+              COALESCE(
+                (result_artifact->'metadata'->'researchFinalizer'->>'totalLatencyMs')::numeric,
+                (result_artifact->'metadata'->'researchFinalizer'->>'latencyMs')::numeric,
+                0
+              ) AS finalizer_latency_ms,
+              COALESCE((result_artifact->'metadata'->'researchFinalizer'->'usage'->>'total')::numeric, 0) AS finalizer_tokens
+         FROM research_runs
+        WHERE policy_version = $2
+          AND created_at >= NOW() - ($1::text || ' hours')::interval
+     )
+     SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE state='completed')::int AS completed,
+            COUNT(*) FILTER (WHERE state='invalid')::int AS invalid,
+            COUNT(*) FILTER (WHERE state='failed')::int AS failed,
+            COUNT(*) FILTER (WHERE state IN ('queued','running','waiting_user'))::int AS active,
+            ROUND(AVG(tool_calls)::numeric, 2) AS avg_tool_calls,
+            ROUND(AVG(EXTRACT(EPOCH FROM (completed_at-created_at))) FILTER (WHERE completed_at IS NOT NULL)::numeric, 1) AS avg_duration_sec,
+            ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at-created_at)))
+              FILTER (WHERE completed_at IS NOT NULL))::numeric, 1) AS p50_duration_sec,
+            COUNT(*) FILTER (WHERE triage->>'researchMode'='digest')::int AS digest_total,
+            COUNT(*) FILTER (WHERE triage->>'researchMode'='digest' AND tool_calls=3)::int AS digest_three_calls,
+            COUNT(*) FILTER (WHERE triage->>'researchMode'='digest' AND tool_calls=4)::int AS digest_four_calls,
+            COUNT(*) FILTER (WHERE research_extension_receipt IS NOT NULL)::int AS extension_total,
+            COUNT(*) FILTER (WHERE research_extension_receipt->>'required'='true')::int AS required_extensions,
+            COUNT(*) FILTER (WHERE research_extension_receipt IS NOT NULL AND COALESCE(research_extension_receipt->>'required','false')<>'true')::int AS optional_extensions,
+            COUNT(*) FILTER (WHERE result_artifact->'metadata'->>'researchArtifactOwnership'='quote0-server/v1')::int AS server_owned_artifacts,
+            COUNT(*) FILTER (WHERE result_artifact->'metadata'->'researchFinalizer'->>'mode'='structured-inference')::int AS structured_finalized,
+            COUNT(*) FILTER (WHERE finalizer_attempt>1)::int AS finalizer_retries,
+            ROUND(AVG(NULLIF(finalizer_latency_ms,0))::numeric, 1) AS avg_finalizer_latency_ms,
+            ROUND(AVG(NULLIF(finalizer_tokens,0))::numeric, 1) AS avg_finalizer_tokens
+       FROM r`,
+    [String(hours), RESEARCH_TRIAGE_POLICY_VERSION],
+  );
+  const reasonResult = await postgres.query(
+    `SELECT research_extension_receipt->>'reason' AS reason, COUNT(*)::int AS count
+       FROM research_runs
+      WHERE policy_version=$2
+        AND created_at >= NOW() - ($1::text || ' hours')::interval
+        AND research_extension_receipt IS NOT NULL
+      GROUP BY research_extension_receipt->>'reason'
+      ORDER BY COUNT(*) DESC, reason ASC`,
+    [String(hours), RESEARCH_TRIAGE_POLICY_VERSION],
+  );
+  const row = summaryResult.rows[0] || {};
+  const total = Number(row.total || 0);
+  const completed = Number(row.completed || 0);
+  return c.json({
+    success: true,
+    windowHours: hours,
+    policyVersion: RESEARCH_TRIAGE_POLICY_VERSION,
+    summary: {
+      total,
+      completed,
+      invalid: Number(row.invalid || 0),
+      failed: Number(row.failed || 0),
+      active: Number(row.active || 0),
+      completedRate: total > 0 ? Number((completed / total).toFixed(4)) : null,
+      avgToolCalls: row.avg_tool_calls == null ? null : Number(row.avg_tool_calls),
+      avgDurationSec: row.avg_duration_sec == null ? null : Number(row.avg_duration_sec),
+      p50DurationSec: row.p50_duration_sec == null ? null : Number(row.p50_duration_sec),
+    },
+    digest: {
+      total: Number(row.digest_total || 0),
+      threeCalls: Number(row.digest_three_calls || 0),
+      fourCalls: Number(row.digest_four_calls || 0),
+      extensions: Number(row.extension_total || 0),
+      requiredExtensions: Number(row.required_extensions || 0),
+      optionalExtensions: Number(row.optional_extensions || 0),
+      extensionReasons: Object.fromEntries(reasonResult.rows.map((item: any) => [String(item.reason || 'unknown'), Number(item.count || 0)])),
+    },
+    finalizer: {
+      serverOwnedArtifacts: Number(row.server_owned_artifacts || 0),
+      structuredFinalized: Number(row.structured_finalized || 0),
+      retries: Number(row.finalizer_retries || 0),
+      avgLatencyMs: row.avg_finalizer_latency_ms == null ? null : Number(row.avg_finalizer_latency_ms),
+      avgTokens: row.avg_finalizer_tokens == null ? null : Number(row.avg_finalizer_tokens),
+    },
+  });
+});
+
 app.post('/api/news/research/canary/jobs', async (c) => {
   const unavailable = canaryUnavailable();
   if (unavailable) return c.json({ success: false, error: unavailable }, 503);
@@ -396,6 +497,17 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           run.id,
           extended.jobId,
           extended.threadId,
+          {
+            reason: extensionDecision.reason,
+            required: extensionDecision.required,
+            candidateCount: extensionDecision.candidateUrls.length,
+            existingClusters: extensionDecision.existingClusters,
+            initialToolCalls: run.triage.budget?.initialToolCalls ?? inspection.runtime.toolCalls,
+            extensionToolCalls: run.triage.budget?.extensionToolCalls ?? 1,
+            jobId: extended.jobId,
+            threadId: extended.threadId,
+            dispatchedAt: new Date().toISOString(),
+          },
         );
         return c.json({
           success: true,
@@ -403,6 +515,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           phaseTransition: 'research->conditional-extension',
           researchExtension: {
             reason: extensionDecision.reason,
+            required: extensionDecision.required,
             candidateCount: extensionDecision.candidateUrls.length,
             existingClusters: extensionDecision.existingClusters,
           },

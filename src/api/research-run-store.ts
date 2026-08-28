@@ -1,9 +1,21 @@
 import type { PostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
-import type { ResearchRuntimeReceipt } from './research-canary.js';
+import type { DigestResearchExtensionDecision, ResearchRuntimeReceipt } from './research-canary.js';
 import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
 
 export type ResearchRunState = 'queued' | 'running' | 'waiting_user' | 'completed' | 'invalid' | 'failed' | 'cancelled';
+
+export interface ResearchExtensionReceipt {
+  reason: DigestResearchExtensionDecision['reason'];
+  required: boolean;
+  candidateCount: number;
+  existingClusters: string[];
+  initialToolCalls: number;
+  extensionToolCalls: number;
+  jobId: string;
+  threadId: string;
+  dispatchedAt: string;
+}
 
 export interface ResearchRunRecord {
   id: string;
@@ -22,6 +34,7 @@ export interface ResearchRunRecord {
   straylightThreadId?: string;
   straylightThreadIds: string[];
   evidenceSnapshot?: string;
+  extensionReceipt?: ResearchExtensionReceipt;
   directSnapshot?: Record<string, unknown>;
   attempts: number;
   resultArtifact?: RenderableDataItem;
@@ -51,6 +64,7 @@ function fromRow(row: any): ResearchRunRecord {
     ...(row.straylight_thread_id ? { straylightThreadId: String(row.straylight_thread_id) } : {}),
     straylightThreadIds: Array.isArray(row.straylight_thread_ids) ? row.straylight_thread_ids.map(String) : [],
     ...(row.evidence_snapshot ? { evidenceSnapshot: String(row.evidence_snapshot) } : {}),
+    ...(row.research_extension_receipt ? { extensionReceipt: row.research_extension_receipt as ResearchExtensionReceipt } : {}),
     ...(row.direct_snapshot ? { directSnapshot: row.direct_snapshot as Record<string, unknown> } : {}),
     attempts: Number(row.attempts || 0),
     ...(row.result_artifact ? { resultArtifact: row.result_artifact as RenderableDataItem } : {}),
@@ -137,6 +151,7 @@ export async function markResearchRunResearchExtended(
   id: string,
   jobId: string,
   threadId: string,
+  receipt: ResearchExtensionReceipt,
 ): Promise<ResearchRunRecord> {
   const result = await db.query(
     `UPDATE research_runs
@@ -144,12 +159,13 @@ export async function markResearchRunResearchExtended(
             straylight_job_id=$2,
             straylight_job_ids=COALESCE(straylight_job_ids, '[]'::jsonb) || $3::jsonb,
             straylight_thread_id=$4,
+            research_extension_receipt=$5::jsonb,
             error=NULL,
             updated_at=NOW()
       WHERE id=$1
         AND straylight_thread_id=$4
       RETURNING *`,
-    [id, jobId, JSON.stringify([jobId]), threadId],
+    [id, jobId, JSON.stringify([jobId]), threadId, JSON.stringify(receipt)],
   );
   if (!result.rows[0]) throw new Error(`research_run ${id} 不存在或 extension thread 不匹配`);
   return fromRow(result.rows[0]);

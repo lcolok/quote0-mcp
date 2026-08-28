@@ -164,6 +164,7 @@ export class PostgresDatabase {
       // scraping Straylight or overloading input_snapshot with control-plane metadata.
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS trigger VARCHAR(32) NOT NULL DEFAULT 'manual'`,
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS source_inventory_id INTEGER REFERENCES content_inventory(id) ON DELETE SET NULL`,
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS research_extension_receipt JSONB`,
       `DO $$
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'research_runs_trigger_check') THEN
@@ -1177,6 +1178,7 @@ export class PostgresDatabase {
         straylight_thread_id VARCHAR(128),
         straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         evidence_snapshot TEXT,
+        research_extension_receipt JSONB,
         direct_snapshot JSONB,
         attempts INTEGER NOT NULL DEFAULT 0,
         result_artifact JSONB,
