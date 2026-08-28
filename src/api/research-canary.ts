@@ -615,6 +615,101 @@ function latestAgentTurn(turns: StraylightThreadTurn[]): StraylightThreadTurn | 
   return undefined;
 }
 
+interface ResearchExtensionAuditReceipt {
+  reason: DigestResearchExtensionDecision['reason'];
+  required: boolean;
+  authorizedCandidateUrls?: string[];
+  initialToolCalls: number;
+  extensionToolCalls: number;
+}
+
+function toolCallSucceeded(call: StraylightToolCall): boolean {
+  if (call.isError) return false;
+  const status = cleanString(call.status).toLowerCase();
+  if (status === 'error' || status === 'failed') return false;
+  const payload = unwrapToolPayload(call.output);
+  const payloadStatus = cleanString(payload?.status).toLowerCase();
+  return payloadStatus !== 'error' && payloadStatus !== 'failed';
+}
+
+function toolCallCanonicalUrls(call: StraylightToolCall): string[] {
+  const payload = unwrapToolPayload(call.output);
+  const input = isPlainObject(call.input) ? call.input : {};
+  const result = isPlainObject(payload?.result) ? payload.result : {};
+  return [...new Set([input.url, payload?.url, result.url]
+    .map((value) => canonicalEvidenceUrl(cleanString(value)))
+    .filter((value): value is string => Boolean(value)))];
+}
+
+function extensionToolCallsForRun(turns: StraylightThreadTurn[], runId: string): StraylightToolCall[] | undefined {
+  const identity = researchCanaryIdentity(runId);
+  let matchingUserTurns = 0;
+  for (let index = 0; index < turns.length; index += 1) {
+    const turn = turns[index];
+    if (turn.participantType === 'user' && turn.source?.identity === identity) {
+      matchingUserTurns += 1;
+      if (matchingUserTurns === 2) {
+        return turns.slice(index + 1)
+          .filter((item) => item.participantType === 'agent')
+          .flatMap((item) => Array.isArray(item.toolCalls) ? item.toolCalls! : []);
+      }
+    }
+  }
+  return undefined;
+}
+
+export function researchExtensionOutcomeErrors(
+  turns: StraylightThreadTurn[],
+  runId: string,
+  seed: ResearchSeed,
+  receipt: ResearchExtensionAuditReceipt | undefined,
+): string[] {
+  if (!receipt) return [];
+  const calls = extensionToolCallsForRun(turns, runId);
+  if (!calls) return ['Research extension 已登记但 thread 中找不到第二个同 identity 用户回合'];
+  if (calls.length > receipt.extensionToolCalls) {
+    return [`Research extension tool budget 超限: ${calls.length} > ${receipt.extensionToolCalls}`];
+  }
+  if (receipt.required && calls.length < 1) {
+    return [`Required Research extension 未执行工具: reason=${receipt.reason}`];
+  }
+  if (calls.length === 0) return [];
+  const call = calls[0];
+  const toolName = cleanString(call.name).toLowerCase();
+
+  if (receipt.reason === 'minimum-search-repair') {
+    if (!toolName.includes('search')) return [`minimum-search-repair 必须执行 search，实际为 ${toolName || 'unknown'}`];
+    if (!toolCallSucceeded(call)) return ['minimum-search-repair 的 targeted search 未成功'];
+    return [];
+  }
+
+  if (receipt.reason === 'minimum-evidence-repair') {
+    if (!toolName.includes('crawl')) return [`minimum-evidence-repair 必须执行 crawl，实际为 ${toolName || 'unknown'}`];
+    if (!toolCallSucceeded(call)) return ['minimum-evidence-repair 的 canonical crawl 未成功'];
+    const seedCanonical = canonicalEvidenceUrl(cleanString(seed.link));
+    const actualUrls = toolCallCanonicalUrls(call);
+    if (!seedCanonical || !actualUrls.includes(seedCanonical)) {
+      return [`minimum-evidence-repair 只能恢复 seed canonical: expected=${seedCanonical || 'missing'} actual=${actualUrls.join(',') || 'missing'}`];
+    }
+    return [];
+  }
+
+  if (receipt.reason === 'novel-evidence-candidate') {
+    if (!toolName.includes('crawl')) return [`novel-evidence-candidate 只能执行 crawl，实际为 ${toolName || 'unknown'}`];
+    if (!toolCallSucceeded(call)) return ['novel-evidence-candidate 的授权 crawl 未成功'];
+    const authorized = new Set((receipt.authorizedCandidateUrls || [])
+      .map((url) => canonicalEvidenceUrl(cleanString(url)))
+      .filter((url): url is string => Boolean(url)));
+    const actualUrls = toolCallCanonicalUrls(call);
+    if (!actualUrls.some((url) => authorized.has(url))) {
+      return [`optional extension crawl 越权: actual=${actualUrls.join(',') || 'missing'} authorized=${[...authorized].join(',') || 'none'}`];
+    }
+    return [];
+  }
+
+  return [];
+}
+
 function latestCompletedAgentText(turns: StraylightThreadTurn[]): string {
   for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
     const turn = turns[turnIndex];
@@ -1551,6 +1646,7 @@ export async function inspectResearchCanary(
     decision: ResearchTriageDecision;
     priorRuntime?: ResearchRuntimeReceipt;
     priorEvidencePacket?: string;
+    extensionReceipt?: ResearchExtensionAuditReceipt;
   },
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
@@ -1607,6 +1703,17 @@ export async function inspectResearchCanary(
     const successfulTools = phaseRuntime.toolCalls - phaseRuntime.failedToolCalls;
     if (successfulTools > 0 && (jobStatus === 'completed' || jobStatus === 'error' || jobResult.missing || ['completed', 'error'].includes(cleanString(latestAgent?.state)))) {
       const evidencePacket = buildResearchEvidencePacket(turns, budget.maxEvidenceChars, params.seed);
+      const extensionErrors = researchExtensionOutcomeErrors(turns, params.runId, params.seed, params.extensionReceipt);
+      if (extensionErrors.length > 0) {
+        return {
+          ...base,
+          status: 'invalid',
+          jobStatus,
+          evidencePacket,
+          errors: [...errors, ...extensionErrors],
+          retryable: false,
+        };
+      }
       const coverageErrors = researchMinimumCoverageErrors(phaseRuntime, params.decision);
       const initialToolCalls = budget.initialToolCalls ?? 0;
       const stagedRepairAvailable = params.decision.researchMode === 'digest'

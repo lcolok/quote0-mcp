@@ -468,6 +468,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
     threadId: run.straylightThreadId,
     phase,
     decision: run.triage,
+    ...(phase === 'research' && run.extensionReceipt ? { extensionReceipt: run.extensionReceipt } : {}),
     ...(phase === 'finalization' && run.runtimeReceipt ? { priorRuntime: run.runtimeReceipt } : {}),
     ...(phase === 'finalization' && run.evidenceSnapshot ? { priorEvidencePacket: run.evidenceSnapshot } : {}),
   });
@@ -514,6 +515,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
             reason: extensionDecision.reason,
             required: extensionDecision.required,
             candidateCount: extensionDecision.candidateUrls.length,
+            authorizedCandidateUrls: extensionDecision.candidateUrls,
             existingClusters: extensionDecision.existingClusters,
             initialToolCalls: run.triage.budget?.initialToolCalls ?? inspection.runtime.toolCalls,
             extensionToolCalls: run.triage.budget?.extensionToolCalls ?? 1,
@@ -530,6 +532,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
             reason: extensionDecision.reason,
             required: extensionDecision.required,
             candidateCount: extensionDecision.candidateUrls.length,
+            authorizedCandidateUrls: extensionDecision.candidateUrls,
             existingClusters: extensionDecision.existingClusters,
           },
           data: publicRun(updated),

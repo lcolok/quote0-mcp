@@ -10,6 +10,7 @@ import {
   materializeStructuredResearchFinalization,
   RESEARCH_EVIDENCE_PACKET_VERSION,
   researchCanaryIdentity,
+  researchExtensionOutcomeErrors,
   shouldExtendDigestResearch,
   type ResearchCanaryConfig,
   type ResearchRuntimeReceipt,
@@ -319,6 +320,51 @@ describe('research canary adapter', () => {
       reason: 'novel-evidence-candidate',
       candidateUrls: ['https://www.reuters.com/technology/openai-public-benefit-company-restructure'],
     }));
+  });
+
+  it('machine-enforces the conditional extension tool type and authorized URL', () => {
+    const stagedTurns = (extensionTools: Array<Record<string, unknown>>) => [
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'crawl', status: 'completed', input: { url: seed.link }, output: { status: 'completed', url: seed.link } }] },
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: extensionTools },
+    ];
+
+    expect(researchExtensionOutcomeErrors(
+      stagedTurns([{ name: 'crawl', status: 'completed', input: { url: seed.link }, output: { status: 'completed', url: seed.link } }]),
+      'run-1',
+      seed,
+      { reason: 'minimum-search-repair', required: true, authorizedCandidateUrls: [], initialToolCalls: 3, extensionToolCalls: 1 },
+    ).join(' ')).toContain('必须执行 search');
+
+    expect(researchExtensionOutcomeErrors(
+      stagedTurns([{ name: 'crawl', status: 'completed', input: { url: 'https://www.reddit.com/r/example/comments/1' }, output: { status: 'completed', url: 'https://www.reddit.com/r/example/comments/1' } }]),
+      'run-1',
+      seed,
+      {
+        reason: 'novel-evidence-candidate', required: false,
+        authorizedCandidateUrls: ['https://www.reuters.com/technology/authorized-report'],
+        initialToolCalls: 3, extensionToolCalls: 1,
+      },
+    ).join(' ')).toContain('越权');
+
+    expect(researchExtensionOutcomeErrors(
+      stagedTurns([{ name: 'crawl', status: 'completed', input: { url: 'https://www.reuters.com/technology/authorized-report?utm_source=search' }, output: { status: 'completed', url: 'https://www.reuters.com/technology/authorized-report' } }]),
+      'run-1',
+      seed,
+      {
+        reason: 'novel-evidence-candidate', required: false,
+        authorizedCandidateUrls: ['https://www.reuters.com/technology/authorized-report'],
+        initialToolCalls: 3, extensionToolCalls: 1,
+      },
+    )).toEqual([]);
+
+    expect(researchExtensionOutcomeErrors(
+      stagedTurns([{ name: 'crawl', status: 'completed', input: { url: seed.link }, output: { status: 'completed', url: seed.link } }]),
+      'run-1',
+      seed,
+      { reason: 'minimum-evidence-repair', required: true, authorizedCandidateUrls: [], initialToolCalls: 3, extensionToolCalls: 1 },
+    )).toEqual([]);
   });
 
   it('treats completed+empty with successful tool evidence as research_complete, not invalid', async () => {

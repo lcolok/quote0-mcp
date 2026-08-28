@@ -9,6 +9,7 @@ export interface ResearchExtensionReceipt {
   reason: DigestResearchExtensionDecision['reason'];
   required: boolean;
   candidateCount: number;
+  authorizedCandidateUrls: string[];
   existingClusters: string[];
   initialToolCalls: number;
   extensionToolCalls: number;

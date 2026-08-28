@@ -1,6 +1,6 @@
 import { assessSourceEvidence, type EvidenceMode } from './content-quality.js';
 
-export const RESEARCH_TRIAGE_POLICY_VERSION = 'quote0-research-triage/v7';
+export const RESEARCH_TRIAGE_POLICY_VERSION = 'quote0-research-triage/v8';
 
 export interface ResearchSeed {
   title: string;
