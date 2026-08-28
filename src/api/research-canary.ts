@@ -748,6 +748,7 @@ interface EvidenceSearchCandidate {
   domain: string;
   engine?: string;
   score?: number;
+  titleMatchedAnchors: string[];
   matchedAnchors: string[];
 }
 
@@ -812,7 +813,8 @@ function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: Rese
 const SEARCH_RELEVANCE_STOPWORDS = new Set([
   'about', 'after', 'before', 'from', 'into', 'latest', 'new', 'official', 'overview',
   'that', 'the', 'these', 'this', 'those', 'under', 'using', 'what', 'when', 'where',
-  'which', 'with', 'without', 'your', 'their', 'there', 'have', 'has', 'will', 'would',
+  'which', 'while', 'with', 'without', 'your', 'their', 'there', 'have', 'has', 'will', 'would',
+  'keep', 'keeping',
 ]);
 
 function normalizeRelevanceText(value: string): string {
@@ -899,6 +901,7 @@ function searchCandidateLedger(calls: StraylightToolCall[], seed?: ResearchSeed)
       const urlDigest = evidenceUrlDigest(canonicalUrl);
       const domain = evidenceDomainKey(canonicalUrl);
       if (!urlDigest || !domain) continue;
+      const titleMatchedAnchors = [...new Set([...titleMatches, ...hanMatches])].slice(0, 12);
       const matchedAnchors = [...new Set([...titleMatches, ...bodyMatches, ...hanMatches])].slice(0, 12);
       candidates.push({
         id: `C${candidates.length + 1}`,
@@ -908,6 +911,7 @@ function searchCandidateLedger(calls: StraylightToolCall[], seed?: ResearchSeed)
         domain,
         ...(engine ? { engine } : {}),
         ...(score !== undefined ? { score } : {}),
+        titleMatchedAnchors,
         matchedAnchors,
       });
       stats.relevant += 1;
@@ -1008,9 +1012,11 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
         const domain = cleanString(item.domain) || (canonicalUrl ? evidenceDomainKey(canonicalUrl) : '');
         const engine = cleanString(item.engine);
         const score = typeof item.score === 'number' && Number.isFinite(item.score) ? Math.max(0, item.score) : undefined;
-        const matchedAnchors = Array.isArray(item.matchedAnchors)
-          ? [...new Set(item.matchedAnchors.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean))].slice(0, 12)
+        const cleanAnchorArray = (value: unknown) => Array.isArray(value)
+          ? [...new Set(value.filter((anchor): anchor is string => typeof anchor === 'string').map((anchor) => anchor.trim()).filter(Boolean))].slice(0, 12)
           : [];
+        const titleMatchedAnchors = cleanAnchorArray(item.titleMatchedAnchors);
+        const matchedAnchors = cleanAnchorArray(item.matchedAnchors);
         if (!id || !canonicalUrl || !domain || !/^[a-f0-9]{24}$/.test(urlDigest)) continue;
         searchCandidates.push({
           id,
@@ -1020,6 +1026,7 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
           domain,
           ...(engine ? { engine } : {}),
           ...(score !== undefined ? { score } : {}),
+          titleMatchedAnchors,
           matchedAnchors,
         });
       }
@@ -1108,6 +1115,29 @@ function searchCandidateUrls(evidencePacket: string): string[] {
   return [...candidates];
 }
 
+const OPTIONAL_EXTENSION_BLOCKED_DOMAINS = new Set([
+  'facebook.com', 'instagram.com', 'linkedin.com', 'reddit.com', 'tiktok.com',
+  'twitter.com', 'x.com', 'youtube.com',
+]);
+
+const OPTIONAL_EXTENSION_TRUSTED_SECONDARY_DOMAINS = new Set([
+  'apnews.com', 'arstechnica.com', 'axios.com', 'bbc.com', 'bbc.co.uk', 'bloomberg.com',
+  'cnbc.com', 'ft.com', 'reuters.com', 'techcrunch.com', 'theguardian.com',
+  'theverge.com', 'wikipedia.org', 'wsj.com',
+]);
+
+function optionalExtensionCandidateAllowed(candidate: EvidenceSearchCandidate): boolean {
+  if (OPTIONAL_EXTENSION_BLOCKED_DOMAINS.has(candidate.domain)) return false;
+  const titleAnchorCount = candidate.titleMatchedAnchors.length;
+  if (OPTIONAL_EXTENSION_TRUSTED_SECONDARY_DOMAINS.has(candidate.domain)) {
+    return titleAnchorCount >= 1 || candidate.matchedAnchors.length >= 2;
+  }
+  // Unknown domains need strong title-level entity overlap. Snippet-only mentions are
+  // insufficient because they frequently surface aggregators/blogs that merely discuss
+  // the same broad topic without adding reliable independent evidence.
+  return titleAnchorCount >= 3 && (candidate.score ?? 0) >= 0.3;
+}
+
 export interface DigestResearchExtensionDecision {
   extend: boolean;
   required: boolean;
@@ -1147,7 +1177,9 @@ export function shouldExtendDigestResearch(
   const existingClusterSet = new Set(existingClusters);
   const relevanceGoverned = Boolean(ledger && (ledger.searchCandidateStats.total > 0 || ledger.searchCandidates.length > 0));
   const discoveredCandidates = relevanceGoverned
-    ? ledger!.searchCandidates.map((candidate) => candidate.canonicalUrl)
+    ? ledger!.searchCandidates
+        .filter(optionalExtensionCandidateAllowed)
+        .map((candidate) => candidate.canonicalUrl)
     : searchCandidateUrls(evidencePacket);
   const candidateUrls = discoveredCandidates.filter((url) =>
     !crawled.has(url)

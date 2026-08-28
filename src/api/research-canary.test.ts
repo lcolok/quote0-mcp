@@ -273,6 +273,54 @@ describe('research canary adapter', () => {
     }));
   });
 
+  it('requires source-quality admission for optional fourth-call corroboration', () => {
+    const qualitySeed = {
+      title: 'OpenAI public benefit company restructure',
+      content: 'OpenAI changed its corporate structure while preserving its mission and public-benefit commitments. The organization described the transition, ownership changes, governance safeguards, and the relationship between the nonprofit foundation and the public benefit company. '.repeat(4),
+      source: 'seed',
+      link: 'https://openai.com/index/why-our-structure-must-evolve-to-advance-our-mission',
+      category: 'technology',
+    };
+    const qualityDecision = triageResearchCandidate({ seed: qualitySeed, universal: true });
+    const packetFor = (results: Array<Record<string, unknown>>) => buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: qualitySeed.link },
+        output: { status: 'completed', url: qualitySeed.link, engine: 'camoufox', result: { title: 'OpenAI structure', url: qualitySeed.link, text: 'seed body' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'OpenAI public benefit company restructure' },
+        output: { query: 'OpenAI public benefit company restructure', results },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${qualitySeed.link}?utm_source=dup` },
+        output: { status: 'completed', url: `${qualitySeed.link}?utm_source=dup`, engine: 'scrapling', result: { title: 'OpenAI structure duplicate', url: `${qualitySeed.link}?utm_source=dup`, text: 'same body' } },
+      },
+    ]), 5_000, qualitySeed);
+    const runtime: ResearchRuntimeReceipt = { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 };
+
+    const lowQualityPacket = packetFor([
+      { title: 'OpenAI public benefit company restructure - discussion', url: 'https://www.reddit.com/r/example/comments/1', content: 'Community discussion', engine: 'anysearch', score: 0.95 },
+      { title: 'OpenAI public benefit company restructure - video', url: 'https://www.facebook.com/example/posts/1', content: 'Social repost', engine: 'anysearch', score: 0.9 },
+      { title: 'OpenAI restructure explained', url: 'https://small-ai-blog.example/openai-restructure', content: 'A blog discussing the public benefit company restructure.', engine: 'anysearch', score: 0.95 },
+    ]);
+    const lowQualityLedger = JSON.parse((lowQualityPacket.split('\n').find((line) => line.startsWith('ledger=')) || 'ledger={}').slice(7));
+    expect(lowQualityLedger.searchCandidates.length).toBeGreaterThan(0);
+    expect(shouldExtendDigestResearch(lowQualityPacket, runtime, qualityDecision)).toEqual(expect.objectContaining({
+      extend: false,
+      reason: 'no-novel-search-candidate',
+    }));
+
+    const trustedPacket = packetFor([
+      { title: 'OpenAI public benefit company restructure draws scrutiny', url: 'https://www.reuters.com/technology/openai-public-benefit-company-restructure/', content: 'Reuters reports on the OpenAI restructure.', engine: 'bing', score: 0.45 },
+    ]);
+    expect(shouldExtendDigestResearch(trustedPacket, runtime, qualityDecision)).toEqual(expect.objectContaining({
+      extend: true,
+      required: false,
+      reason: 'novel-evidence-candidate',
+      candidateUrls: ['https://www.reuters.com/technology/openai-public-benefit-company-restructure'],
+    }));
+  });
+
   it('treats completed+empty with successful tool evidence as research_complete, not invalid', async () => {
     const tools = [
       { name: 'crawl', status: 'completed', input: { url: seed.link }, output: { content: 'InfoQ seed evidence' } },
