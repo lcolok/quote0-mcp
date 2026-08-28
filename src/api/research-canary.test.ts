@@ -322,6 +322,49 @@ describe('research canary adapter', () => {
     }));
   });
 
+  it('groups branded third-party hosting with the seed party instead of counting it as independent provenance', () => {
+    const partySeed = {
+      title: 'OpenAI research and deployment company overview',
+      content: 'OpenAI describes itself as an AI research and deployment company whose mission is to ensure artificial general intelligence benefits all of humanity. '.repeat(3),
+      source: 'OpenAI',
+      link: 'https://openai.com/about/',
+      category: 'technology',
+    };
+    const partyDecision = triageResearchCandidate({ seed: partySeed, universal: true });
+    const packet = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://openai.smapply.org/' },
+        output: { status: 'completed', url: 'https://openai.smapply.org/', engine: 'scrapling', result: { title: 'OpenAI', url: 'https://openai.smapply.org/', text: 'OpenAI application portal' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'OpenAI mission research deployment company' },
+        output: { query: 'OpenAI mission research deployment company', results: [
+          { title: 'About OpenAI', url: 'https://openai.com/about/', content: 'OpenAI is an AI research and deployment company.', engine: 'bing', score: 0.9 },
+          { title: 'OpenAI - Wikipedia', url: 'https://en.wikipedia.org/wiki/OpenAI', content: 'OpenAI is an American artificial intelligence organization.', engine: 'bing', score: 0.8 },
+        ] },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://openai.smapply.org/?retry=1' },
+        output: { status: 'completed', url: 'https://openai.smapply.org/?retry=1', engine: 'camoufox', result: { title: 'OpenAI', url: 'https://openai.smapply.org/?retry=1', text: 'OpenAI application portal' } },
+      },
+    ]), 5_000, partySeed);
+    const runtime: ResearchRuntimeReceipt = { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 };
+    const ledgerLine = packet.split('\n').find((line) => line.startsWith('ledger='));
+    const ledger = JSON.parse((ledgerLine || 'ledger={}').slice(7));
+    const extension = shouldExtendDigestResearch(packet, runtime, partyDecision);
+
+    expect(ledger.entries[0].provenanceCluster).toBe('party:openai.com');
+    expect(ledger.searchCandidates.find((item: any) => item.canonicalUrl === 'https://openai.com/about')?.provenanceCluster).toBe('party:openai.com');
+    expect(ledger.searchCandidates.find((item: any) => item.domain === 'wikipedia.org')?.provenanceCluster).toBe('wikipedia.org');
+    expect(extension).toEqual(expect.objectContaining({
+      extend: true,
+      required: false,
+      reason: 'novel-evidence-candidate',
+      existingClusters: ['party:openai.com'],
+      candidateUrls: ['https://en.wikipedia.org/wiki/OpenAI'],
+    }));
+  });
+
   it('machine-enforces the conditional extension tool type and authorized URL', () => {
     const stagedTurns = (extensionTools: Array<Record<string, unknown>>) => [
       { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [] },

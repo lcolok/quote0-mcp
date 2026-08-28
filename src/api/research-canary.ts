@@ -831,6 +831,7 @@ interface EvidenceLedgerEntry {
   urlDigest: string;
   title: string;
   role: 'seed' | 'secondary';
+  provenanceCluster: string;
   supportEligible: true;
   engine?: string;
 }
@@ -841,6 +842,7 @@ interface EvidenceSearchCandidate {
   urlDigest: string;
   title: string;
   domain: string;
+  provenanceCluster: string;
   engine?: string;
   score?: number;
   titleMatchedAnchors: string[];
@@ -909,6 +911,7 @@ function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: Rese
       urlDigest,
       title: title.slice(0, 180),
       role: seedCanonical && seedCanonical === canonicalUrl ? 'seed' : 'secondary',
+      provenanceCluster: evidenceProvenanceCluster(canonicalUrl, seed),
       supportEligible: true,
       ...(engine ? { engine } : {}),
     });
@@ -1015,6 +1018,7 @@ function searchCandidateLedger(calls: StraylightToolCall[], seed?: ResearchSeed)
         urlDigest,
         title: title || domain,
         domain,
+        provenanceCluster: evidenceProvenanceCluster(canonicalUrl, seed),
         ...(engine ? { engine } : {}),
         ...(score !== undefined ? { score } : {}),
         titleMatchedAnchors,
@@ -1118,7 +1122,8 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
       const title = cleanString(item.title);
       const evidenceNumber = nonNegativeInteger(item.evidenceNumber);
       const role = item.role === 'seed' ? 'seed' : 'secondary';
-      if (!id || !canonicalUrl || !/^[a-f0-9]{24}$/.test(urlDigest) || evidenceNumber === undefined || item.supportEligible !== true) continue;
+      const provenanceCluster = cleanString(item.provenanceCluster) || (canonicalUrl ? evidenceDomainKey(canonicalUrl) : '');
+      if (!id || !canonicalUrl || !provenanceCluster || !/^[a-f0-9]{24}$/.test(urlDigest) || evidenceNumber === undefined || item.supportEligible !== true) continue;
       entries.push({
         id,
         evidenceNumber,
@@ -1126,6 +1131,7 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
         urlDigest,
         title: title || canonicalUrl,
         role,
+        provenanceCluster,
         supportEligible: true,
         ...(cleanString(item.engine) ? { engine: cleanString(item.engine) } : {}),
       });
@@ -1148,6 +1154,7 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
         const urlDigest = cleanString(item.urlDigest);
         const title = cleanString(item.title);
         const domain = cleanString(item.domain) || (canonicalUrl ? evidenceDomainKey(canonicalUrl) : '');
+        const provenanceCluster = cleanString(item.provenanceCluster) || domain;
         const engine = cleanString(item.engine);
         const score = typeof item.score === 'number' && Number.isFinite(item.score) ? Math.max(0, item.score) : undefined;
         const cleanAnchorArray = (value: unknown) => Array.isArray(value)
@@ -1155,13 +1162,14 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
           : [];
         const titleMatchedAnchors = cleanAnchorArray(item.titleMatchedAnchors);
         const matchedAnchors = cleanAnchorArray(item.matchedAnchors);
-        if (!id || !canonicalUrl || !domain || !/^[a-f0-9]{24}$/.test(urlDigest)) continue;
+        if (!id || !canonicalUrl || !domain || !provenanceCluster || !/^[a-f0-9]{24}$/.test(urlDigest)) continue;
         searchCandidates.push({
           id,
           canonicalUrl,
           urlDigest,
           title: title || domain,
           domain,
+          provenanceCluster,
           ...(engine ? { engine } : {}),
           ...(score !== undefined ? { score } : {}),
           titleMatchedAnchors,
@@ -1239,6 +1247,34 @@ function evidenceDomainKey(value: string): string {
   }
 }
 
+const ACCOUNT_HOSTING_DOMAINS = new Set([
+  'facebook.com', 'github.com', 'gitlab.com', 'huggingface.co', 'instagram.com',
+  'linkedin.com', 'medium.com', 'reddit.com', 'twitter.com', 'x.com', 'youtube.com',
+]);
+
+function evidenceProvenanceCluster(value: string, seed?: ResearchSeed): string {
+  const domain = evidenceDomainKey(value);
+  const seedDomain = evidenceDomainKey(cleanString(seed?.link));
+  if (!domain) return '';
+  if (!seedDomain) return domain;
+  if (domain === seedDomain) return `party:${seedDomain}`;
+
+  const seedBrand = seedDomain.split('.')[0]?.replace(/[^a-z0-9-]/giu, '').toLowerCase() || '';
+  if (seedBrand.length < 4) return domain;
+  try {
+    const parsed = new URL(value);
+    const hostnameLabels = parsed.hostname.toLowerCase().split('.').filter(Boolean);
+    const pathSegments = parsed.pathname.toLowerCase().split('/').filter(Boolean);
+    const hostedAccountMatch = ACCOUNT_HOSTING_DOMAINS.has(domain) && pathSegments.includes(seedBrand);
+    if (hostnameLabels.includes(seedBrand) || hostedAccountMatch) {
+      return `party:${seedDomain}`;
+    }
+  } catch {
+    return domain;
+  }
+  return domain;
+}
+
 function searchCandidateUrls(evidencePacket: string): string[] {
   const packet = cleanString(evidencePacket);
   if (!packet) return [];
@@ -1295,7 +1331,7 @@ export function shouldExtendDigestResearch(
   const extension = budget?.extensionToolCalls ?? 0;
   const ledger = parseEvidenceLedger(evidencePacket);
   const existingEntries = ledger?.entries ?? [];
-  const existingClusters = [...new Set(existingEntries.map((entry) => evidenceDomainKey(entry.canonicalUrl)).filter(Boolean))];
+  const existingClusters = [...new Set(existingEntries.map((entry) => entry.provenanceCluster || evidenceDomainKey(entry.canonicalUrl)).filter(Boolean))];
   const base = { candidateUrls: [] as string[], existingClusters, required: false };
   if (decision.researchMode !== 'digest' || initial < 1 || extension < 1 || !budget) {
     return { ...base, extend: false, reason: 'not-staged-digest' };
@@ -1322,11 +1358,12 @@ export function shouldExtendDigestResearch(
         .filter(optionalExtensionCandidateAllowed)
         .map((candidate) => candidate.canonicalUrl)
     : searchCandidateUrls(evidencePacket);
-  const candidateUrls = discoveredCandidates.filter((url) =>
-    !crawled.has(url)
-    && Boolean(evidenceDomainKey(url))
-    && !existingClusterSet.has(evidenceDomainKey(url))
-  );
+  const candidateUrls = discoveredCandidates.filter((url) => {
+    if (crawled.has(url)) return false;
+    const candidate = ledger?.searchCandidates.find((item) => item.canonicalUrl === url);
+    const cluster = candidate?.provenanceCluster || evidenceDomainKey(url);
+    return Boolean(cluster) && !existingClusterSet.has(cluster);
+  });
   if (!candidateUrls.length) {
     return { ...base, extend: false, reason: 'no-novel-search-candidate' };
   }
