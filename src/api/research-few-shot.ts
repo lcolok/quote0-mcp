@@ -154,6 +154,10 @@ export function buildNeuromancerResearchPrompt(
     throw new Error('只有 research lane 才能构建 Neuromancer Research prompt');
   }
   const budget = decision.budget;
+  const stageToolCalls = budget.initialToolCalls ?? budget.maxToolCalls;
+  const stagedBudgetNote = budget.extensionToolCalls
+    ? `\n- 这是 staged budget 的第一段：本段硬上限 ${stageToolCalls} 次；Quote0 会在本段结束后确定性检查 coverage，只有仍缺高价值独立证据时才可能额外授权 ${budget.extensionToolCalls} 次。不要预支或假定扩展一定会发生。`
+    : '';
   return `你是“神经漫游者”。这是 Quote0 bounded research canary 的 Phase A：只负责检索和事实核验，不负责写最终新闻卡片。
 run=${runId}；policy=${decision.policyVersion}；触发原因=${decision.reasons.join(',')}。
 
@@ -161,9 +165,9 @@ run=${runId}；policy=${decision.policyVersion}；触发原因=${decision.reason
 目标：${researchObjective(decision)}
 
 研究预算：
-- 最多 ${budget.maxToolCalls} 次工具调用；达到上限立即停止。运行时也会在该上限硬终止，不要尝试超额调用。
+- 本阶段最多 ${stageToolCalls} 次工具调用；达到上限立即停止。整个 Research 的绝对总上限仍为 ${budget.maxToolCalls} 次。运行时会硬执行本阶段上限，不要尝试超额调用。${stagedBudgetNote}
 - **严禁并行工具调用**：每个模型轮次只允许发起 1 个工具调用，必须等待该工具结果返回后再决定下一步。
-- 你必须在内部维护工具计数 1/${budget.maxToolCalls}、2/${budget.maxToolCalls}…；下一次调用若会超过上限，直接停止研究并输出完成标记。
+- 你必须在内部维护本阶段工具计数 1/${stageToolCalls}、2/${stageToolCalls}…；下一次调用若会超过本阶段上限，直接停止研究并输出完成标记。
 - seed 之外最多形成 ${budget.maxPostSeedArtifacts} 个高价值来源制品；目标独立来源簇至少 ${budget.targetIndependentClusters} 个（若客观上不可获得则如实降级）。
 - 最终 Evidence Packet 上限 ${budget.maxEvidenceChars} 字符；不要用低价值重复页面挤占证据预算。
 - 不要向用户提问，不要产生 ask_user / interaction。
@@ -183,6 +187,34 @@ ${seedPayload(seed)}
 
 Phase A 完成后不要写新闻、不要写 JSON、不要解释研究过程；只输出精确标记：${RESEARCH_PHASE_A_DONE}
 即使运行时在工具调用后没有产生该标记，Quote0 也会从持久 thread 的 tool evidence 做确定性恢复。`;
+}
+
+export function buildNeuromancerResearchExtensionPrompt(
+  seed: ResearchSeed,
+  evidencePacket: string,
+  decision: ResearchTriageDecision,
+  runId: string,
+): string {
+  const extension = decision.budget?.extensionToolCalls ?? 0;
+  if (decision.researchMode !== 'digest' || extension < 1) {
+    throw new Error('只有 staged digest 才能构建 Research extension prompt');
+  }
+  return `你是“神经漫游者”。这是 Quote0 bounded research run=${runId} 的 Phase A 条件扩展段。第一段已经结束，Quote0 的 deterministic coverage gate 判断仍有一个高价值证据缺口，因此只额外授权 ${extension} 次工具调用。
+
+这是硬预算扩展，不是重新研究：
+- **只允许再调用 ${extension} 次工具**，严禁并行，不能重复第一段已完成的 crawl/search。
+- Evidence Packet 顶部 Ledger 是当前已确认可支持证据；search 结果只是候选线索。
+- 优先从第一段 search 已发现但尚未 crawl 的候选中，选择能增加独立 provenance cluster、primary/official 证据或解决冲突的最高信息增益 URL。
+- 若候选明显重复/低价值/不可访问，也不要用新的宽泛 search 消耗额度；可以直接结束。
+- 这段仍然不写新闻、不生成最终 JSON、不向用户提问。
+
+Seed：
+${seedPayload(seed, 1000)}
+
+已冻结 Evidence Packet：
+${evidencePacket}
+
+完成后只输出精确标记：${RESEARCH_PHASE_A_DONE}`;
 }
 
 /** Phase B: new thread, compact evidence only, and absolutely no tools. */

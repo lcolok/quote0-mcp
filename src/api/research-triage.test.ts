@@ -115,6 +115,8 @@ describe('research triage', () => {
     expect(decision.researchMode).toBe('digest');
     expect(decision.budget).toEqual({
       maxToolCalls: 4,
+      initialToolCalls: 3,
+      extensionToolCalls: 1,
       maxPostSeedArtifacts: 2,
       maxPublishableClaims: 4,
       maxFinalizationRetries: 2,

@@ -60,7 +60,10 @@ describe('Neuromancer research prompts', () => {
     expect(decision.researchMode).toBe('digest');
     expect(decision.budget?.targetIndependentClusters).toBe(2);
     expect(prompt).toContain('研究模式：digest');
-    expect(prompt).toContain('最多 4 次工具调用');
+    expect(prompt).toContain('本阶段最多 3 次工具调用');
+    expect(prompt).toContain('绝对总上限仍为 4 次');
+    expect(prompt).toContain('staged budget');
+    expect(prompt).toContain('额外授权 1 次');
     expect(prompt).toContain('必须执行至少 1 次 freshness/provenance targeted search');
     expect(prompt).toContain('尝试取得至少 2 个 provenance 独立来源簇');
     expect(prompt).toContain('即使 seed 本身就是 primary/official 且正文完整');

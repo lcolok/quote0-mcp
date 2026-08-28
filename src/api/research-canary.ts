@@ -12,6 +12,7 @@ import {
 import {
   EINK_NEWS_FEW_SHOT_VERSION,
   buildNeuromancerEvidenceFinalizationPrompt,
+  buildNeuromancerResearchExtensionPrompt,
   buildNeuromancerResearchPrompt,
   buildNeuromancerServerOwnedEditorialPrompt,
   type NeuromancerEditorialDraft,
@@ -215,7 +216,7 @@ export async function dispatchResearchCanary(
   const payload = await requestJson(config, '/jobs', {
     method: 'POST',
     headers: {
-      'X-Straylight-Max-Tool-Calls': String(decision.budget?.maxToolCalls ?? 0),
+      'X-Straylight-Max-Tool-Calls': String(decision.budget?.initialToolCalls ?? decision.budget?.maxToolCalls ?? 0),
     },
     body: JSON.stringify({
       message: buildNeuromancerResearchPrompt(seed, decision, runId),
@@ -230,6 +231,41 @@ export async function dispatchResearchCanary(
   const threadId = cleanString(payload.threadId);
   if (!jobId || !threadId) throw new Error('Straylight /jobs 缺少 jobId/threadId');
   return { jobId, threadId };
+}
+
+export async function dispatchResearchExtension(
+  runId: string,
+  threadId: string,
+  seed: ResearchSeed,
+  evidencePacket: string,
+  decision: ResearchTriageDecision,
+  config: ResearchCanaryConfig = getResearchCanaryConfig(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<StraylightCanaryDispatch> {
+  const extensionToolCalls = decision.budget?.extensionToolCalls ?? 0;
+  if (decision.researchMode !== 'digest' || extensionToolCalls < 1) {
+    throw new Error('Research extension 只允许 staged digest');
+  }
+  const payload = await requestJson(config, '/jobs', {
+    method: 'POST',
+    headers: {
+      'X-Straylight-Max-Tool-Calls': String(extensionToolCalls),
+    },
+    body: JSON.stringify({
+      threadId,
+      message: buildNeuromancerResearchExtensionPrompt(seed, evidencePacket, decision, runId),
+      agentId: config.agentId,
+      providerId: config.researchProviderId,
+      source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
+    }),
+  }, fetchImpl);
+
+  if (!isPlainObject(payload)) throw new Error('Straylight Research extension /jobs 返回格式无效');
+  const jobId = cleanString(payload.jobId);
+  const returnedThreadId = cleanString(payload.threadId);
+  if (!jobId || !returnedThreadId) throw new Error('Straylight Research extension /jobs 缺少 jobId/threadId');
+  if (returnedThreadId !== threadId) throw new Error(`Research extension thread 漂移: ${returnedThreadId} != ${threadId}`);
+  return { jobId, threadId: returnedThreadId };
 }
 
 /**
@@ -280,6 +316,8 @@ export interface StructuredFinalizationTelemetry {
   latencyMs: number;
   finishReason?: string;
   attempt: number;
+  totalLatencyMs?: number;
+  retryErrors?: string[];
   usage?: {
     input?: number;
     output?: number;
@@ -871,6 +909,79 @@ function parseSupportEligibleDigests(evidencePacket?: string): Set<string> {
   return digests;
 }
 
+function evidenceDomainKey(value: string): string {
+  try {
+    const parts = new URL(value).hostname.replace(/^www\./u, '').split('.').filter(Boolean);
+    if (parts.length <= 2) return parts.join('.');
+    const lastTwo = parts.slice(-2).join('.');
+    const ccSecondLevel = new Set(['co.uk', 'com.cn', 'com.au', 'co.jp', 'co.kr', 'com.sg', 'com.hk']);
+    return ccSecondLevel.has(lastTwo) && parts.length >= 3 ? parts.slice(-3).join('.') : lastTwo;
+  } catch {
+    return '';
+  }
+}
+
+function searchCandidateUrls(evidencePacket: string): string[] {
+  const packet = cleanString(evidencePacket);
+  if (!packet) return [];
+  const candidates = new Set<string>();
+  const sections = packet.split(/(?=\n\[EVIDENCE \d+\] tool=)/g);
+  for (const section of sections) {
+    if (!/^\n?\[EVIDENCE \d+\] tool=search\b/iu.test(section)) continue;
+    for (const match of section.matchAll(/https?:\/\/[^"\\\s}\]]+/gu)) {
+      const canonical = canonicalEvidenceUrl(match[0].replace(/[),.;]+$/u, ''));
+      if (canonical) candidates.add(canonical);
+    }
+  }
+  return [...candidates];
+}
+
+export interface DigestResearchExtensionDecision {
+  extend: boolean;
+  reason: 'not-staged-digest' | 'initial-budget-not-reached' | 'max-budget-reached' | 'coverage-sufficient' | 'no-novel-search-candidate' | 'novel-evidence-candidate';
+  candidateUrls: string[];
+  existingClusters: string[];
+}
+
+export function shouldExtendDigestResearch(
+  evidencePacket: string,
+  runtime: ResearchRuntimeReceipt,
+  decision: ResearchTriageDecision,
+): DigestResearchExtensionDecision {
+  const budget = decision.budget;
+  const initial = budget?.initialToolCalls ?? 0;
+  const extension = budget?.extensionToolCalls ?? 0;
+  const ledger = parseEvidenceLedger(evidencePacket);
+  const existingEntries = ledger?.entries ?? [];
+  const existingClusters = [...new Set(existingEntries.map((entry) => evidenceDomainKey(entry.canonicalUrl)).filter(Boolean))];
+  const base = { candidateUrls: [] as string[], existingClusters };
+  if (decision.researchMode !== 'digest' || initial < 1 || extension < 1 || !budget) {
+    return { ...base, extend: false, reason: 'not-staged-digest' };
+  }
+  if (runtime.toolCalls < initial) return { ...base, extend: false, reason: 'initial-budget-not-reached' };
+  if (runtime.toolCalls >= budget.maxToolCalls) return { ...base, extend: false, reason: 'max-budget-reached' };
+  if (existingClusters.length >= budget.targetIndependentClusters) {
+    return { ...base, extend: false, reason: 'coverage-sufficient' };
+  }
+
+  const crawled = new Set(existingEntries.map((entry) => entry.canonicalUrl));
+  const existingClusterSet = new Set(existingClusters);
+  const candidateUrls = searchCandidateUrls(evidencePacket).filter((url) =>
+    !crawled.has(url)
+    && Boolean(evidenceDomainKey(url))
+    && !existingClusterSet.has(evidenceDomainKey(url))
+  );
+  if (!candidateUrls.length) {
+    return { ...base, extend: false, reason: 'no-novel-search-candidate' };
+  }
+  return {
+    extend: true,
+    reason: 'novel-evidence-candidate',
+    candidateUrls: candidateUrls.slice(0, 5),
+    existingClusters,
+  };
+}
+
 function evidenceGroundingErrors(rawReceipt: Record<string, unknown>, evidencePacket?: string): string[] {
   const supportEligible = parseSupportEligibleDigests(evidencePacket);
   const rawSources = Array.isArray(rawReceipt.sources) ? rawReceipt.sources : [];
@@ -971,8 +1082,7 @@ function chooseRenderableTitle(value: unknown): string | undefined {
 function sourceLabelFromEvidence(entries: EvidenceLedgerEntry[]): string {
   const labels: string[] = [];
   for (const entry of entries) {
-    let label = '';
-    try { label = new URL(entry.canonicalUrl).hostname.replace(/^www\./u, ''); } catch { label = entry.title; }
+    const label = evidenceDomainKey(entry.canonicalUrl) || entry.title;
     if (!label || labels.includes(label)) continue;
     const next = [...labels, label].join('/');
     if (textUnits(next) > 36) break;
@@ -1158,7 +1268,7 @@ function materializeArtifact(
       providerReportedTokens: reportedTokens
         ? { status: 'reported', ...reportedTokens }
         : { status: 'unavailable' },
-      ...(finalizerTelemetry ? { llmCalls: 1 } : {}),
+      ...(finalizerTelemetry ? { llmCalls: Math.max(1, finalizerTelemetry.attempt) } : {}),
       toolCalls: runtime.toolCalls,
       searchRequests: runtime.searchRequests,
       crawlRequests: runtime.crawlRequests,

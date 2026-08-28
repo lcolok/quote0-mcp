@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import {
   dispatchResearchCanary,
+  dispatchResearchExtension,
   dispatchResearchFinalization,
   dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
@@ -11,11 +12,13 @@ import {
   RESEARCH_CANARY_MODE,
   researchCanaryFingerprint,
   researchCanaryIdempotencyKey,
+  shouldExtendDigestResearch,
 } from './research-canary.js';
 import {
   createResearchRun,
   getResearchRun,
   markResearchRunDispatched,
+  markResearchRunResearchExtended,
   markResearchRunState,
   type ResearchRunRecord,
 } from './research-run-store.js';
@@ -92,9 +95,14 @@ async function completeWithStructuredFinalizer(
   const maxAttempts = 1 + (run.triage.budget?.maxFinalizationRetries ?? 1);
   let feedback: string[] = [];
   let lastArtifact: ReturnType<typeof materializeStructuredResearchFinalization>['artifact'];
+  const aggregateUsage = { input: 0, output: 0, cacheRead: 0, total: 0 };
+  let hasAggregateUsage = false;
+  let totalLatencyMs = 0;
+  const retryErrors: string[] = [];
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let structured;
+    const attemptStartedAt = Date.now();
     try {
       structured = await dispatchStructuredResearchFinalization(
         run.id,
@@ -109,6 +117,8 @@ async function completeWithStructuredFinalizer(
       );
     } catch (error) {
       const message = `Structured Phase B attempt ${attempt} 失败: ${error instanceof Error ? error.message : String(error)}`;
+      totalLatencyMs += Math.max(0, Date.now() - attemptStartedAt);
+      retryErrors.push(message);
       feedback = [message];
       if (attempt < maxAttempts) continue;
       const failed = await markResearchRunState(postgres, run.id, {
@@ -120,6 +130,24 @@ async function completeWithStructuredFinalizer(
       });
       return { kind: 'failed', run: failed, error: message };
     }
+
+    totalLatencyMs += structured.telemetry.latencyMs || Math.max(0, Date.now() - attemptStartedAt);
+    if (structured.telemetry.usage) {
+      hasAggregateUsage = true;
+      aggregateUsage.input += structured.telemetry.usage.input || 0;
+      aggregateUsage.output += structured.telemetry.usage.output || 0;
+      aggregateUsage.cacheRead += structured.telemetry.usage.cacheRead || 0;
+      aggregateUsage.total += structured.telemetry.usage.total || 0;
+    }
+    structured = {
+      ...structured,
+      telemetry: {
+        ...structured.telemetry,
+        totalLatencyMs,
+        ...(retryErrors.length ? { retryErrors: [...retryErrors] } : {}),
+        ...(hasAggregateUsage ? { usage: { ...aggregateUsage } } : {}),
+      },
+    };
 
     const materialized = materializeStructuredResearchFinalization({
       runId: run.id,
@@ -145,7 +173,10 @@ async function completeWithStructuredFinalizer(
 
     if (!materialized.artifact) {
       feedback = materialized.errors.length ? materialized.errors : ['Structured Phase B 未产出合法 artifact'];
-      if (attempt < maxAttempts) continue;
+      if (attempt < maxAttempts) {
+        retryErrors.push(`attempt ${attempt} deterministic gate: ${feedback.join('; ')}`);
+        continue;
+      }
       const invalid = await markResearchRunState(postgres, run.id, {
         state: 'invalid',
         runtimeReceipt: runtime,
@@ -182,7 +213,10 @@ async function completeWithStructuredFinalizer(
         const publishGateFailure = message.startsWith('universal Research final artifact 无效:');
         if (publishGateFailure) {
           feedback = [`universal publish gate: ${message}`];
-          if (attempt < maxAttempts) continue;
+          if (attempt < maxAttempts) {
+            retryErrors.push(`attempt ${attempt} universal gate: ${message}`);
+            continue;
+          }
           const invalid = await markResearchRunState(postgres, run.id, {
             state: 'invalid',
             runtimeReceipt: runtime,
@@ -341,6 +375,47 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
       evidenceSnapshot: inspection.evidencePacket,
       validationErrors: inspection.errors,
     });
+
+    const extensionDecision = shouldExtendDigestResearch(
+      inspection.evidencePacket,
+      inspection.runtime,
+      run.triage,
+    );
+    if (extensionDecision.extend && run.straylightJobIds.length === 1) {
+      try {
+        const extended = await dispatchResearchExtension(
+          run.id,
+          run.straylightThreadId,
+          run.inputSnapshot,
+          inspection.evidencePacket,
+          run.triage,
+        );
+        const updated = await markResearchRunResearchExtended(
+          postgres,
+          run.id,
+          extended.jobId,
+          extended.threadId,
+        );
+        return c.json({
+          success: true,
+          reconciled: true,
+          phaseTransition: 'research->conditional-extension',
+          researchExtension: {
+            reason: extensionDecision.reason,
+            candidateCount: extensionDecision.candidateUrls.length,
+            existingClusters: extensionDecision.existingClusters,
+          },
+          data: publicRun(updated),
+        }, 202);
+      } catch (error) {
+        console.warn(
+          `Research conditional extension degraded run=${run.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        // The initial stage has already passed minimum coverage. If the optional
+        // marginal-gain extension cannot be dispatched, finalize from frozen evidence
+        // instead of failing or re-running Phase A.
+      }
+    }
 
     if (getResearchCanaryConfig().structuredFinalizer) {
       const outcome = await completeWithStructuredFinalizer(

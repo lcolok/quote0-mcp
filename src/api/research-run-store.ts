@@ -132,6 +132,29 @@ export async function markResearchRunDispatched(
   return fromRow(result.rows[0]);
 }
 
+export async function markResearchRunResearchExtended(
+  db: PostgresDatabase,
+  id: string,
+  jobId: string,
+  threadId: string,
+): Promise<ResearchRunRecord> {
+  const result = await db.query(
+    `UPDATE research_runs
+        SET state='running',
+            straylight_job_id=$2,
+            straylight_job_ids=COALESCE(straylight_job_ids, '[]'::jsonb) || $3::jsonb,
+            straylight_thread_id=$4,
+            error=NULL,
+            updated_at=NOW()
+      WHERE id=$1
+        AND straylight_thread_id=$4
+      RETURNING *`,
+    [id, jobId, JSON.stringify([jobId]), threadId],
+  );
+  if (!result.rows[0]) throw new Error(`research_run ${id} 不存在或 extension thread 不匹配`);
+  return fromRow(result.rows[0]);
+}
+
 export async function markResearchRunState(
   db: PostgresDatabase,
   id: string,

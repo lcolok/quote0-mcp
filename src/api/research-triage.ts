@@ -1,6 +1,6 @@
 import { assessSourceEvidence, type EvidenceMode } from './content-quality.js';
 
-export const RESEARCH_TRIAGE_POLICY_VERSION = 'quote0-research-triage/v5';
+export const RESEARCH_TRIAGE_POLICY_VERSION = 'quote0-research-triage/v6';
 
 export interface ResearchSeed {
   title: string;
@@ -22,6 +22,10 @@ export type ResearchMode = 'digest' | 'recovery' | 'enrichment' | 'verification'
 
 export interface ResearchBudget {
   maxToolCalls: number;
+  /** Optional first-stage hard ceiling before Quote0 evaluates marginal evidence gain. */
+  initialToolCalls?: number;
+  /** Optional one-shot continuation budget granted only when deterministic coverage is still insufficient. */
+  extensionToolCalls?: number;
   maxPostSeedArtifacts: number;
   maxPublishableClaims: number;
   maxFinalizationRetries: number;
@@ -89,6 +93,8 @@ function budgetFor(mode: ResearchMode): ResearchBudget {
   if (mode === 'digest') {
     return {
       maxToolCalls: 4,
+      initialToolCalls: 3,
+      extensionToolCalls: 1,
       maxPostSeedArtifacts: 2,
       maxPublishableClaims: 4,
       maxFinalizationRetries: 2,

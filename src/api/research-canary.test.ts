@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   buildResearchEvidencePacket,
   dispatchResearchCanary,
+  dispatchResearchExtension,
   dispatchResearchFinalization,
   dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
@@ -9,6 +10,7 @@ import {
   materializeStructuredResearchFinalization,
   RESEARCH_EVIDENCE_PACKET_VERSION,
   researchCanaryIdentity,
+  shouldExtendDigestResearch,
   type ResearchCanaryConfig,
   type ResearchRuntimeReceipt,
 } from './research-canary.js';
@@ -156,6 +158,73 @@ describe('research canary adapter', () => {
     expect(captured.message).toContain('研究模式：recovery');
     expect(captured.message).toContain('最多 10 次工具调用');
     expect(captured.message).toContain('Marginal-gain stop');
+  });
+
+  it('uses a hard 3 + conditional 1 staged budget for universal digest research', async () => {
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。'.repeat(4),
+      source: 'Vendor Blog',
+      link: 'https://seed.example/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    let capturedHeaders: Headers | undefined;
+    let captured: any;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      captured = JSON.parse(String(init?.body));
+      return jsonResponse({ jobId: 'job-digest', threadId: captured?.threadId || 'thread-digest' }, 202);
+    }) as typeof fetch;
+
+    await dispatchResearchCanary('run-digest', digestSeed, digestDecision, config, fetchImpl);
+    expect(digestDecision.budget).toEqual(expect.objectContaining({ maxToolCalls: 4, initialToolCalls: 3, extensionToolCalls: 1 }));
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('3');
+    expect(captured.message).toContain('staged budget');
+    expect(captured.message).toContain('本段硬上限 3 次');
+
+    const initialTools = [
+      {
+        name: 'crawl', status: 'completed', input: { url: digestSeed.link },
+        output: { status: 'completed', url: digestSeed.link, engine: 'scrapling', result: { title: 'Seed', url: digestSeed.link, text: 'seed body' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'product update official independent' },
+        output: { query: 'product update official independent', results: [{ title: 'Independent', url: 'https://independent.example/report', content: 'corroboration', engine: 'anysearch' }] },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${digestSeed.link}?utm_source=dup` },
+        output: { status: 'completed', url: `${digestSeed.link}?utm_source=dup`, engine: 'scrapling', result: { title: 'Seed duplicate', url: `${digestSeed.link}?utm_source=dup`, text: 'same body' } },
+      },
+    ];
+    const initialPacket = buildResearchEvidencePacket(phaseATurns(initialTools), 5_000, digestSeed);
+    const initialRuntime: ResearchRuntimeReceipt = { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 };
+    const extensionDecision = shouldExtendDigestResearch(initialPacket, initialRuntime, digestDecision);
+    expect(extensionDecision).toEqual(expect.objectContaining({ extend: true, reason: 'novel-evidence-candidate' }));
+    expect(extensionDecision.candidateUrls).toContain('https://independent.example/report');
+
+    capturedHeaders = undefined;
+    captured = undefined;
+    const extended = await dispatchResearchExtension(
+      'run-digest', 'thread-digest', digestSeed, initialPacket, digestDecision, config, fetchImpl,
+    );
+    expect(extended).toEqual({ jobId: 'job-digest', threadId: 'thread-digest' });
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('1');
+    expect(captured.threadId).toBe('thread-digest');
+    expect(captured.message).toContain('只额外授权 1 次工具调用');
+
+    const enoughPacket = buildResearchEvidencePacket(phaseATurns([
+      initialTools[0],
+      initialTools[1],
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://independent.example/report' },
+        output: { status: 'completed', url: 'https://independent.example/report', engine: 'scrapling', result: { title: 'Independent', url: 'https://independent.example/report', text: 'independent body' } },
+      },
+    ]), 5_000, digestSeed);
+    expect(shouldExtendDigestResearch(enoughPacket, initialRuntime, digestDecision)).toEqual(expect.objectContaining({
+      extend: false,
+      reason: 'coverage-sufficient',
+    }));
   });
 
   it('treats completed+empty with successful tool evidence as research_complete, not invalid', async () => {
