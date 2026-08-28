@@ -47,7 +47,7 @@ describe('universal evidence research policy', () => {
       },
     }, {
       reason: '3 failures',
-      researchPolicyVersion: 'quote0-research-triage/v4',
+      researchPolicyVersion: 'quote0-research-triage/v5',
       failureCount: 3,
       now: quarantinedAt,
     });
@@ -55,7 +55,7 @@ describe('universal evidence research policy', () => {
     expect(next.metadata.researchGate).toEqual(expect.objectContaining({
       state: 'quarantined',
       quarantineReason: '3 failures',
-      researchPolicyVersion: 'quote0-research-triage/v4',
+      researchPolicyVersion: 'quote0-research-triage/v5',
       failureCount: 3,
       quarantinedAt: quarantinedAt.toISOString(),
     }));

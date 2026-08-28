@@ -77,7 +77,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function textUnits(value: string): number {
+export function textUnits(value: string): number {
   let units = 0;
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0;
@@ -106,7 +106,7 @@ function textUnits(value: string): number {
  * This is a rendering capacity guard, not an editorial target. The finalizer
  * should normally stay below it and use extra space only when evidence warrants.
  */
-function messageCapacityUnits(title: string): number {
+export function messageCapacityUnits(title: string): number {
   return textUnits(title) <= 22 ? 280 : 220;
 }
 

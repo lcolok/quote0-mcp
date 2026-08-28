@@ -3,7 +3,9 @@ import type { RenderableDataItem } from '../react-widgets/core/modular-architect
 import {
   NEUROMANCER_RESEARCH_RECEIPT_VERSION,
   canonicalEvidenceUrl,
+  messageCapacityUnits,
   normalizeNeuromancerFinalArtifact,
+  textUnits,
   validateRenderableNews,
   type NeuromancerResearchReceipt,
 } from './renderable-news-intake.js';
@@ -11,14 +13,15 @@ import {
   EINK_NEWS_FEW_SHOT_VERSION,
   buildNeuromancerEvidenceFinalizationPrompt,
   buildNeuromancerResearchPrompt,
+  buildNeuromancerServerOwnedEditorialPrompt,
   type NeuromancerEditorialDraft,
 } from './research-few-shot.js';
-import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
+import { RESEARCH_TRIAGE_POLICY_VERSION, type ResearchSeed, type ResearchTriageDecision } from './research-triage.js';
 
 export const RESEARCH_CANARY_MODE = 'straylight-jobs-canary/v1';
 export const RESEARCH_CANARY_SOURCE_PREFIX = 'quote0-research-canary';
 export const RESEARCH_EVIDENCE_PACKET_VERSION = 'quote0-evidence-packet/v1';
-export const RESEARCH_EVIDENCE_LEDGER_VERSION = 'quote0-evidence-ledger/v1';
+export const RESEARCH_EVIDENCE_LEDGER_VERSION = 'quote0-evidence-ledger/v2';
 export const QUOTE0_RESEARCH_PROVIDER_ID = 'local-qwen';
 
 export type ResearchCanaryPhase = 'research' | 'finalization';
@@ -290,10 +293,52 @@ export interface StructuredResearchFinalization {
   telemetry: StructuredFinalizationTelemetry;
 }
 
-function structuredFinalizationSchema(runId: string, decision: ResearchTriageDecision): Record<string, unknown> {
+function structuredFinalizationSchema(
+  runId: string,
+  decision: ResearchTriageDecision,
+  evidencePacket: string,
+): Record<string, unknown> {
   if (!decision.budget) throw new Error('finalization 缺少 Research budget');
   const maxSources = decision.budget.maxPostSeedArtifacts + 1;
   const maxClaims = decision.budget.maxPublishableClaims;
+  const ledger = parseEvidenceLedger(evidencePacket);
+  if (decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION && ledger?.entries.length) {
+    const evidenceIds = ledger.entries.map((entry) => entry.id);
+    return {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        titleCandidates: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 3,
+          items: { type: 'string' },
+        },
+        facts: {
+          type: 'array',
+          minItems: 1,
+          maxItems: maxClaims,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              text: { type: 'string' },
+              evidenceIds: {
+                type: 'array',
+                minItems: 1,
+                maxItems: maxSources,
+                items: { type: 'string', enum: evidenceIds },
+              },
+            },
+            required: ['text', 'evidenceIds'],
+          },
+        },
+        publishTime: { type: 'string' },
+        linkEvidenceId: { type: 'string', enum: evidenceIds },
+      },
+      required: ['titleCandidates', 'facts', 'publishTime', 'linkEvidenceId'],
+    };
+  }
   const source = {
     type: 'object',
     additionalProperties: false,
@@ -377,24 +422,32 @@ export async function dispatchStructuredResearchFinalization(
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
 ): Promise<StructuredResearchFinalization> {
+  const useServerOwnedEditorial = decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION
+    && Boolean(parseEvidenceLedger(evidencePacket)?.entries.length);
+  const prompt = useServerOwnedEditorial
+    ? buildNeuromancerServerOwnedEditorialPrompt(
+        seed,
+        evidencePacket,
+        decision,
+        options.errors || [],
+        options.directDraft,
+      )
+    : buildNeuromancerEvidenceFinalizationPrompt(
+        seed,
+        evidencePacket,
+        runId,
+        decision,
+        options.errors || [],
+        options.directDraft,
+      );
   const payload = await requestJson(config, '/inference/structured', {
     method: 'POST',
     body: JSON.stringify({
       providerId: config.finalizerProviderId,
-      messages: [{
-        role: 'user',
-        content: buildNeuromancerEvidenceFinalizationPrompt(
-          seed,
-          evidencePacket,
-          runId,
-          decision,
-          options.errors || [],
-          options.directDraft,
-        ),
-      }],
+      messages: [{ role: 'user', content: prompt }],
       jsonSchema: {
-        name: 'quote0_research_final_artifact',
-        schema: structuredFinalizationSchema(runId, decision),
+        name: useServerOwnedEditorial ? 'quote0_server_owned_editorial' : 'quote0_research_final_artifact',
+        schema: structuredFinalizationSchema(runId, decision, evidencePacket),
       },
       temperature: 0.1,
       maxTokens: 4_096,
@@ -637,9 +690,34 @@ function evidenceUrlDigest(value: string): string | undefined {
   return canonical ? createHash('sha256').update(canonical).digest('hex').slice(0, 24) : undefined;
 }
 
-function supportEligibleCrawlDigests(calls: StraylightToolCall[]): string[] {
-  const digests = new Set<string>();
-  for (const call of calls) {
+interface EvidenceLedgerEntry {
+  id: string;
+  evidenceNumber: number;
+  canonicalUrl: string;
+  urlDigest: string;
+  title: string;
+  role: 'seed' | 'secondary';
+  supportEligible: true;
+  engine?: string;
+}
+
+interface EvidenceLedgerV2 {
+  version: typeof RESEARCH_EVIDENCE_LEDGER_VERSION;
+  entries: EvidenceLedgerEntry[];
+  supportUrlDigests: string[];
+  retrieval: {
+    status: 'healthy' | 'degraded' | 'unknown';
+    enginesUsed: string[];
+    unavailableEngines: string[];
+  };
+}
+
+function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: ResearchSeed): EvidenceLedgerEntry[] {
+  const seedCanonical = canonicalEvidenceUrl(cleanString(seed?.link));
+  const seen = new Set<string>();
+  const entries: EvidenceLedgerEntry[] = [];
+  for (let index = 0; index < calls.length; index += 1) {
+    const call = calls[index];
     if (!cleanString(call.name).toLowerCase().includes('crawl') || call.isError) continue;
     const status = cleanString(call.status).toLowerCase();
     if (status === 'error' || status === 'failed') continue;
@@ -648,32 +726,135 @@ function supportEligibleCrawlDigests(calls: StraylightToolCall[]): string[] {
     if (payloadStatus === 'error' || payloadStatus === 'failed') continue;
     const input = isPlainObject(call.input) ? call.input : {};
     const result = isPlainObject(payload?.result) ? payload.result : {};
-    for (const rawUrl of [input.url, payload?.url, result.url]) {
-      const digest = evidenceUrlDigest(cleanString(rawUrl));
-      if (digest) digests.add(digest);
+    const canonicalUrl = [result.url, payload?.url, input.url]
+      .map((value) => canonicalEvidenceUrl(cleanString(value)))
+      .find((value): value is string => Boolean(value));
+    if (!canonicalUrl || seen.has(canonicalUrl)) continue;
+    const urlDigest = evidenceUrlDigest(canonicalUrl);
+    if (!urlDigest) continue;
+    seen.add(canonicalUrl);
+    let title = cleanString(result.title);
+    if (!title) {
+      try { title = new URL(canonicalUrl).hostname.replace(/^www\./u, ''); } catch { title = canonicalUrl; }
+    }
+    const engine = cleanString(payload?.engine);
+    entries.push({
+      id: `E${index + 1}`,
+      evidenceNumber: index + 1,
+      canonicalUrl,
+      urlDigest,
+      title: title.slice(0, 180),
+      role: seedCanonical && seedCanonical === canonicalUrl ? 'seed' : 'secondary',
+      supportEligible: true,
+      ...(engine ? { engine } : {}),
+    });
+  }
+  return entries;
+}
+
+function evidenceRetrievalLedger(calls: StraylightToolCall[]): EvidenceLedgerV2['retrieval'] {
+  const enginesUsed = new Set<string>();
+  const unavailableEngines = new Set<string>();
+  let degraded = false;
+  for (const call of calls) {
+    const payload = unwrapToolPayload(call.output);
+    const status = cleanString(call.status).toLowerCase();
+    const payloadStatus = cleanString(payload?.status).toLowerCase();
+    if (call.isError || status === 'error' || status === 'failed' || payloadStatus === 'error' || payloadStatus === 'failed') degraded = true;
+    const engine = cleanString(payload?.engine);
+    if (engine) enginesUsed.add(engine);
+    if (Array.isArray(payload?.actual_engines)) {
+      for (const item of payload.actual_engines) if (typeof item === 'string' && item.trim()) enginesUsed.add(item.trim());
+    }
+    if (Array.isArray(payload?.results)) {
+      for (const item of payload.results) {
+        if (isPlainObject(item) && cleanString(item.engine)) enginesUsed.add(cleanString(item.engine));
+      }
+    }
+    if (isPlainObject(payload?.engine_status)) {
+      for (const [name, raw] of Object.entries(payload.engine_status)) {
+        const value = cleanString(raw).toLowerCase();
+        if (value && !['ok', 'healthy', 'success', 'completed'].includes(value)) unavailableEngines.add(name);
+      }
     }
   }
-  return [...digests].sort();
+  return {
+    status: calls.length === 0 ? 'unknown' : degraded ? 'degraded' : 'healthy',
+    enginesUsed: [...enginesUsed].sort().slice(0, 8),
+    unavailableEngines: [...unavailableEngines].sort().slice(0, 8),
+  };
+}
+
+function buildEvidenceLedger(calls: StraylightToolCall[], seed?: ResearchSeed): EvidenceLedgerV2 {
+  const entries = successfulCrawlEvidenceEntries(calls, seed);
+  return {
+    version: RESEARCH_EVIDENCE_LEDGER_VERSION,
+    entries,
+    supportUrlDigests: entries.map((entry) => entry.urlDigest).sort(),
+    retrieval: evidenceRetrievalLedger(calls),
+  };
+}
+
+function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefined {
+  const packet = cleanString(evidencePacket);
+  if (!packet) return undefined;
+  const ledgerLine = packet.split('\n').find((line) => line.startsWith('ledger='));
+  if (!ledgerLine) return undefined;
+  try {
+    const raw = JSON.parse(ledgerLine.slice('ledger='.length));
+    if (!isPlainObject(raw) || raw.version !== RESEARCH_EVIDENCE_LEDGER_VERSION || !Array.isArray(raw.entries)) return undefined;
+    const entries: EvidenceLedgerEntry[] = [];
+    for (const item of raw.entries) {
+      if (!isPlainObject(item)) continue;
+      const id = cleanString(item.id);
+      const canonicalUrl = canonicalEvidenceUrl(cleanString(item.canonicalUrl));
+      const urlDigest = cleanString(item.urlDigest);
+      const title = cleanString(item.title);
+      const evidenceNumber = nonNegativeInteger(item.evidenceNumber);
+      const role = item.role === 'seed' ? 'seed' : 'secondary';
+      if (!id || !canonicalUrl || !/^[a-f0-9]{24}$/.test(urlDigest) || evidenceNumber === undefined || item.supportEligible !== true) continue;
+      entries.push({
+        id,
+        evidenceNumber,
+        canonicalUrl,
+        urlDigest,
+        title: title || canonicalUrl,
+        role,
+        supportEligible: true,
+        ...(cleanString(item.engine) ? { engine: cleanString(item.engine) } : {}),
+      });
+    }
+    const retrievalRaw = isPlainObject(raw.retrieval) ? raw.retrieval : {};
+    const status = ['healthy', 'degraded', 'unknown'].includes(cleanString(retrievalRaw.status))
+      ? cleanString(retrievalRaw.status) as EvidenceLedgerV2['retrieval']['status']
+      : 'unknown';
+    const strings = (value: unknown) => Array.isArray(value)
+      ? [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].slice(0, 8)
+      : [];
+    return {
+      version: RESEARCH_EVIDENCE_LEDGER_VERSION,
+      entries,
+      supportUrlDigests: entries.map((entry) => entry.urlDigest).sort(),
+      retrieval: {
+        status,
+        enginesUsed: strings(retrievalRaw.enginesUsed),
+        unavailableEngines: strings(retrievalRaw.unavailableEngines),
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseSupportEligibleDigests(evidencePacket?: string): Set<string> {
+  const ledger = parseEvidenceLedger(evidencePacket);
+  if (ledger) return new Set(ledger.supportUrlDigests);
   const packet = cleanString(evidencePacket);
   if (!packet) return new Set();
-  const ledgerLine = packet.split('\n').find((line) => line.startsWith('ledger='));
-  if (ledgerLine) {
-    try {
-      const ledger = JSON.parse(ledgerLine.slice('ledger='.length)) as { version?: unknown; supportUrlDigests?: unknown };
-      if (ledger.version === RESEARCH_EVIDENCE_LEDGER_VERSION && Array.isArray(ledger.supportUrlDigests)) {
-        return new Set(ledger.supportUrlDigests.filter((item): item is string => typeof item === 'string' && /^[a-f0-9]{24}$/.test(item)));
-      }
-    } catch {
-      // Fall through to the legacy packet parser below.
-    }
-  }
 
-  // Backward-compatible recovery for Phase-A packets created before the ledger
-  // marker existed. Search snippets are deliberately ignored: only successful
-  // crawl inputs can become support-eligible evidence.
+  // Backward-compatible recovery for Phase-A packets created before Ledger v2.
+  // Search snippets are deliberately ignored: only successful crawl inputs can
+  // become support-eligible evidence.
   const digests = new Set<string>();
   const pattern = /\[EVIDENCE \d+\] tool=([^\s]+) status=([^\s]+) isError=(true|false)\ninput=([^\n]+)/g;
   for (const match of packet.matchAll(pattern)) {
@@ -718,15 +899,16 @@ function evidenceGroundingErrors(rawReceipt: Record<string, unknown>, evidencePa
   return errors;
 }
 
-export function buildResearchEvidencePacket(turns: StraylightThreadTurn[], maxPacketChars = 6_000): string {
+export function buildResearchEvidencePacket(
+  turns: StraylightThreadTurn[],
+  maxPacketChars = 6_000,
+  seed?: ResearchSeed,
+): string {
   const MAX_PACKET_CHARS = Math.max(2_000, Math.min(12_000, Math.round(maxPacketChars)));
   const calls = turns
     .filter((turn) => turn.participantType === 'agent')
     .flatMap((turn) => Array.isArray(turn.toolCalls) ? turn.toolCalls! : []);
-  const ledger = JSON.stringify({
-    version: RESEARCH_EVIDENCE_LEDGER_VERSION,
-    supportUrlDigests: supportEligibleCrawlDigests(calls),
-  });
+  const ledger = JSON.stringify(buildEvidenceLedger(calls, seed));
 
   const chunks: string[] = [`version=${RESEARCH_EVIDENCE_PACKET_VERSION}\nledger=${ledger}`];
   let used = chunks[0].length;
@@ -770,6 +952,170 @@ function seedReceipt(seed: ResearchSeed): NonNullable<NeuromancerResearchReceipt
     ...(cleanString(seed.source) ? { source: cleanString(seed.source) } : {}),
     ...(cleanString(seed.link) ? { link: cleanString(seed.link) } : {}),
   };
+}
+
+function cleanFactSentence(value: unknown): string {
+  return cleanString(value).replace(/[。；;\s]+$/u, '').trim();
+}
+
+function chooseRenderableTitle(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const candidates = [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
+  for (const cap of [22, 28, 32]) {
+    const candidate = candidates.find((item) => textUnits(item) <= cap);
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+function sourceLabelFromEvidence(entries: EvidenceLedgerEntry[]): string {
+  const labels: string[] = [];
+  for (const entry of entries) {
+    let label = '';
+    try { label = new URL(entry.canonicalUrl).hostname.replace(/^www\./u, ''); } catch { label = entry.title; }
+    if (!label || labels.includes(label)) continue;
+    const next = [...labels, label].join('/');
+    if (textUnits(next) > 36) break;
+    labels.push(label);
+  }
+  return labels.join('/') || 'Research';
+}
+
+function materializeServerOwnedEditorialArtifact(input: {
+  runId: string;
+  phaseAThreadId: string;
+  seed: ResearchSeed;
+  evidencePacket: string;
+  decision: ResearchTriageDecision;
+  runtime: ResearchRuntimeReceipt;
+  finalization: StructuredResearchFinalization;
+}): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
+  const { candidate, telemetry } = input.finalization;
+  const ledger = parseEvidenceLedger(input.evidencePacket);
+  const policyErrors: string[] = [];
+  const errors: string[] = [];
+  const budget = input.decision.budget;
+  if (!budget) policyErrors.push('Research decision 缺少 budget');
+  if (budget && input.runtime.toolCalls > budget.maxToolCalls) {
+    policyErrors.push(`Research tool budget 超限: ${input.runtime.toolCalls} > ${budget.maxToolCalls}`);
+  }
+  if (!ledger?.entries.length) {
+    policyErrors.push(`Research ${RESEARCH_TRIAGE_POLICY_VERSION} 缺少 ${RESEARCH_EVIDENCE_LEDGER_VERSION} 可支持证据`);
+    return { errors: policyErrors, policyViolation: true };
+  }
+
+  const title = chooseRenderableTitle(candidate.titleCandidates);
+  if (!title) errors.push('titleCandidates 没有任何候选满足 32 display units 上限');
+  const entryById = new Map(ledger.entries.map((entry) => [entry.id, entry]));
+  const rawFacts = Array.isArray(candidate.facts) ? candidate.facts : [];
+  if (rawFacts.length < 1) errors.push('facts 至少 1 项');
+  if (budget && rawFacts.length > budget.maxPublishableClaims) {
+    policyErrors.push(`Research fact budget 超限: ${rawFacts.length} > ${budget.maxPublishableClaims}`);
+  }
+
+  const validFacts: Array<{ text: string; evidenceIds: string[] }> = [];
+  for (const [index, rawFact] of rawFacts.entries()) {
+    if (!isPlainObject(rawFact)) {
+      errors.push(`facts[${index}] 必须是 object`);
+      continue;
+    }
+    const text = cleanFactSentence(rawFact.text);
+    const evidenceIds = Array.isArray(rawFact.evidenceIds)
+      ? [...new Set(rawFact.evidenceIds.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))]
+      : [];
+    if (!text) errors.push(`facts[${index}].text 不能为空`);
+    if (!evidenceIds.length) errors.push(`facts[${index}].evidenceIds 至少 1 项`);
+    for (const evidenceId of evidenceIds) {
+      if (!entryById.has(evidenceId)) errors.push(`facts[${index}] 引用了未知或不可支持 Evidence ID: ${evidenceId}`);
+    }
+    if (text && evidenceIds.length && evidenceIds.every((id) => entryById.has(id))) validFacts.push({ text, evidenceIds });
+  }
+
+  if (policyErrors.length || errors.length || !title) {
+    return { errors: [...policyErrors, ...errors], policyViolation: policyErrors.length > 0 };
+  }
+
+  const capacity = messageCapacityUnits(title);
+  const selectedFacts: Array<{ text: string; evidenceIds: string[] }> = [];
+  for (const fact of validFacts) {
+    const candidateMessage = `${[...selectedFacts.map((item) => item.text), fact.text].join('；')}。`;
+    if (textUnits(candidateMessage) <= capacity) selectedFacts.push(fact);
+  }
+  if (!selectedFacts.length) {
+    return {
+      errors: [`facts 中没有完整事实句能装入当前 ${capacity} display units 正文容量；请缩短最高优先事实句`],
+      policyViolation: false,
+    };
+  }
+  const message = `${selectedFacts.map((item) => item.text).join('；')}。`;
+
+  const usedEvidenceIds: string[] = [];
+  for (const fact of selectedFacts) {
+    for (const id of fact.evidenceIds) if (!usedEvidenceIds.includes(id)) usedEvidenceIds.push(id);
+  }
+  const sources = usedEvidenceIds.map((id) => entryById.get(id)!).filter(Boolean);
+  const sourceIds = new Set(usedEvidenceIds);
+  const requestedLinkId = cleanString(candidate.linkEvidenceId);
+  const linkEntry = sourceIds.has(requestedLinkId) ? entryById.get(requestedLinkId) : sources[0];
+  if (!linkEntry) {
+    return { errors: ['最终 artifact 缺少可用 link evidence'], policyViolation: false };
+  }
+
+  const publishTime = cleanString(candidate.publishTime);
+  if (!publishTime || Number.isNaN(Date.parse(publishTime))) {
+    return { errors: ['publishTime 必须是 Evidence/Seed 支持的合法 ISO-8601 时间'], policyViolation: false };
+  }
+
+  const reportedTokens = telemetry.usage;
+  const receipt: NeuromancerResearchReceipt = {
+    schemaVersion: NEUROMANCER_RESEARCH_RECEIPT_VERSION,
+    agent: 'neuromancer',
+    threadId: input.phaseAThreadId,
+    runId: input.runId,
+    generatedAt: new Date().toISOString(),
+    seed: seedReceipt(input.seed),
+    sources: sources.map((entry) => ({
+      id: entry.id,
+      url: entry.canonicalUrl,
+      title: entry.title,
+      role: entry.role,
+    })),
+    claims: selectedFacts.map((fact) => ({
+      text: fact.text,
+      sourceIds: fact.evidenceIds,
+      status: 'supported',
+    })),
+    retrieval: ledger.retrieval,
+    usage: {
+      providerReportedTokens: reportedTokens
+        ? { status: 'reported', ...reportedTokens }
+        : { status: 'unavailable' },
+      llmCalls: 1,
+      toolCalls: input.runtime.toolCalls,
+      searchRequests: input.runtime.searchRequests,
+      crawlRequests: input.runtime.crawlRequests,
+    },
+  };
+  const artifactCandidate: RenderableDataItem = {
+    id: `quote0-neuromancer-${input.runId}`,
+    title,
+    message,
+    signature: '神经漫游者',
+    source: sourceLabelFromEvidence(sources),
+    publishTime: new Date(publishTime).toISOString(),
+    category: 'news',
+    link: linkEntry.canonicalUrl,
+    highlights: [],
+    metadata: {
+      fewShotVersion: EINK_NEWS_FEW_SHOT_VERSION,
+      researchReceipt: receipt,
+      researchFinalizer: telemetry,
+      researchArtifactOwnership: 'quote0-server/v1',
+    },
+  };
+  const validation = validateRenderableNews(artifactCandidate);
+  if (!validation.ok) return { errors: validation.errors, policyViolation: false };
+  return { artifact: validation.data, errors: [], policyViolation: false };
 }
 
 function materializeArtifact(
@@ -848,6 +1194,9 @@ export function materializeStructuredResearchFinalization(input: {
   runtime: ResearchRuntimeReceipt;
   finalization: StructuredResearchFinalization;
 }): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
+  if (input.decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION && parseEvidenceLedger(input.evidencePacket)?.entries.length) {
+    return materializeServerOwnedEditorialArtifact(input);
+  }
   return materializeArtifact(
     input.finalization.candidate,
     input.seed,
@@ -914,7 +1263,7 @@ export async function inspectResearchCanary(
         ...base,
         status: 'invalid',
         jobStatus,
-        evidencePacket: buildResearchEvidencePacket(turns, budget.maxEvidenceChars),
+        evidencePacket: buildResearchEvidencePacket(turns, budget.maxEvidenceChars, params.seed),
         errors: [...errors, `Research tool budget 超限: ${phaseRuntime.toolCalls} > ${budget.maxToolCalls}`],
         retryable: false,
       };
@@ -925,7 +1274,7 @@ export async function inspectResearchCanary(
 
     const successfulTools = phaseRuntime.toolCalls - phaseRuntime.failedToolCalls;
     if (successfulTools > 0 && (jobStatus === 'completed' || jobStatus === 'error' || jobResult.missing || ['completed', 'error'].includes(cleanString(latestAgent?.state)))) {
-      const evidencePacket = buildResearchEvidencePacket(turns, budget.maxEvidenceChars);
+      const evidencePacket = buildResearchEvidencePacket(turns, budget.maxEvidenceChars, params.seed);
       const coverageErrors = researchMinimumCoverageErrors(phaseRuntime, params.decision);
       if (coverageErrors.length > 0) {
         return {

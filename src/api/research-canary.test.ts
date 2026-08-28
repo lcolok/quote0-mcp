@@ -6,6 +6,7 @@ import {
   dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
   inspectResearchCanary,
+  materializeStructuredResearchFinalization,
   RESEARCH_EVIDENCE_PACKET_VERSION,
   researchCanaryIdentity,
   type ResearchCanaryConfig,
@@ -111,7 +112,19 @@ function validGroundingPacket() {
         result: { url: 'https://www.infoq.cn/example', text: 'Seed evidence' },
       },
     },
-  ]));
+  ]), 6_000, seed);
+}
+
+function validEditorialDecision() {
+  return {
+    titleCandidates: ['MCP新规范取消会话', 'MCP取消会话握手', 'MCP新增网关路由标头'],
+    facts: [
+      { text: 'MCP新规范取消协议会话和初始化握手', evidenceIds: ['E1'] },
+      { text: '请求新增Mcp-Method与Mcp-Name标头，网关可据此路由和限流', evidenceIds: ['E1'] },
+    ],
+    publishTime: '2026-08-17T00:00:00.000Z',
+    linkEvidenceId: 'E1',
+  };
 }
 
 describe('research canary adapter', () => {
@@ -301,7 +314,7 @@ describe('research canary adapter', () => {
       return jsonResponse({
         providerId: 'local-qwen',
         model: 'qwen3.8-27b',
-        parsed: validCandidate(),
+        parsed: validEditorialDecision(),
         usage: {
           prompt_tokens: 123,
           completion_tokens: 45,
@@ -326,10 +339,12 @@ describe('research canary adapter', () => {
     expect(capturedUrl).toEndWith('/inference/structured');
     expect(captured.providerId).toBe('local-qwen');
     expect(captured.messages).toHaveLength(1);
-    expect(captured.jsonSchema.name).toBe('quote0_research_final_artifact');
-    expect(captured.jsonSchema.schema.properties.metadata.properties.researchReceipt.properties.claims.items.properties.status.const).toBe('supported');
+    expect(captured.jsonSchema.name).toBe('quote0_server_owned_editorial');
+    expect(captured.jsonSchema.schema.properties.facts.items.properties.evidenceIds.items.enum).toEqual(['E1', 'E2']);
+    expect(captured.jsonSchema.schema.properties.metadata).toBeUndefined();
+    expect(captured.messages[0].content).toContain('Quote0 服务器会自行生成 researchReceipt');
     expect(captured.agentId).toBeUndefined();
-    expect(result.candidate.title).toBe(validCandidate().title);
+    expect(result.candidate.titleCandidates).toEqual(validEditorialDecision().titleCandidates);
     expect(result.telemetry).toEqual({
       mode: 'structured-inference',
       providerId: 'local-qwen',
@@ -339,6 +354,85 @@ describe('research canary adapter', () => {
       attempt: 2,
       usage: { input: 123, output: 45, cacheRead: 7, total: 168 },
     });
+  });
+
+  it('server-owns receipt/source/highlights and assembles only complete grounded fact sentences', () => {
+    const decision = validEditorialDecision() as any;
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-1',
+      phaseAThreadId: 'phase-a-thread',
+      seed,
+      evidencePacket: validGroundingPacket(),
+      decision: seedDecision,
+      runtime: phaseARuntime,
+      finalization: {
+        candidate: {
+          ...decision,
+          source: '模型伪造来源',
+          highlights: ['模型伪造高亮'],
+          metadata: { researchReceipt: { sources: [{ url: 'https://evil.example' }] } },
+        },
+        telemetry: {
+          mode: 'structured-inference',
+          providerId: 'local-qwen',
+          model: 'qwen3.8-27b',
+          latencyMs: 1200,
+          attempt: 1,
+          usage: { input: 100, output: 40, total: 140, cacheRead: 5 },
+        },
+      },
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.policyViolation).toBe(false);
+    expect(result.artifact?.title).toBe('MCP新规范取消会话');
+    expect(result.artifact?.message).toBe('MCP新规范取消协议会话和初始化握手；请求新增Mcp-Method与Mcp-Name标头，网关可据此路由和限流。');
+    expect(result.artifact?.source).toBe('modelcontextprotocol.io');
+    expect(result.artifact?.highlights).toBeUndefined();
+    expect(result.artifact?.metadata?.researchArtifactOwnership).toBe('quote0-server/v1');
+    expect(result.artifact?.metadata?.researchReceipt?.threadId).toBe('phase-a-thread');
+    expect(result.artifact?.metadata?.researchReceipt?.sources).toEqual([
+      expect.objectContaining({ id: 'E1', url: 'https://modelcontextprotocol.io/example', role: 'secondary' }),
+    ]);
+    expect(result.artifact?.metadata?.researchReceipt?.claims).toEqual([
+      { text: 'MCP新规范取消协议会话和初始化握手', sourceIds: ['E1'], status: 'supported' },
+      { text: '请求新增Mcp-Method与Mcp-Name标头，网关可据此路由和限流', sourceIds: ['E1'], status: 'supported' },
+    ]);
+    expect(result.artifact?.metadata?.researchReceipt?.usage?.providerReportedTokens).toEqual({
+      status: 'reported', input: 100, output: 40, total: 140, cacheRead: 5,
+    });
+  });
+
+  it('skips an over-capacity fact as a whole instead of truncating a sentence', () => {
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-overflow',
+      phaseAThreadId: 'phase-a-thread',
+      seed,
+      evidencePacket: validGroundingPacket(),
+      decision: seedDecision,
+      runtime: phaseARuntime,
+      finalization: {
+        candidate: {
+          titleCandidates: ['MCP会话机制变化', 'MCP新规范', 'MCP协议更新'],
+          facts: [
+            { text: '这是一条故意制造的超长事实句'.repeat(40), evidenceIds: ['E1'] },
+            { text: 'MCP新规范取消协议会话和初始化握手', evidenceIds: ['E1'] },
+          ],
+          publishTime: '2026-08-17T00:00:00.000Z',
+          linkEvidenceId: 'E1',
+        },
+        telemetry: {
+          mode: 'structured-inference', providerId: 'local-qwen', model: 'qwen3.8-27b', latencyMs: 900, attempt: 1,
+        },
+      },
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.artifact?.message).toBe('MCP新规范取消协议会话和初始化握手。');
+    expect(result.artifact?.message).not.toContain('故意制造的超长');
+    expect(result.artifact?.metadata?.researchReceipt?.claims).toEqual([
+      { text: 'MCP新规范取消协议会话和初始化握手', sourceIds: ['E1'], status: 'supported' },
+    ]);
   });
 
   it('derives cumulative usage from Phase-A runtime while Phase B remains zero-tool', async () => {
