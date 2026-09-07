@@ -4,6 +4,7 @@ import {
   dispatchResearchCanary,
   dispatchResearchExtension,
   dispatchResearchFinalization,
+  dispatchResearchTerminalFinalization,
   dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
   inspectResearchCanary,
@@ -12,6 +13,8 @@ import {
   researchCanaryIdentity,
   researchExtensionOutcomeErrors,
   shouldExtendDigestResearch,
+  structuredFinalizationSchema,
+  validateResearchCandidateShape,
   type ResearchCanaryConfig,
   type ResearchRuntimeReceipt,
 } from './research-canary.js';
@@ -24,6 +27,7 @@ const config: ResearchCanaryConfig = {
   researchProviderId: 'local-qwen',
   finalizerProviderId: 'local-qwen',
   structuredFinalizer: false,
+  phaseBMode: 'agent-job',
   requestTimeoutMs: 5_000,
 };
 const finalizerConfig: ResearchCanaryConfig = { ...config };
@@ -1395,5 +1399,180 @@ describe('research canary adapter', () => {
     expect(result.status).toBe('failed');
     expect(result.retryable).toBe(true);
     expect(result.errors.join(' ')).toContain('pi-json produced no assistant');
+  });
+
+  it('routes the Phase B mode from QUOTE0_RESEARCH_PHASE_B_MODE with the legacy default preserved', () => {
+    expect(getResearchCanaryConfig({}).phaseBMode).toBe('structured-inference');
+    expect(getResearchCanaryConfig({ QUOTE0_RESEARCH_STRUCTURED_FINALIZER: 'false' } as NodeJS.ProcessEnv).phaseBMode).toBe('agent-job');
+    expect(getResearchCanaryConfig({ QUOTE0_RESEARCH_PHASE_B_MODE: 'terminal-tool' } as NodeJS.ProcessEnv)).toEqual(
+      expect.objectContaining({ phaseBMode: 'terminal-tool', structuredFinalizer: false }),
+    );
+    expect(getResearchCanaryConfig({ QUOTE0_RESEARCH_PHASE_B_MODE: 'structured-inference' } as NodeJS.ProcessEnv)).toEqual(
+      expect.objectContaining({ phaseBMode: 'structured-inference', structuredFinalizer: true }),
+    );
+  });
+
+  it('dispatches the terminal-tool continuation on the SAME thread with a single non-terminal call budget', async () => {
+    let captured: any;
+    let capturedHeaders: Headers | undefined;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body));
+      capturedHeaders = new Headers(init?.headers);
+      return jsonResponse({ jobId: 'job-terminal', threadId: 'thread-a' }, 202);
+    }) as typeof fetch;
+
+    const dispatched = await dispatchResearchTerminalFinalization(
+      'run-1', 'thread-a', seed, 'version=quote0-evidence-packet/v1\n[EVIDENCE 1] output=official',
+      seedDecision, { errors: ['titleCandidates 标题漂移'] }, finalizerConfig, fetchImpl,
+    );
+
+    expect(dispatched).toEqual({ jobId: 'job-terminal', threadId: 'thread-a' });
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('1');
+    expect(captured.threadId).toBe('thread-a');
+    expect(captured.providerId).toBe('local-qwen');
+    expect(captured.message).toContain('finish_research_turn');
+    expect(captured.message).toContain('runId');
+    expect(captured.message).toContain('run-1');
+    expect(captured.message).toContain('titleCandidates 标题漂移');
+
+    // Thread drift must fail closed.
+    const driftFetch = (async () => jsonResponse({ jobId: 'job-terminal', threadId: 'thread-other' }, 202)) as typeof fetch;
+    await expect(dispatchResearchTerminalFinalization('run-1', 'thread-a', seed, 'packet', seedDecision, {}, finalizerConfig, driftFetch))
+      .rejects.toThrow('thread 漂移');
+  });
+
+  it('rejects terminal candidate shapes the structured schema does not allow (extra fields, wrong cardinality)', () => {
+    const schema = structuredFinalizationSchema('run-1', seedDecision, validGroundingPacket());
+
+    expect(validateResearchCandidateShape(schema, validEditorialDecision())).toEqual([]);
+
+    const extraField = validateResearchCandidateShape(schema, {
+      ...validEditorialDecision(),
+      source: '模型伪造来源',
+    });
+    expect(extraField.join(' ')).toContain('不允许的字段 source');
+
+    const twoTitles = validateResearchCandidateShape(schema, {
+      ...validEditorialDecision(),
+      titleCandidates: ['只有一个标题', '只有两个标题'],
+    });
+    expect(twoTitles.join(' ')).toContain('至少需要 3 项');
+
+    const badEvidence = validateResearchCandidateShape(schema, {
+      ...validEditorialDecision(),
+      facts: [{ text: 'MCP 新规范', evidenceIds: ['E9'] }],
+    });
+    expect(badEvidence.join(' ')).toContain('必须是 E1|E2 之一');
+  });
+
+  it('inspects a terminal thread that calls only finish_research_turn and completes from the server receipt', async () => {
+    const receipt = {
+      attempt: 2,
+      outcome: 'accepted' as const,
+      errors: [],
+      candidate: validEditorialDecision(),
+      artifact: validCandidate() as any,
+      receivedAt: new Date().toISOString(),
+    };
+    const terminalTurns = [
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'crawl', status: 'completed' }] },
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'finish_research_turn', status: 'completed' }] },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-terminal')) return jsonResponse({ jobId: 'job-terminal', threadId: 'thread-a', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-a')) return jsonResponse({ turns: terminalTurns });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-terminal', threadId: 'thread-a',
+      phase: 'terminal-finalization', priorRuntime: phaseARuntime, terminalReceipt: receipt,
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('completed');
+    expect(result.retryable).toBe(false);
+    expect(result.artifact?.title).toBe(validCandidate().title);
+  });
+
+  it('invalidates a terminal phase that calls any non-terminal tool (crawl first)', async () => {
+    const terminalTurns = [
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'crawl', status: 'completed' }] },
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'crawl', status: 'completed' }] },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-terminal')) return jsonResponse({ jobId: 'job-terminal', threadId: 'thread-a', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-a')) return jsonResponse({ turns: terminalTurns });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-terminal', threadId: 'thread-a', phase: 'terminal-finalization',
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('invalid');
+    expect(result.retryable).toBe(false);
+    expect(result.errors.join(' ')).toContain('违反 no-tools 契约');
+    expect(result.errors.join(' ')).toContain('crawl');
+  });
+
+  it('fails a terminal phase that ended without invoking finish_research_turn and allows one retry', async () => {
+    const terminalTurns = [
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'crawl', status: 'completed' }] },
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [{ type: 'text', text: '我没有调用工具' }], toolCalls: [] },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-terminal')) return jsonResponse({ jobId: 'job-terminal', threadId: 'thread-a', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-a')) return jsonResponse({ turns: terminalTurns });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-terminal', threadId: 'thread-a', phase: 'terminal-finalization',
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('failed');
+    expect(result.retryable).toBe(true);
+    expect(result.errors.join(' ')).toContain('finish_research_turn');
+  });
+
+  it('treats a rejected terminal receipt as invalid and carries its errors for retry', async () => {
+    const receipt = {
+      attempt: 2,
+      outcome: 'rejected' as const,
+      errors: ['facts 至少 2 项', '标题漂移'],
+      candidate: validEditorialDecision(),
+      receivedAt: new Date().toISOString(),
+    };
+    const terminalTurns = [
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'crawl', status: 'completed' }] },
+      { participantType: 'user', source: { identity: researchCanaryIdentity('run-1') }, blocks: [], toolCalls: [] },
+      { participantType: 'agent', state: 'completed', blocks: [], toolCalls: [{ name: 'finish_research_turn', status: 'completed' }] },
+    ];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/jobs/job-terminal')) return jsonResponse({ jobId: 'job-terminal', threadId: 'thread-a', status: 'completed', response: '' });
+      if (url.endsWith('/threads/thread-a')) return jsonResponse({ turns: terminalTurns });
+      return jsonResponse({ error: 'not found' }, 404);
+    }) as typeof fetch;
+
+    const result = await inspectResearchCanary({
+      runId: 'run-1', seed, decision: seedDecision, jobId: 'job-terminal', threadId: 'thread-a',
+      phase: 'terminal-finalization', terminalReceipt: receipt,
+    }, config, fetchImpl);
+
+    expect(result.status).toBe('invalid');
+    expect(result.retryable).toBe(true);
+    expect(result.errors.join(' ')).toContain('facts 至少 2 项');
+    expect(result.errors.join(' ')).toContain('标题漂移');
   });
 });

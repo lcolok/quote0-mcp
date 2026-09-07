@@ -371,6 +371,9 @@ export async function runResearchAutoTick(
     ...(candidate.directSnapshot ? { directSnapshot: candidate.directSnapshot } : {}),
     seed: candidate.seed,
     triage: candidate.triage,
+    // Freeze the Phase B mode at run creation so a mid-flight env switch never flips the lane
+    // an in-flight run is already committed to.
+    phaseBMode: canaryConfig.phaseBMode,
   });
 
   if (run.id !== candidateId || run.straylightJobId || run.attempts > 0) {

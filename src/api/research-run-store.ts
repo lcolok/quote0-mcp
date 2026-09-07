@@ -1,6 +1,6 @@
 import type { PostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
-import type { ResearchExtensionDecision, ResearchRuntimeReceipt } from './research-canary.js';
+import type { ResearchExtensionDecision, ResearchRuntimeReceipt, ResearchTerminalRunReceipt } from './research-canary.js';
 import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
 
 export type ResearchRunState = 'queued' | 'running' | 'waiting_user' | 'completed' | 'invalid' | 'failed' | 'cancelled';
@@ -36,6 +36,7 @@ export interface ResearchRunRecord {
   straylightThreadIds: string[];
   evidenceSnapshot?: string;
   extensionReceipt?: ResearchExtensionReceipt;
+  terminalReceipt?: ResearchTerminalRunReceipt;
   directSnapshot?: Record<string, unknown>;
   attempts: number;
   resultArtifact?: RenderableDataItem;
@@ -66,6 +67,7 @@ function fromRow(row: any): ResearchRunRecord {
     straylightThreadIds: Array.isArray(row.straylight_thread_ids) ? row.straylight_thread_ids.map(String) : [],
     ...(row.evidence_snapshot ? { evidenceSnapshot: String(row.evidence_snapshot) } : {}),
     ...(row.research_extension_receipt ? { extensionReceipt: row.research_extension_receipt as ResearchExtensionReceipt } : {}),
+    ...(row.terminal_receipt ? { terminalReceipt: row.terminal_receipt as ResearchTerminalRunReceipt } : {}),
     ...(row.direct_snapshot ? { directSnapshot: row.direct_snapshot as Record<string, unknown> } : {}),
     attempts: Number(row.attempts || 0),
     ...(row.result_artifact ? { resultArtifact: row.result_artifact as RenderableDataItem } : {}),
@@ -92,8 +94,12 @@ export async function createResearchRun(
     directSnapshot?: Record<string, unknown>;
     seed: ResearchSeed;
     triage: ResearchTriageDecision;
+    phaseBMode?: ResearchTriageDecision['phaseBMode'];
   },
 ): Promise<ResearchRunRecord> {
+  const triage: ResearchTriageDecision = input.phaseBMode
+    ? { ...input.triage, phaseBMode: input.phaseBMode }
+    : input.triage;
   const result = await db.query(
     `INSERT INTO research_runs (
        id, mode, fingerprint, idempotency_key, state, policy_version, agent_id,
@@ -112,7 +118,7 @@ export async function createResearchRun(
       input.sourceInventoryId ?? null,
       input.directSnapshot ? JSON.stringify(input.directSnapshot) : null,
       JSON.stringify(input.seed),
-      JSON.stringify(input.triage),
+      JSON.stringify(triage),
     ],
   );
   return fromRow(result.rows[0]);
@@ -169,6 +175,29 @@ export async function markResearchRunResearchExtended(
     [id, jobId, JSON.stringify([jobId]), threadId, JSON.stringify(receipt)],
   );
   if (!result.rows[0]) throw new Error(`research_run ${id} 不存在或 extension thread 不匹配`);
+  return fromRow(result.rows[0]);
+}
+
+/**
+ * Persist the server-side terminal receipt without advancing run state or writing inventory.
+ * The terminal /finish endpoint calls this after adjudication so the thread record stays tied to
+ * the authoritative verdict. Attempt is caller-supplied (the run's current attempts) so a rejected
+ * submission followed by a same-thread re-dispatch produces a distinct receipt per attempt.
+ */
+export async function markResearchRunTerminalReceipt(
+  db: PostgresDatabase,
+  id: string,
+  receipt: ResearchTerminalRunReceipt,
+): Promise<ResearchRunRecord> {
+  const result = await db.query(
+    `UPDATE research_runs
+        SET terminal_receipt=$2::jsonb,
+            updated_at=NOW()
+      WHERE id=$1
+      RETURNING *`,
+    [id, JSON.stringify(receipt)],
+  );
+  if (!result.rows[0]) throw new Error(`research_run ${id} 不存在`);
   return fromRow(result.rows[0]);
 }
 

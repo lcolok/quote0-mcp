@@ -43,6 +43,10 @@ application:
     # 自鉴权；仅精确放行这两个路径，禁止扩大到整个 /api。
     - /api/eink/frame
     - /api/eink/ack
+    # Phase B terminal-tool 自鉴权端点：Straylight 回调 Quote0 裁决 finish_research_turn。
+    # 用 QUOTE0_RESEARCH_TERMINAL_TOKEN 独立 Bearer 鉴权（见 news-api-server.ts），
+    # 与全局 API_AUTH_TOKEN 无关；仅精确放行这一个路径，禁止扩大到整个 /api。
+    - /api/news/research/terminal/finish
 
   # 多入口配置
   entries:
@@ -239,6 +243,12 @@ services:
       STRAYLIGHT_RESEARCH_PROVIDER_ID: local-qwen
       STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID: local-qwen
       QUOTE0_RESEARCH_STRUCTURED_FINALIZER: "true"
+      # Phase B 模式：structured-inference（现状默认）| terminal-tool。terminal-tool 下 agent 在
+      # 同一线程调用一次 finish_research_turn，由 Quote0 用全部发布门裁决。每次 run 创建时冻结该
+      # 模式，中途改 env 不影响在途 run。
+      QUOTE0_RESEARCH_PHASE_B_MODE: structured-inference
+      # Phase B terminal-tool 回调自鉴权 token。真实值只通过懒猫控制台注入，绝不写进本仓。
+      QUOTE0_RESEARCH_TERMINAL_TOKEN: ""
       STRAYLIGHT_RESEARCH_REQUEST_TIMEOUT_MS: "15000"
       # Universal Evidence Research：每条 producer 新闻都必须先经过 Neuromancer evidence digestion。
       # 取消按天“研究几条”的采样上限；初版仍固定 concurrency=1，并由每条 digest=4 / enrichment=6 /

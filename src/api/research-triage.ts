@@ -30,6 +30,16 @@ export interface ResearchTriageInput {
 
 export type ResearchMode = 'digest' | 'recovery' | 'enrichment' | 'verification' | 'exploration';
 
+/**
+ * Phase B execution mode. Decided once at research_run creation and persisted on the run so a
+ * mid-flight env switch never flips the mode an in-flight run is already committed to.
+ * - structured-inference: existing synchronous /inference/structured path (wire-unchanged legacy default).
+ * - terminal-tool: agent continues on the Phase A thread, calls finish_research_turn exactly once,
+ *   and Quote0 adjudicates via the full publish gate then records terminal_receipt.
+ * - agent-job: legacy fresh-thread no-tools finalization (kept for deployments that never ran structured).
+ */
+export type ResearchPhaseBMode = 'structured-inference' | 'terminal-tool' | 'agent-job';
+
 export interface ResearchBudget {
   maxToolCalls: number;
   /** Optional first-stage hard ceiling before Quote0 evaluates marginal evidence gain. */
@@ -58,6 +68,8 @@ export interface ResearchTriageDecision {
     highRisk: boolean;
   };
   budget?: ResearchBudget;
+  /** Phase B mode frozen at run creation (see ResearchPhaseBMode). */
+  phaseBMode?: ResearchPhaseBMode;
 }
 
 const HIGH_RISK_PATTERN = /(?:\bCVE-\d{4}-\d+\b|漏洞|安全更新|安全补丁|远程代码执行|身份验证绕过|认证绕过|actively exploited|zero[- ]day|vulnerabilit|exploit|\battacks?\b|\bbreach\b|malware|ransomware|\bsecurity\b|\bcybersecurity\b|法律|法规|监管|诉讼|判决|合规|legal|regulat|lawsuit|court)/iu;

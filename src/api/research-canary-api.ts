@@ -5,6 +5,7 @@ import {
   dispatchResearchCanary,
   dispatchResearchExtension,
   dispatchResearchFinalization,
+  dispatchResearchTerminalFinalization,
   dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
   inspectResearchCanary,
@@ -13,6 +14,10 @@ import {
   researchCanaryFingerprint,
   researchCanaryIdempotencyKey,
   shouldExtendResearch,
+  structuredFinalizationSchema,
+  validateResearchCandidateShape,
+  type ResearchCanaryPhase,
+  type StraylightCanaryDispatch,
 } from './research-canary.js';
 import {
   createResearchRun,
@@ -20,6 +25,7 @@ import {
   markResearchRunDispatched,
   markResearchRunResearchExtended,
   markResearchRunState,
+  markResearchRunTerminalReceipt,
   type ResearchRunRecord,
 } from './research-run-store.js';
 import { RESEARCH_TRIAGE_POLICY_VERSION, triageResearchCandidate, type ResearchSeed } from './research-triage.js';
@@ -34,6 +40,35 @@ function directDraftFromRun(run: ResearchRunRecord): { title: string; message: s
   const message = cleanString(draft?.message);
   if (!title || !message) return undefined;
   return { title, message };
+}
+
+/**
+ * Re-dispatch a rejected/failed finalization. In structured-inference the model is never left
+ * un-finalized (the adapter retries inline), so this only serves legacy agent-job (fresh thread)
+ * and terminal-tool (same thread, errors carried forward). Runs pick their lane at creation.
+ */
+async function redispatchResearchFinalization(
+  run: ResearchRunRecord,
+  errors: string[],
+): Promise<StraylightCanaryDispatch> {
+  const mode = run.triage.phaseBMode ?? getResearchCanaryConfig().phaseBMode;
+  if (mode === 'terminal-tool') {
+    return dispatchResearchTerminalFinalization(
+      run.id,
+      run.straylightThreadId!,
+      run.inputSnapshot,
+      run.evidenceSnapshot!,
+      run.triage,
+      { errors, directDraft: directDraftFromRun(run) },
+    );
+  }
+  return dispatchResearchFinalization(
+    run.id,
+    run.inputSnapshot,
+    run.evidenceSnapshot!,
+    run.triage,
+    { errors, directDraft: directDraftFromRun(run) },
+  );
 }
 
 function cleanString(value: unknown): string {
@@ -405,6 +440,7 @@ app.post('/api/news/research/canary/jobs', async (c) => {
   }
 
   await postgres.initialize();
+  const canaryConfig = getResearchCanaryConfig();
   const candidateId = randomUUID();
   const idempotencyKey = researchCanaryIdempotencyKey(seed, triage, cleanString(body?.requestKey));
   const run = await createResearchRun(postgres, {
@@ -413,9 +449,13 @@ app.post('/api/news/research/canary/jobs', async (c) => {
     fingerprint: researchCanaryFingerprint(seed),
     idempotencyKey,
     policyVersion: triage.policyVersion,
-    agentId: getResearchCanaryConfig().agentId,
+    agentId: canaryConfig.agentId,
     seed,
     triage,
+    // Freeze the Phase B mode at run creation so a mid-flight env switch never flips the
+    // lane an in-flight run is already committed to. The manual canary respects the current
+    // mode so it exercises exactly the same path the auto worker will use.
+    phaseBMode: canaryConfig.phaseBMode,
   });
 
   // Idempotency: repeating the same research intent never creates another Straylight job.
@@ -432,6 +472,135 @@ app.post('/api/news/research/canary/jobs', async (c) => {
     const failed = await markResearchRunState(postgres, run.id, { state: 'failed', error: message });
     return c.json({ success: false, error: message, data: publicRun(failed) }, 502);
   }
+});
+
+/**
+ * Phase B terminal-tool adjudication endpoint. The Straylight proxy calls this (bearer) when the
+ * agent invokes finish_research_turn. It validates the submission against the same structured
+ * schema and publish gates as the /inference/structured path, persists a terminal_receipt, and
+ * returns a trusted result the agent uses as its terminal tool output. It intentionally does NOT
+ * advance the run state or write inventory; reconciliation owns those transitions.
+ */
+app.post('/api/news/research/terminal/finish', async (c) => {
+  // Independent bearer auth. Like COMPONENT_LABELS_API_TOKEN, this endpoint is surfaced through the
+  // component-labels style public_path and must NOT reuse the global API_AUTH_TOKEN middleware
+  // (which covers all of /api/* and would break the browser-token quick-tap used to call it here).
+  // Env unset ⇒ fail closed with 503; bad bearer ⇒ 401.
+  const token = process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN;
+  if (!token) {
+    return c.json({
+      trusted: false, outcome: 'rejected', runId: '',
+      summary: 'QUOTE0_RESEARCH_TERMINAL_TOKEN 未配置，terminal-tool 模式不可用（fail closed）',
+      errors: ['terminal 端点未启用：QUOTE0_RESEARCH_TERMINAL_TOKEN 未配置'], artifact: null,
+    }, 503);
+  }
+  const header = c.req.header('Authorization');
+  if (!header || !header.startsWith('Bearer ') || header.slice('Bearer '.length) !== token) {
+    return c.json({ trusted: false, outcome: 'rejected', runId: '', summary: '鉴权失败', errors: ['Unauthorized'], artifact: null }, 401);
+  }
+
+  await postgres.initialize();
+  const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !cleanString(body.runId)) {
+    return c.json({
+      trusted: false, outcome: 'rejected', runId: cleanString(body?.runId),
+      summary: 'finish_research_turn 参数不完整', errors: ['runId 必填'], artifact: null,
+    }, 400);
+  }
+  const runId = cleanString(body.runId);
+
+  const rejected = (receipt: {
+    attempt: number; outcome: 'rejected'; errors: string[]; candidate: Record<string, unknown>; artifact?: unknown;
+  }) => {
+    const summary = receipt.errors[0] || 'finish_research_turn 未通过 Quote0 发布门';
+    return c.json({
+      trusted: true, outcome: 'rejected', runId,
+      summary, errors: receipt.errors,
+      artifact: null,
+      deeplink: `https://quote0.logic.heiyu.space/annotate?view=neuromancer&researchRunId=${encodeURIComponent(runId)}`,
+    }, 200);
+  };
+
+  const run = await getResearchRun(postgres, runId);
+  // runId not found or not in terminal-tool finalization phase (no frozen evidence) ⇒ 200 +
+  // rejected per contract. attempt = run.attempts is the current finalization job the agent is
+  // answering; a run in another mode never has a terminal continuation to adjudicate.
+  const notTerminalMode = (run?.triage.phaseBMode ?? getResearchCanaryConfig().phaseBMode) !== 'terminal-tool';
+  if (!run || !run.evidenceSnapshot || run.attempts < 2 || !run.straylightThreadId || notTerminalMode) {
+    let missing: string;
+    if (!run) missing = 'research_run 不存在';
+    else if (notTerminalMode) missing = 'research_run 不在 terminal-tool 模式';
+    else missing = 'research_run 不在 finalization 阶段或缺少冻结证据';
+    return rejected({ attempt: run?.attempts ?? 0, outcome: 'rejected', errors: [missing], candidate: {} });
+  }
+
+  const receivedAt = new Date().toISOString();
+  const attempt = run.attempts;
+  const startedAt = Date.now();
+  const candidate: Record<string, unknown> = {
+    titleCandidates: body.titleCandidates,
+    facts: body.facts,
+    linkEvidenceId: body.linkEvidenceId,
+  };
+
+  // Shape gate: reuse the exact schema the structured path uses (rejects extra fields, wrong
+  // cardinality, unknown evidence ids). Validate the full submission (minus the runId control
+  // key) so a model-injected field is caught rather than silently dropped. Semantic publish
+  // gates run next via materialization.
+  const submission = { ...body };
+  delete submission.runId;
+  let schemaErrors: string[] = [];
+  try {
+    schemaErrors = validateResearchCandidateShape(
+      structuredFinalizationSchema(runId, run.triage, run.evidenceSnapshot),
+      submission,
+    );
+  } catch (error) {
+    schemaErrors = [error instanceof Error ? error.message : String(error)];
+  }
+  if (schemaErrors.length) {
+    await markResearchRunTerminalReceipt(postgres, run.id, {
+      attempt, outcome: 'rejected', errors: schemaErrors, candidate, receivedAt,
+    });
+    return rejected({ attempt, outcome: 'rejected', errors: schemaErrors, candidate });
+  }
+
+  const latencyMs = Math.max(0, Date.now() - startedAt);
+  const telemetry = {
+    mode: 'terminal-tool' as const,
+    providerId: 'server',
+    model: 'server-adjudication',
+    latencyMs,
+    attempt,
+  };
+  const materialized = materializeStructuredResearchFinalization({
+    runId,
+    phaseAThreadId: run.straylightThreadId,
+    seed: run.inputSnapshot,
+    evidencePacket: run.evidenceSnapshot,
+    decision: run.triage,
+    runtime: run.runtimeReceipt ?? { toolCalls: 0, searchRequests: 0, crawlRequests: 0, failedToolCalls: 0 },
+    finalization: { candidate, telemetry },
+  });
+
+  if (materialized.artifact) {
+    await markResearchRunTerminalReceipt(postgres, run.id, {
+      attempt, outcome: 'accepted', errors: [], candidate,
+      artifact: materialized.artifact, receivedAt,
+    });
+    return c.json({
+      trusted: true, outcome: 'accepted', runId,
+      summary: materialized.artifact.title,
+      errors: [],
+      artifact: { title: materialized.artifact.title, message: materialized.artifact.message },
+      deeplink: `https://quote0.logic.heiyu.space/annotate?view=neuromancer&researchRunId=${encodeURIComponent(runId)}`,
+    }, 200);
+  }
+
+  await markResearchRunTerminalReceipt(postgres, run.id, {
+    attempt, outcome: 'rejected', errors: materialized.errors, candidate, receivedAt,
+  });
+  return rejected({ attempt, outcome: 'rejected', errors: materialized.errors, candidate });
 });
 
 app.get('/api/news/research/canary/jobs/:id', async (c) => {
@@ -460,17 +629,24 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
   }
 
   const phase = run.attempts <= 1 ? 'research' : 'finalization';
+  // Freeze phase B mode from the run (decided at creation) so a mid-flight env switch never
+  // flips the lane an in-flight run is already committed to.
+  const phaseBMode = run.triage.phaseBMode ?? getResearchCanaryConfig().phaseBMode;
+  const inspectionPhase: ResearchCanaryPhase = phaseBMode === 'terminal-tool' && phase === 'finalization'
+    ? 'terminal-finalization'
+    : phase;
   const maxFinalizationAttempts = 2 + (run.triage.budget?.maxFinalizationRetries ?? 1);
   const inspection = await inspectResearchCanary({
     runId: run.id,
     seed: run.inputSnapshot,
     jobId: run.straylightJobId,
     threadId: run.straylightThreadId,
-    phase,
+    phase: inspectionPhase,
     decision: run.triage,
     ...(phase === 'research' && run.extensionReceipt ? { extensionReceipt: run.extensionReceipt } : {}),
     ...(phase === 'finalization' && run.runtimeReceipt ? { priorRuntime: run.runtimeReceipt } : {}),
     ...(phase === 'finalization' && run.evidenceSnapshot ? { priorEvidencePacket: run.evidenceSnapshot } : {}),
+    ...(inspectionPhase === 'terminal-finalization' ? { terminalReceipt: run.terminalReceipt } : {}),
   });
 
   if (inspection.status === 'running') {
@@ -568,6 +744,39 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
       }
     }
 
+    if (phaseBMode === 'terminal-tool') {
+      // Same-thread terminal-tool continuation. The agent is asked to call finish_research_turn
+      // exactly once; Quote0 adjudicates server-side and persists terminal_receipt. No state or
+      // inventory is advanced here — a later finalization-phase reconcile consumes the receipt.
+      try {
+        const terminal = await dispatchResearchTerminalFinalization(
+          run.id,
+          run.straylightThreadId,
+          run.inputSnapshot,
+          inspection.evidencePacket,
+          run.triage,
+          { directDraft: directDraftFromRun(run) },
+        );
+        const updated = await markResearchRunDispatched(postgres, run.id, terminal.jobId, terminal.threadId);
+        return c.json({
+          success: true,
+          reconciled: true,
+          phaseTransition: 'research->terminal-finalization',
+          terminalTool: true,
+          data: publicRun(updated),
+        }, 202);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failed = await markResearchRunState(postgres, run.id, {
+          state: 'failed',
+          runtimeReceipt: inspection.runtime,
+          evidenceSnapshot: inspection.evidencePacket,
+          error: `Terminal finalization dispatch 失败: ${message}`,
+        });
+        return c.json({ success: false, error: failed.error, data: publicRun(failed) }, 502);
+      }
+    }
+
     if (getResearchCanaryConfig().structuredFinalizer) {
       const outcome = await completeWithStructuredFinalizer(
         persisted,
@@ -657,13 +866,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
         validationErrors: inspection.errors,
       });
       try {
-        const retried = await dispatchResearchFinalization(
-          run.id,
-          run.inputSnapshot,
-          run.evidenceSnapshot,
-          run.triage,
-          { errors: inspection.errors, directDraft: directDraftFromRun(run) },
-        );
+        const retried = await redispatchResearchFinalization(run, inspection.errors);
         const updated = await markResearchRunDispatched(postgres, run.id, retried.jobId, retried.threadId);
         return c.json({ success: true, reconciled: true, finalizationRetry: true, data: publicRun(updated) }, 202);
       } catch (error) {
@@ -705,13 +908,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           validationErrors: feedback,
         });
         try {
-          const retried = await dispatchResearchFinalization(
-            run.id,
-            run.inputSnapshot,
-            run.evidenceSnapshot,
-            run.triage,
-            { errors: feedback, directDraft: directDraftFromRun(run) },
-          );
+          const retried = await redispatchResearchFinalization(run, feedback);
           const updated = await markResearchRunDispatched(postgres, run.id, retried.jobId, retried.threadId);
           return c.json({
             success: true,
@@ -778,13 +975,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
       validationErrors: inspection.errors,
     });
     try {
-      const retried = await dispatchResearchFinalization(
-        run.id,
-        run.inputSnapshot,
-        run.evidenceSnapshot,
-        run.triage,
-        { errors: inspection.errors, directDraft: directDraftFromRun(run) },
-      );
+      const retried = await redispatchResearchFinalization(run, inspection.errors);
       const updated = await markResearchRunDispatched(postgres, run.id, retried.jobId, retried.threadId);
       return c.json({
         success: true,

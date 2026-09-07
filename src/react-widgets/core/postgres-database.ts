@@ -165,6 +165,10 @@ export class PostgresDatabase {
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS trigger VARCHAR(32) NOT NULL DEFAULT 'manual'`,
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS source_inventory_id INTEGER REFERENCES content_inventory(id) ON DELETE SET NULL`,
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS research_extension_receipt JSONB`,
+      // v1.21.124 / Phase B terminal-tool mode: server-side finalization adjudication receipt.
+      // Like research_extension_receipt, this ALTER is intentionally idempotent and lives in the
+      // migration list (not the if-missing-only table create) so existing rows gain the column.
+      `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS terminal_receipt JSONB`,
       `DO $$
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'research_runs_trigger_check') THEN
@@ -1179,6 +1183,7 @@ export class PostgresDatabase {
         straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         evidence_snapshot TEXT,
         research_extension_receipt JSONB,
+        terminal_receipt JSONB,
         direct_snapshot JSONB,
         attempts INTEGER NOT NULL DEFAULT 0,
         result_artifact JSONB,

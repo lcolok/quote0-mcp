@@ -15,10 +15,11 @@ import {
   buildNeuromancerResearchExtensionPrompt,
   buildNeuromancerResearchPrompt,
   buildNeuromancerServerOwnedEditorialPrompt,
+  buildNeuromancerTerminalFinalizationPrompt,
   type NeuromancerEditorialDraft,
 } from './research-few-shot.js';
 import { assessSourceEvidence } from './content-quality.js';
-import { RESEARCH_TRIAGE_POLICY_VERSION, type ResearchSeed, type ResearchTriageDecision } from './research-triage.js';
+import { RESEARCH_TRIAGE_POLICY_VERSION, type ResearchPhaseBMode, type ResearchSeed, type ResearchTriageDecision } from './research-triage.js';
 import { buildServerOwnedDisplayProvenance } from './news-display-provenance.js';
 
 export const RESEARCH_CANARY_MODE = 'straylight-jobs-canary/v1';
@@ -27,7 +28,7 @@ export const RESEARCH_EVIDENCE_PACKET_VERSION = 'quote0-evidence-packet/v1';
 export const RESEARCH_EVIDENCE_LEDGER_VERSION = 'quote0-evidence-ledger/v2';
 export const QUOTE0_RESEARCH_PROVIDER_ID = 'local-qwen';
 
-export type ResearchCanaryPhase = 'research' | 'finalization';
+export type ResearchCanaryPhase = 'research' | 'finalization' | 'terminal-finalization';
 
 export interface ResearchCanaryConfig {
   enabled: boolean;
@@ -36,6 +37,8 @@ export interface ResearchCanaryConfig {
   researchProviderId: string;
   finalizerProviderId: string;
   structuredFinalizer: boolean;
+  /** Phase B mode: structured-inference (default) | terminal-tool | agent-job (legacy). */
+  phaseBMode: ResearchPhaseBMode;
   bearerToken?: string;
   requestTimeoutMs: number;
 }
@@ -98,6 +101,21 @@ export interface ResearchCanaryInspection {
   jobMissing: boolean;
 }
 
+/**
+ * Server-side Phase B terminal receipt, persisted on the research_run row (terminal_receipt jsonb).
+ * This is the source of truth for terminal-finalization reconciliation: the thread's tool output is
+ * only used for correlation, never trusted. The endpoint records one receipt per attempt so a
+ * rejected submission can be retried with its errors carried forward.
+ */
+export interface ResearchTerminalRunReceipt {
+  attempt: number;
+  outcome: 'accepted' | 'rejected';
+  errors: string[];
+  candidate: Record<string, unknown>;
+  artifact?: RenderableDataItem;
+  receivedAt: string;
+}
+
 class StraylightRequestError extends Error {
   constructor(
     public readonly status: number,
@@ -136,13 +154,24 @@ export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): R
   const enabled = String(env.QUOTE0_RESEARCH_CANARY_ENABLED || '').toLowerCase() === 'true';
   const baseUrlRaw = cleanString(env.STRAYLIGHT_RESEARCH_BASE_URL);
   const timeoutRaw = Number.parseInt(env.STRAYLIGHT_RESEARCH_REQUEST_TIMEOUT_MS || '15000', 10);
+  const rawMode = cleanString(env.QUOTE0_RESEARCH_PHASE_B_MODE);
+  const legacyStructuredRaw = String(env.QUOTE0_RESEARCH_STRUCTURED_FINALIZER || '').toLowerCase();
+  // phaseBMode is frozen per-run at creation. The default is structured-inference (matching the
+  // current production path). The legacy QUOTE0_RESEARCH_STRUCTURED_FINALIZER boolean flips the
+  // legacy agent-job lane; an explicit QUOTE0_RESEARCH_PHASE_B_MODE always wins.
+  const phaseBMode: ResearchPhaseBMode = rawMode === 'terminal-tool'
+    ? 'terminal-tool'
+    : rawMode === 'structured-inference' || legacyStructuredRaw !== 'false'
+      ? 'structured-inference'
+      : 'agent-job';
   return {
     enabled,
     ...(baseUrlRaw ? { baseUrl: normalizeBaseUrl(baseUrlRaw) } : {}),
     agentId: cleanString(env.STRAYLIGHT_RESEARCH_AGENT_ID) || 'pi-mono',
     researchProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_PROVIDER_ID'),
     finalizerProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID'),
-    structuredFinalizer: String(env.QUOTE0_RESEARCH_STRUCTURED_FINALIZER || '').toLowerCase() === 'true',
+    phaseBMode,
+    structuredFinalizer: phaseBMode === 'structured-inference',
     ...(cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN)
       ? { bearerToken: cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN) }
       : {}),
@@ -317,7 +346,7 @@ export async function dispatchResearchFinalization(
 }
 
 export interface StructuredFinalizationTelemetry {
-  mode: 'structured-inference';
+  mode: 'structured-inference' | 'terminal-tool';
   providerId: string;
   model: string;
   latencyMs: number;
@@ -350,7 +379,7 @@ function minimumEditorialFactCount(decision: ResearchTriageDecision): number {
   return 1;
 }
 
-function structuredFinalizationSchema(
+export function structuredFinalizationSchema(
   runId: string,
   decision: ResearchTriageDecision,
   evidencePacket: string,
@@ -466,6 +495,70 @@ function structuredFinalizationSchema(
   };
 }
 
+/**
+ * Minimal JSON-Schema evaluator for the subset of keywords structuredFinalizationSchema emits
+ * (object props/required/additionalProperties:false, arrays with items/min/max, string/enum/const).
+ * Keeps the terminal endpoint's shape gate on the same schema object as the structured-inference
+ * path rather than duplicating the contract by hand. The publish gates stay in
+ * materializeStructuredResearchFinalization; this only enforces structural shape.
+ */
+export function validateResearchCandidateShape(
+  schema: Record<string, unknown>,
+  value: unknown,
+  path = '$',
+): string[] {
+  const errors: string[] = [];
+  const type = cleanString(schema.type);
+  if (type === 'object') {
+    if (!isPlainObject(value)) {
+      errors.push(`${path} 必须是 object`);
+      return errors;
+    }
+    const record = value as Record<string, unknown>;
+    const required = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === 'string') : [];
+    for (const key of required) {
+      if (!(key in record)) errors.push(`${path} 缺少必填字段 ${key}`);
+    }
+    const properties = isPlainObject(schema.properties) ? schema.properties : {};
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(record)) {
+        if (!(key in properties)) errors.push(`${path} 包含 schema 不允许的字段 ${key}`);
+      }
+    }
+    for (const [key, childSchema] of Object.entries(properties)) {
+      if (!(key in record)) continue;
+      errors.push(...validateResearchCandidateShape(childSchema as Record<string, unknown>, record[key], `${path}.${key}`));
+    }
+    return errors;
+  }
+  if (type === 'array') {
+    if (!Array.isArray(value)) {
+      errors.push(`${path} 必须是 array`);
+      return errors;
+    }
+    const minItems = typeof schema.minItems === 'number' ? schema.minItems : 0;
+    const maxItems = typeof schema.maxItems === 'number' ? schema.maxItems : Number.POSITIVE_INFINITY;
+    if (value.length < minItems) errors.push(`${path} 至少需要 ${minItems} 项`);
+    if (value.length > maxItems) errors.push(`${path} 最多允许 ${maxItems} 项`);
+    if (isPlainObject(schema.items)) {
+      for (let index = 0; index < value.length; index += 1) {
+        errors.push(...validateResearchCandidateShape(schema.items as Record<string, unknown>, value[index], `${path}[${index}]`));
+      }
+    }
+    return errors;
+  }
+  if (type === 'string') {
+    if (typeof value !== 'string') {
+      errors.push(`${path} 必须是 string`);
+      return errors;
+    }
+    if (schema.const !== undefined && value !== schema.const) errors.push(`${path} 必须等于 ${String(schema.const)}`);
+    if (Array.isArray(schema.enum) && !schema.enum.includes(value)) errors.push(`${path} 必须是 ${schema.enum.join('|')} 之一`);
+    return errors;
+  }
+  return errors;
+}
+
 function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 }
@@ -545,6 +638,57 @@ export async function dispatchStructuredResearchFinalization(
         : {}),
     },
   };
+}
+
+export interface ResearchTerminalDispatchOptions {
+  errors?: string[];
+  directDraft?: NeuromancerEditorialDraft;
+}
+
+/**
+ * Phase B terminal-tool continuation: POST a /jobs continuation onto the SAME Phase A thread so
+ * the research thread keeps the terminal finalization record. Mirrors dispatchResearchExtension's
+ * same-thread contract: the thread id returned must match the one we sent. The header enforces a
+ * single non-terminal tool call; finish_research_turn is a Straylight terminal tool and therefore
+ * does not count against it (the run ends immediately after the call).
+ */
+export async function dispatchResearchTerminalFinalization(
+  runId: string,
+  threadId: string,
+  seed: ResearchSeed,
+  evidencePacket: string,
+  decision: ResearchTriageDecision,
+  options: ResearchTerminalDispatchOptions = {},
+  config: ResearchCanaryConfig = getResearchCanaryConfig(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<StraylightCanaryDispatch> {
+  const payload = await requestJson(config, '/jobs', {
+    method: 'POST',
+    headers: {
+      'X-Straylight-Max-Tool-Calls': '1',
+    },
+    body: JSON.stringify({
+      threadId,
+      message: buildNeuromancerTerminalFinalizationPrompt(
+        seed,
+        evidencePacket,
+        runId,
+        decision,
+        options.errors || [],
+        options.directDraft,
+      ),
+      agentId: config.agentId,
+      providerId: config.finalizerProviderId,
+      source: { channel: 'agent', identity: researchCanaryIdentity(runId) },
+    }),
+  }, fetchImpl);
+
+  if (!isPlainObject(payload)) throw new Error('Straylight Research terminal /jobs 返回格式无效');
+  const jobId = cleanString(payload.jobId);
+  const returnedThreadId = cleanString(payload.threadId);
+  if (!jobId || !returnedThreadId) throw new Error('Straylight Research terminal /jobs 缺少 jobId/threadId');
+  if (returnedThreadId !== threadId) throw new Error(`Research terminal thread 漂移: ${returnedThreadId} != ${threadId}`);
+  return { jobId, threadId: returnedThreadId };
 }
 
 async function tryGetJob(
@@ -1960,6 +2104,8 @@ export async function inspectResearchCanary(
     priorRuntime?: ResearchRuntimeReceipt;
     priorEvidencePacket?: string;
     extensionReceipt?: ResearchExtensionAuditReceipt;
+    /** Server-side terminal_receipt (by runId+attempt) used as the source of truth for terminal-finalization inspection. */
+    terminalReceipt?: ResearchTerminalRunReceipt;
   },
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
@@ -2097,6 +2243,87 @@ export async function inspectResearchCanary(
       errors: jobStatus === 'completed' ? [...errors, 'Research phase 完成但没有成功 tool evidence'] : errors,
       retryable: false,
     };
+  }
+
+  if (params.phase === 'terminal-finalization') {
+    // Terminal-tool Phase B: the agent continues on the SAME thread and is required to call
+    // finish_research_turn exactly once. Inspect only the agent turns produced after the latest
+    // user-identity dispatch. The server-side terminal_receipt (by runId+attempt) is the source
+    // of truth; the thread's tool envelope is used solely for correlation and never trusted.
+    const identity = researchCanaryIdentity(params.runId);
+    let lastUserTurn = -1;
+    for (let index = 0; index < turns.length; index += 1) {
+      if (turns[index].participantType === 'user' && turns[index].source?.identity === identity) lastUserTurn = index;
+    }
+    const terminalTurns = lastUserTurn >= 0
+      ? turns.slice(lastUserTurn + 1).filter((item) => item.participantType === 'agent')
+      : [];
+    // The full-thread phaseRuntime counts Phase A tool calls too; recompute it from only the
+    // terminal continuation turns so the reported runtime is the same shape as the structured
+    // finalization runtime (cumulative Phase A baseline + zero-tool Phase B), never doubled.
+    const terminalPhaseRuntime = summarizeRuntime(terminalTurns);
+    const terminalBase = {
+      ...base,
+      phaseRuntime: terminalPhaseRuntime,
+      runtime: addRuntime(params.priorRuntime, terminalPhaseRuntime),
+    };
+    const terminalCalls = terminalTurns
+      .flatMap((item) => Array.isArray(item.toolCalls) ? item.toolCalls! : []);
+    const nonTerminalTools = [...new Set(
+      terminalCalls
+        .map((call) => cleanString(call.name).toLowerCase())
+        .filter((name) => name && name !== 'finish_research_turn'),
+    )];
+    if (nonTerminalTools.length > 0) {
+      return {
+        ...terminalBase,
+        status: 'invalid',
+        jobStatus,
+        errors: [...errors, `Finalization phase 违反 no-tools 契约: 调用非终态工具 ${nonTerminalTools.join('、')}`],
+        retryable: false,
+      };
+    }
+    const calledTerminal = terminalCalls.some((call) => cleanString(call.name).toLowerCase() === 'finish_research_turn');
+    const terminalSucceeded = terminalCalls.some((call) => cleanString(call.name).toLowerCase() === 'finish_research_turn' && toolCallSucceeded(call));
+    if (calledTerminal && terminalSucceeded && params.terminalReceipt) {
+      const receipt = params.terminalReceipt;
+      if (receipt.outcome === 'accepted' && receipt.artifact) {
+        return {
+          ...terminalBase,
+          status: 'completed',
+          jobStatus,
+          artifact: receipt.artifact,
+          errors,
+          retryable: false,
+        };
+      }
+      return {
+        ...terminalBase,
+        status: 'invalid',
+        jobStatus,
+        errors: [...errors, ...(receipt.errors.length ? receipt.errors : ['finish_research_turn 被服务器拒绝'])],
+        retryable: true,
+      };
+    }
+    const turnEnded = terminalTurns.length > 0 && terminalTurns.every((item) => ['completed', 'error'].includes(cleanString(item.state)));
+    if (!calledTerminal && (jobStatus === 'pending' || jobStatus === 'running' || !turnEnded)) {
+      return { ...terminalBase, status: 'running', jobStatus, errors, retryable: false };
+    }
+    if (!calledTerminal) {
+      // Turn ended but the terminal tool was never invoked: a single retry is allowed.
+      return {
+        ...terminalBase,
+        status: 'failed',
+        jobStatus,
+        errors: [...errors, 'Finalization thread 结束但未调用 finish_research_turn 终端工具'],
+        retryable: true,
+      };
+    }
+    if (params.terminalReceipt && params.terminalReceipt.outcome === 'accepted') {
+      // Accepted but no materialized artifact surfaced yet: keep polling for the run row update.
+      return { ...terminalBase, status: 'running', jobStatus, errors, retryable: false };
+    }
+    return { ...terminalBase, status: 'running', jobStatus, errors, retryable: false };
   }
 
   // Phase B is a pure synthesis call. One tool call is already a policy violation.

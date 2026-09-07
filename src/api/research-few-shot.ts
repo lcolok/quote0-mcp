@@ -1,4 +1,4 @@
-import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
+import { RESEARCH_TRIAGE_POLICY_VERSION, type ResearchSeed, type ResearchTriageDecision } from './research-triage.js';
 import { NEUROMANCER_RESEARCH_RECEIPT_VERSION } from './renderable-news-intake.js';
 
 export const EINK_NEWS_FEW_SHOT_VERSION = 'eink-news-few-shot/v3';
@@ -262,6 +262,57 @@ ${errorSection}
 ${renderFewShots()}
 
 不要输出 researchReceipt/source/highlights/URL/publishTime。严格服从 structured schema。`;
+}
+
+/**
+ * Phase B terminal-tool mode: the agent continues on the SAME Phase A thread and must call the
+ * finish_research_turn tool exactly once. Quote0 adjudicates server-side through the full
+ * publish gate and returns a trusted tool result. The prompt reuses the frozen Evidence Packet,
+ * few-shot v3, and decision semantics of the server-owned editorial prompt, but replaces the
+ * "no tools" / raw-JSON contract with a single terminal tool call contract.
+ */
+export function buildNeuromancerTerminalFinalizationPrompt(
+  seed: ResearchSeed,
+  evidencePacket: string,
+  runId: string,
+  decision: ResearchTriageDecision,
+  errors: string[] = [],
+  directDraft?: NeuromancerEditorialDraft,
+): string {
+  const errorSection = errors.length
+    ? `\n此前 finish_research_turn 提交未通过 Quote0 deterministic gate；只修正以下问题，不新增事实，再调用一次 finish_research_turn：\n${errors.map((error) => `- ${error}`).join('\n')}\n`
+    : '';
+  const serverOwned = decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION
+    ? `
+这一步只做编辑决策，不生成完整新闻 artifact。Quote0 服务器会自行生成 researchReceipt、sources、source、highlights、signature、category、publishTime、usage、run/thread id 与 retrieval telemetry。你禁止输出 URL、publishTime、source role、claim status 或任何 ledger 中不存在的证据。
+输出语义：
+- titleCandidates：恰好 3 个不同的紧凑中文标题候选，按优先级排序；**每个标题都必须是 facts 中某条高优先事实的紧凑摘要，必须共享同一核心事件/实体，禁止从 Evidence Packet 的其他段落另挑一个“更吸睛”的话题当标题**；保留关键实体/动作/数字，优先 <=22 display units，必要时 <=28。
+- facts：${decision.reasons.includes('universal-evidence') ? '至少 2 条、最多' : '1~'}${decision.budget?.maxPublishableClaims ?? 4} 条按信息增益排序、互不重复的完整事实句。每条 text 必须是一句可以独立放进新闻卡片的完整中文句子，不写半句，不写来源列表；evidenceIds 只能引用 Ledger 中 supportEligible=true 的 E 编号。**正文禁止只是标题的翻译、扩写或同义复述**；至少保留证据支持的数字、时间线、背景、因果、影响或后续行动之一。Quote0 会按真实 display units 逐句装箱，放不下的整句会被丢弃，所以最重要事实放最前。
+- linkEvidenceId：选择最适合继续阅读的一个 Ledger E 编号，优先 canonical/primary/official 对应页面。
+`
+    : `
+只在 Seed + Evidence Packet 基础上生成最终卡片；证据不足就删掉主张或标 unresolved，不得自行补资料。先在内部完成 claim-level 取舍：优先 primary/official + 独立 corroboration 支持的事实；同一转载链不能当多源确认；遇到冲突/过时信息要降措辞强度。最终卡片不是“研究报告摘要”，也不是“越短越好”的一句话摘要；应在真实墨水屏容量内尽可能保留最有信息增益的 3~5 条事实，尤其是关键背景、时间线、数字、因果或行动信息，同时避免重复和无效铺陈。`;
+  return `你是“神经漫游者”的 Quote0 墨水屏编辑器。Phase A 已结束，Evidence Packet 顶部的 Ledger v2 是证据 SSoT；只有 ledger.entries 中的 E1/E2/... 可以支撑最终事实。search snippet 只用于发现线索，绝不能自行变成来源。本段在同一个 Project thread 上继续（threadId 已冻结），researchMode=${decision.researchMode || 'exploration'}。${serverOwned}
+
+Direct Draft 只是编辑参考，不是证据；任何事实必须由 Ledger E 编号支撑：
+${editorialDraftPayload(directDraft)}
+
+Seed：
+${seedPayload(seed, 1000)}
+
+已冻结 Evidence Packet：
+${evidencePacket}${errorSection}
+296×152 文案 few-shot（version=${EINK_NEWS_FEW_SHOT_VERSION}；只学习信息密度和中文表达，不复制事实）：
+${renderFewShots()}
+
+工具契约（硬性要求，违反即整轮作废）：
+- 你【必须且只能调用一次】finish_research_turn 工具，把上面编辑决策作为工具参数一次性提交。
+- finish_research_turn 参数必须严格为：{ "runId": "${runId}", "titleCandidates": ["...","...","..."], "facts": [{"text":"...","evidenceIds":["E..."]}], "linkEvidenceId": "E..." }。
+- runId 必须等于 ${runId}，不得改写、不得省略、不得使用其他 run id。
+- 禁止先写任何正文/解释文本，禁止在工具调用之后再输出正文；不要输出 JSON 文本、不要 Markdown、不要研究过程。
+- 禁止调用任何其他工具（不 search、不 crawl、不 browser），本段的唯一动作就是那一次 finish_research_turn 调用。
+- 调用完成后立即停止，把线程交给服务器裁决。
+- Quote0 会以可信工具结果返回裁决：accepted=通过全部发布门；rejected=未通过，会附带 errors。若收到 rejected，只按 errors 修正后【再调用一次】finish_research_turn（用同一个 runId），直到 accepted 或认为无法满足则停止。`;
 }
 
 export function buildNeuromancerEvidenceFinalizationPrompt(
