@@ -5,9 +5,11 @@ import { apiClient } from '../api/client';
 import NeuromancerReviewPage from './NeuromancerReviewPage';
 import { devicesApi, type Device } from '../api/devices';
 import { useSearchParams, Link } from 'react-router-dom';
+import { parseReviewUrlState, patchReviewUrlParams, type ReviewPane } from '../lib/review-url-state';
 import {
   ChevronLeft,
   ChevronRight,
+  Copy,
   ExternalLink,
   FlaskConical,
   Image as ImageIcon,
@@ -39,6 +41,7 @@ const DEFAULT_RENDERER_DRAFT: RendererReviewDraft = {
 
 interface NewsRecord {
   id: number;
+  fingerprint?: string;
   title: string;
   category: string;
   dataSource: string;
@@ -68,18 +71,36 @@ function AnnotationPage() {
 }
 
 function ContentAnnotationPage() {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [reviewMode, setReviewMode] = useState<'content' | 'renderers'>('content');
-  const [rendererTargetId, setRendererTargetId] = useState('eink-296x152');
-  const [rendererDraft, setRendererDraft] = useState<RendererReviewDraft>(DEFAULT_RENDERER_DRAFT);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlState = useMemo(() => parseReviewUrlState(searchParams), [searchParams]);
+  const selectedId = urlState.delivery ?? null;
+  const reviewMode = urlState.mode;
+  const rendererTargetId = urlState.target;
+  const searchQuery = urlState.query;
   const deferredSearchQuery = useDeferredValue(searchQuery.trim());
-  const [mobilePane, setMobilePane] = useState<'list' | 'preview' | 'actions'>('list');
+  const mobilePane = urlState.pane;
+  const [rendererDraft, setRendererDraft] = useState<RendererReviewDraft>(DEFAULT_RENDERER_DRAFT);
   const [pushTarget, setPushTarget] = useState<{cloud: boolean, esp32: boolean}>({cloud: false, esp32: true});
-  // null 表示全部启用的本地墨水屏；从设备管理页跳转时会自动锁定到指定设备。
-  const [selectedEinkDeviceIds, setSelectedEinkDeviceIds] = useState<string[] | null>(null);
-  const [searchParams] = useSearchParams();
-  const requestedDeviceId = searchParams.get('device');
+  // URL 是可分享的视图 SSoT：device 可重复出现；没有 device 参数表示“全部启用设备”。
+  const selectedEinkDeviceIds = urlState.deviceIds.length ? urlState.deviceIds : null;
+  const requestedDeviceId = urlState.deviceIds[0] || null;
+
+  const updateUrlState = (patch: Parameters<typeof patchReviewUrlParams>[1], replace = true) => {
+    setSearchParams((current) => patchReviewUrlParams(current, patch), { replace });
+  };
+  const setReviewMode = (mode: 'content' | 'renderers') => updateUrlState({ mode });
+  const setRendererTargetId = (target: string) => updateUrlState({ target });
+  const setMobilePane = (pane: ReviewPane) => updateUrlState({ pane });
+  const setSelectedId = (delivery: number | null, subject?: string | null) => updateUrlState({
+    delivery,
+    ...(subject !== undefined ? { subject } : {}),
+  });
+  const setSelectedEinkDeviceIds = (
+    update: string[] | null | ((current: string[] | null) => string[] | null),
+  ) => {
+    const next = typeof update === 'function' ? update(selectedEinkDeviceIds) : update;
+    updateUrlState({ deviceIds: next || [] });
+  };
 
   // 从localStorage读取列宽配置，默认值：25%, 50%, 25%
   const [leftWidth, setLeftWidth] = useState(() => {
@@ -223,6 +244,7 @@ function ContentAnnotationPage() {
       const { date: pushedAtDate, utc: pushedAtUtc } = parsePushedAt(item);
       return {
         id: item.id,
+        fingerprint: item.fingerprint || undefined,
         title: item.title || '未知标题',
         category: item.category || 'unknown',
         dataSource: item.dataSource || '未知',
@@ -264,29 +286,43 @@ function ContentAnnotationPage() {
   const filteredList = newsList;
   const isSearchPending = searchQuery.trim() !== deferredSearchQuery;
 
-  // 列表只保留轻量摘要；当前条目的大 JSON 按 id 懒加载。
+  // URL 中的 delivery 可以不在当前 cursor 页；详情必须能脱离当前列表独立恢复，
+  // 否则“复制链接”过一段时间后会因为目标移出首屏 50 条而失效。
   const selectedRecord = selectedId
     ? filteredList.find(r => r.id === selectedId)
     : filteredList[0];
-  const currentRecordSummary = selectedRecord || filteredList[0];
+  const currentRecordSummary = selectedRecord || (!selectedId ? filteredList[0] : undefined);
+  const detailId = selectedId || currentRecordSummary?.id;
   const {
     data: currentDetailData,
     isFetching: isDetailLoading,
   } = useQuery({
-    queryKey: ['push-detail', currentRecordSummary?.id],
-    queryFn: () => apiClient.getPushDetail(currentRecordSummary!.id),
-    enabled: Boolean(currentRecordSummary?.id),
+    queryKey: ['push-detail', detailId],
+    queryFn: () => apiClient.getPushDetail(detailId!),
+    enabled: Boolean(detailId),
     staleTime: 60_000,
   });
   const currentRecord = useMemo(() => {
-    if (!currentRecordSummary) return undefined;
     const detail = currentDetailData?.data;
+    if (!currentRecordSummary && !detail) return undefined;
+    const fallbackPushedAt = detail?.pushed_at ? new Date(detail.pushed_at) : new Date();
+    const base: NewsRecord = currentRecordSummary || {
+      id: detail?.id || detailId!,
+      fingerprint: detail?.fingerprint || urlState.subject,
+      title: detail?.processed_content?.title || detail?.raw_content?.title || detail?.title || '未知标题',
+      category: detail?.category || detail?.raw_content?.category || 'unknown',
+      dataSource: detail?.source || detail?.raw_content?.source || '未知',
+      imagePath: detail?.image_path || null,
+      pushedAt: fallbackPushedAt,
+      annotationStatus: detail?.annotation_status || 'pending',
+    };
     return {
-      ...currentRecordSummary,
-      imagePath: detail?.image_path || currentRecordSummary.imagePath,
+      ...base,
+      fingerprint: detail?.fingerprint || base.fingerprint || urlState.subject,
+      imagePath: detail?.image_path || base.imagePath,
       rawContent: detail?.raw_content,
       processedContent: detail?.processed_content,
-      contentOrigin: currentRecordSummary.contentOrigin || {
+      contentOrigin: base.contentOrigin || {
         kind: detail?.layer === 'external-renderable' || detail?.job_id === 'renderable-intake'
           ? 'neuromancer'
           : 'delivery',
@@ -297,7 +333,38 @@ function ContentAnnotationPage() {
         contractVersion: detail?.processed_content?.metadata?.contractVersion,
       },
     };
-  }, [currentRecordSummary, currentDetailData?.data]);
+  }, [currentRecordSummary, currentDetailData?.data, detailId, urlState.subject]);
+
+  // Canonical share URL: even the default first record gets an explicit identity/view envelope.
+  // The browser address bar therefore always describes what the reviewer is actually looking at.
+  useEffect(() => {
+    const first = filteredList[0];
+    const patch: Parameters<typeof patchReviewUrlParams>[1] = {};
+    let changed = false;
+    if (searchParams.get('v') !== '1') { patch.view = 'content'; changed = true; }
+    if (!searchParams.has('view')) { patch.view = 'content'; changed = true; }
+    if (!searchParams.has('mode')) { patch.mode = reviewMode; changed = true; }
+    if (!searchParams.has('target')) { patch.target = rendererTargetId; changed = true; }
+    if (!searchParams.has('pane')) { patch.pane = mobilePane; changed = true; }
+    if (!urlState.delivery && first) {
+      patch.delivery = first.id;
+      patch.subject = first.fingerprint || null;
+      changed = true;
+    } else if (urlState.delivery && currentRecord?.fingerprint && urlState.subject !== currentRecord.fingerprint) {
+      patch.subject = currentRecord.fingerprint;
+      changed = true;
+    }
+    if (changed) updateUrlState(patch);
+  }, [
+    filteredList[0]?.id,
+    filteredList[0]?.fingerprint,
+    currentRecord?.fingerprint,
+    urlState.delivery,
+    urlState.subject,
+    reviewMode,
+    rendererTargetId,
+    mobilePane,
+  ]);
 
   const { data: rendererTargetsData } = useQuery({
     queryKey: ['renderer-review-targets'],
@@ -489,21 +556,29 @@ function ContentAnnotationPage() {
   });
 
   const handleSelectRecord = (record: NewsRecord) => {
-    setSelectedId(record.id);
-    setMobilePane('preview');
+    // React Router 的 setSearchParams 同一 tick 不会像 React setState 一样排队合并。
+    // 选择新闻同时切 preview 必须一次性写 URL，否则第二次写 pane 会用旧 URL
+    // 覆盖第一次写入的 delivery/subject，表现为深链接进入后“点其它新闻不跳转”。
+    updateUrlState({
+      delivery: record.id,
+      subject: record.fingerprint || null,
+      pane: 'preview',
+    });
   };
 
   const handlePrevious = () => {
     const currentIdx = filteredList.findIndex(r => r.id === selectedId);
     if (currentIdx > 0) {
-      setSelectedId(filteredList[currentIdx - 1].id);
+      const record = filteredList[currentIdx - 1];
+      setSelectedId(record.id, record.fingerprint || null);
     }
   };
 
   const handleNext = () => {
     const currentIdx = filteredList.findIndex(r => r.id === selectedId);
     if (currentIdx >= 0 && currentIdx < filteredList.length - 1) {
-      setSelectedId(filteredList[currentIdx + 1].id);
+      const record = filteredList[currentIdx + 1];
+      setSelectedId(record.id, record.fingerprint || null);
     }
   };
 
@@ -545,8 +620,8 @@ function ContentAnnotationPage() {
 
   // 搜索时重置选中
   const handleSearchChange = (query: string) => {
-    setSearchQuery(query);
-    setSelectedId(null);
+    // 同一用户动作的 URL 字段必须原子更新，避免多次 setSearchParams 相互覆盖。
+    updateUrlState({ query, delivery: null, subject: null });
   };
 
   // 键盘快捷键（WASD布局）
@@ -593,6 +668,14 @@ function ContentAnnotationPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      </div>
+    );
+  }
+
+  if (selectedId && !currentRecord && isDetailLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-primary-600"></div>
       </div>
     );
   }
@@ -684,7 +767,7 @@ function ContentAnnotationPage() {
           <div className="mb-3 flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">内容标注</p>
             <Link
-              to="/annotate?view=neuromancer"
+              to="/annotate?v=1&view=neuromancer"
               className="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_oklab,var(--agent)_25%,var(--border-subtle))] bg-[var(--agent-soft)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--agent)]"
             >
               <FlaskConical className="size-3.5" /> 神经漫游者 A/B
@@ -882,17 +965,34 @@ function ContentAnnotationPage() {
                 </button>
               </div>
             </div>
-            {(currentRecord.rawContent?.link || currentRecord.processedContent?.link) && (
-              <a
-                href={currentRecord.rawContent?.link || currentRecord.processedContent?.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center text-sm text-primary-600 hover:text-primary-700"
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(window.location.href);
+                    toast.success('已复制当前新闻深链接');
+                  } catch {
+                    toast.error('复制失败，请直接复制浏览器地址栏');
+                  }
+                }}
+                className="flex items-center text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
-                <ExternalLink className="w-4 h-4 mr-1" />
-                查看原文
-              </a>
-            )}
+                <Copy className="mr-1 size-4" />
+                复制此条链接
+              </button>
+              {(currentRecord.rawContent?.link || currentRecord.processedContent?.link) && (
+                <a
+                  href={currentRecord.rawContent?.link || currentRecord.processedContent?.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center text-sm text-primary-600 hover:text-primary-700"
+                >
+                  <ExternalLink className="w-4 h-4 mr-1" />
+                  查看原文
+                </a>
+              )}
+            </div>
           </div>
 
           {isNeuromancerEnhanced && (

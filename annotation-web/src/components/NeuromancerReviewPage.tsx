@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  Copy,
   ExternalLink,
   FlaskConical,
   Scale,
@@ -15,6 +16,7 @@ import {
   neuromancerReviewApi,
   type NeuromancerReviewScores,
 } from '../api/neuromancer-review';
+import { parseReviewUrlState, patchReviewUrlParams } from '../lib/review-url-state';
 
 type BlindChoice = 'a' | 'b' | 'tie';
 
@@ -222,8 +224,17 @@ function RevealPanel({ pair, onWorthCost, isSavingCost }: { pair: any; onWorthCo
 
 export default function NeuromancerReviewPage() {
   const queryClient = useQueryClient();
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlState = useMemo(() => parseReviewUrlState(searchParams), [searchParams]);
+  const selectedRunId = urlState.runId || null;
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const selectRun = (runId: string | null, inventoryId?: number | null) => {
+    setSearchParams((current) => patchReviewUrlParams(current, {
+      view: 'neuromancer',
+      runId,
+      ...(inventoryId !== undefined ? { inventoryId } : {}),
+    }), { replace: true });
+  };
 
   const candidatesQuery = useQuery({
     queryKey: ['neuromancer-review-candidates'],
@@ -235,7 +246,11 @@ export default function NeuromancerReviewPage() {
   useEffect(() => {
     if (!selectedRunId && candidates.length > 0) {
       const first = candidates.find((candidate: any) => !candidate.reviewed) || candidates[0];
-      setSelectedRunId(first.runId);
+      selectRun(first.runId, first.sourceInventoryId);
+      return;
+    }
+    if (searchParams.get('v') !== '1' || searchParams.get('view') !== 'neuromancer') {
+      setSearchParams((current) => patchReviewUrlParams(current, { view: 'neuromancer' }), { replace: true });
     }
   }, [candidates, selectedRunId]);
 
@@ -248,6 +263,9 @@ export default function NeuromancerReviewPage() {
 
   useEffect(() => {
     if (!pair) return;
+    if (pair.sourceInventoryId && urlState.inventoryId !== pair.sourceInventoryId) {
+      selectRun(pair.runId, pair.sourceInventoryId);
+    }
     if (!pair.review || !pair.reveal) {
       setDraft(EMPTY_DRAFT);
       return;
@@ -307,7 +325,7 @@ export default function NeuromancerReviewPage() {
       <header className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-soft)] sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <Link to="/annotate" className="grid size-9 shrink-0 place-items-center rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)] hover:bg-[var(--surface-3)]" aria-label="返回内容标注">
+            <Link to="/annotate?v=1&view=content" className="grid size-9 shrink-0 place-items-center rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)] hover:bg-[var(--surface-3)]" aria-label="返回内容标注">
               <ArrowLeft className="size-4" />
             </Link>
             <div>
@@ -320,7 +338,23 @@ export default function NeuromancerReviewPage() {
               </p>
             </div>
           </div>
-          <div className="flex gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {selectedRunId && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(window.location.href);
+                    toast.success('已复制当前 Research 深链接');
+                  } catch {
+                    toast.error('复制失败，请直接复制浏览器地址栏');
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2.5 py-1 font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-3)]"
+              >
+                <Copy className="size-3.5" /> 复制此条链接
+              </button>
+            )}
             <span className="rounded-full bg-[var(--surface-2)] px-2.5 py-1 font-medium text-[var(--text-secondary)]">{candidates.length} pairs</span>
             <span className="rounded-full bg-[var(--agent-soft)] px-2.5 py-1 font-medium text-[var(--agent)]">{pendingCount} 待评</span>
           </div>
@@ -338,7 +372,7 @@ export default function NeuromancerReviewPage() {
                 <button
                   key={candidate.runId}
                   type="button"
-                  onClick={() => setSelectedRunId(candidate.runId)}
+                  onClick={() => selectRun(candidate.runId, candidate.sourceInventoryId)}
                   className={`w-full rounded-xl border p-3 text-left transition-colors ${selected ? 'border-[var(--brand-strong)] bg-[var(--brand-soft)]' : 'border-transparent hover:border-[var(--border-subtle)] hover:bg-[var(--surface-2)]'}`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -400,7 +434,7 @@ export default function NeuromancerReviewPage() {
                 />
                 <div className="mt-3 flex flex-wrap justify-end gap-2">
                   {nextUnreviewed && (
-                    <button type="button" onClick={() => setSelectedRunId(nextUnreviewed.runId)} className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 text-xs font-semibold text-[var(--text-secondary)]">
+                    <button type="button" onClick={() => selectRun(nextUnreviewed.runId, nextUnreviewed.sourceInventoryId)} className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 text-xs font-semibold text-[var(--text-secondary)]">
                       下一条未评 <ArrowRight className="size-3.5" />
                     </button>
                   )}

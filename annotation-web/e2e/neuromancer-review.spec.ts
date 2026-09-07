@@ -114,6 +114,11 @@ test('Neuromancer paired review stays blind until submit, then reveals evidence'
 
   await page.goto('/annotate?view=neuromancer');
   await expect(page.getByRole('heading', { name: '神经漫游者 · 内容增益盲测' })).toBeVisible();
+  await expect.poll(() => {
+    const params = new URL(page.url()).searchParams;
+    return [params.get('v'), params.get('view'), params.get('run'), params.get('inventory')];
+  }).toEqual(['1', 'neuromancer', RUN_ID, '18246']);
+  await expect(page.getByRole('button', { name: /复制此条链接/ })).toBeVisible();
   await expect(page.getByText('Blind · identity hidden')).toHaveCount(2);
   await expect(page.getByText('已揭盲')).toHaveCount(0);
   await expect(page.getByText(/A = 神经漫游者 Research/)).toHaveCount(0);

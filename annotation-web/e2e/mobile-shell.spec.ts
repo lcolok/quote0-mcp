@@ -5,6 +5,7 @@ const MOCK_HISTORY = {
   data: [
     {
       id: 343565,
+      fingerprint: 'e92f93272e8ebf99205666f80468baef',
       title: 'MCP 新规范取消会话',
       originalTitle: 'MCP 走向无状态，开发者追问：这不就又变回 API 了吗？',
       imagePath: null,
@@ -31,6 +32,7 @@ const MOCK_DETAIL = {
   success: true,
   data: {
     id: 343565,
+    fingerprint: 'e92f93272e8ebf99205666f80468baef',
     job_id: 'renderable-intake',
     layer: 'external-renderable',
     image_path: null,
@@ -85,6 +87,28 @@ const MOCK_DETAIL = {
         },
       },
       link: 'https://www.infoq.cn/article/example',
+    },
+  },
+};
+
+const MOCK_DEEP_DETAIL = {
+  success: true,
+  data: {
+    ...MOCK_DETAIL.data,
+    id: 343999,
+    fingerprint: 'deep-link-fingerprint-343999',
+    pushed_at: '2026-08-17T03:45:00.000Z',
+    raw_content: {
+      ...MOCK_DETAIL.data.raw_content,
+      title: '深链接目标：不在当前列表页',
+      source: 'Ars Technica',
+      link: 'https://arstechnica.com/example/deep-link',
+    },
+    processed_content: {
+      ...MOCK_DETAIL.data.processed_content,
+      title: '深链接目标：分页外也可恢复',
+      message: '这条 delivery 不在当前 review subjects 首屏，但 URL 仍应直接恢复详情。',
+      source: 'Ars Technica',
     },
   },
 };
@@ -306,6 +330,7 @@ async function installApiMocks(page: Page) {
   await page.route('http://localhost:3001/api/review/statistics*', (route) => route.fulfill({ json: MOCK_STATS }));
   await page.route('http://localhost:3001/api/review/subjects*', (route) => route.fulfill({ json: MOCK_HISTORY }));
   await page.route('http://localhost:3001/api/scheduler/push-history/343565', (route) => route.fulfill({ json: MOCK_DETAIL }));
+  await page.route('http://localhost:3001/api/scheduler/push-history/343999', (route) => route.fulfill({ json: MOCK_DEEP_DETAIL }));
   await page.route('http://localhost:3001/api/devices*', (route) => route.fulfill({ json: MOCK_DEVICES }));
   await page.route('http://localhost:3001/api/review/renderers/targets*', (route) => route.fulfill({ json: MOCK_RENDERER_TARGETS }));
   await page.route('http://localhost:3001/api/review/renderers/343565*', async (route) => {
@@ -337,6 +362,16 @@ test('mobile shell uses an off-canvas drawer and single-pane review flow', async
   page.on('request', (request) => requestedUrls.push(request.url()));
   await page.goto('/annotate');
   await expect(page.getByRole('heading', { name: '开始标注' })).toBeVisible();
+  await expect.poll(() => {
+    const params = new URL(page.url()).searchParams;
+    return [
+      params.get('v'), params.get('view'), params.get('subject'), params.get('delivery'),
+      params.get('mode'), params.get('target'), params.get('pane'),
+    ];
+  }).toEqual([
+    '1', 'content', 'e92f93272e8ebf99205666f80468baef', '343565',
+    'content', 'eink-296x152', 'list',
+  ]);
   await expect(page.getByRole('button', { name: '打开导航' })).toBeVisible();
   await expect(page.getByRole('link', { name: /神经漫游者 A\/B/ })).toBeVisible();
 
@@ -363,6 +398,7 @@ test('mobile shell uses an off-canvas drawer and single-pane review flow', async
   await expect(page.getByRole('button', { name: '列表' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByText('MCP 新规范取消会话').first().click();
   await expect(page.getByRole('button', { name: '预览' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe('preview');
   await expect(page.getByText('新闻预览')).toBeVisible();
   await expect(page.getByText('Neuromancer 研究增强成品').first()).toBeVisible();
   await expect(page.getByText('点击查看原文>')).toBeVisible();
@@ -376,6 +412,7 @@ test('mobile shell uses an off-canvas drawer and single-pane review flow', async
   await expect(page.getByRole('button', { name: '低质量' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Renderer A/B' }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get('mode')).toBe('renderers');
   await expect(page.getByText('Renderer 物理 A/B')).toBeVisible();
   await expect(page.getByText('物理候选自检：PASS')).toBeVisible();
   await expect(page.getByText('标题黑条：PASS', { exact: false })).toBeVisible();
@@ -400,6 +437,7 @@ test('mobile shell uses an off-canvas drawer and single-pane review flow', async
   expect(requestedUrls.some((url) => url.includes('/api/annotation/statistics'))).toBe(false);
 
   await page.getByRole('button', { name: '操作', exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get('pane')).toBe('actions');
   await expect(page.getByText('怎么开始推送')).toBeVisible();
   await expect(page.getByRole('button', { name: /立即推送这条新闻/ })).toBeVisible();
   await expectNoDocumentOverflow(page, 390);
@@ -413,6 +451,33 @@ test('mobile shell uses an off-canvas drawer and single-pane review flow', async
   const bodyBackground = await page.locator('body').evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(bodyBackground).not.toBe('rgb(255, 255, 255)');
   await page.screenshot({ path: 'test-results/annotation-mobile-dark.png', fullPage: true });
+});
+
+test('share URL restores an exact delivery even when it is outside the current review page', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium');
+  await page.goto('/annotate?v=1&view=content&subject=deep-link-fingerprint-343999&delivery=343999&mode=content&target=eink-296x152&pane=preview');
+  await expect(page.getByText('深链接目标：分页外也可恢复')).toBeVisible();
+  await expect(page.getByText('这条 delivery 不在当前 review subjects 首屏，但 URL 仍应直接恢复详情。')).toBeVisible();
+  const params = new URL(page.url()).searchParams;
+  expect(params.get('delivery')).toBe('343999');
+  expect(params.get('subject')).toBe('deep-link-fingerprint-343999');
+  expect(params.get('view')).toBe('content');
+  expect(params.get('mode')).toBe('content');
+  expect(params.get('target')).toBe('eink-296x152');
+  expect(params.get('pane')).toBe('preview');
+});
+
+test('clicking another news item after entering through a deep link updates both content and URL', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chromium');
+  await page.goto('/annotate?v=1&view=content&subject=deep-link-fingerprint-343999&delivery=343999&mode=content&target=eink-296x152&pane=preview');
+  await expect(page.getByText('深链接目标：分页外也可恢复')).toBeVisible();
+
+  await page.getByText('MCP 新规范取消会话').first().click();
+
+  await expect.poll(() => new URL(page.url()).searchParams.get('delivery')).toBe('343565');
+  expect(new URL(page.url()).searchParams.get('subject')).toBe('e92f93272e8ebf99205666f80468baef');
+  await expect(page.getByText('MCP 2026-07-28 规范取消协议会话与 initialize 握手；请求须带 Mcp-Method 和 Mcp-Name 标头，网关无需解析正文即可路由、限流。')).toBeVisible();
+  await expect(page.getByText('深链接目标：分页外也可恢复')).toHaveCount(0);
 });
 
 test('desktop keeps the three-column review workspace', async ({ page }, testInfo) => {

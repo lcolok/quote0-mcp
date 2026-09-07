@@ -1,18 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient, BASE_URL } from '../api/client';
 import {
   Search,
   Send,
+  Copy,
   Clock,
   Image as ImageIcon,
   ExternalLink,
   Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useSearchParams } from 'react-router-dom';
+import { parseHistoryUrlState, patchReviewUrlParams } from '../lib/review-url-state';
 
 interface PushRecord {
   id: number;
+  fingerprint?: string | null;
   title: string;
   originalTitle: string;
   summary: string;
@@ -29,10 +33,24 @@ interface PushRecord {
 
 function SchedulerPage() {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [page, setPage] = useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlState = useMemo(() => parseHistoryUrlState(searchParams), [searchParams]);
+  const search = urlState.query;
+  const selectedId = urlState.delivery ?? null;
+  const page = urlState.page;
   const limit = 50;
+  const updateUrlState = (patch: Parameters<typeof patchReviewUrlParams>[1]) => {
+    setSearchParams((current) => patchReviewUrlParams(current, patch), { replace: true });
+  };
+  const setSearch = (query: string) => updateUrlState({ query, page: 0, delivery: null, subject: null });
+  const setSelectedRecord = (record: Pick<PushRecord, 'id' | 'fingerprint'> | null) => updateUrlState({
+    delivery: record?.id ?? null,
+    subject: record?.fingerprint || null,
+  });
+  const setPage = (update: number | ((current: number) => number)) => {
+    const next = typeof update === 'function' ? update(page) : update;
+    updateUrlState({ page: Math.max(0, next), delivery: null, subject: null });
+  };
 
   // 查询推送历史
   const { data: historyData, isLoading } = useQuery({
@@ -46,8 +64,8 @@ function SchedulerPage() {
     refetchInterval: 10000, // 每10秒刷新
   });
 
-  // 查询选中记录的详情（保留用于未来扩展）
-  useQuery({
+  // URL 深链接可直接指向不在当前分页里的 delivery；详情 API 独立恢复它。
+  const detailQuery = useQuery({
     queryKey: ['push-detail', selectedId],
     queryFn: () => apiClient.getPushDetail(selectedId!),
     enabled: !!selectedId,
@@ -67,7 +85,34 @@ function SchedulerPage() {
 
   const records: PushRecord[] = historyData?.data || [];
   const pagination = historyData?.pagination;
-  const selectedRecord = records.find(r => r.id === selectedId);
+  const listSelectedRecord = records.find(r => r.id === selectedId);
+  const selectedRecord = useMemo<PushRecord | undefined>(() => {
+    if (listSelectedRecord) return listSelectedRecord;
+    const detail = detailQuery.data?.data;
+    if (!detail || !selectedId) return undefined;
+    return {
+      id: selectedId,
+      fingerprint: detail.fingerprint || null,
+      title: detail.processed_content?.title || detail.raw_content?.title || detail.title || '未知标题',
+      originalTitle: detail.raw_content?.title || detail.title || '未知标题',
+      summary: detail.processed_content?.message || detail.raw_content?.description || detail.raw_content?.content || '',
+      imagePath: detail.image_path || null,
+      publishTime: detail.raw_content?.publishTime || detail.processed_content?.publishTime || '',
+      pushedAt: detail.pushed_at || '',
+      pushedAtUtc: detail.pushed_at || null,
+      pushedAtEpoch: detail.pushed_at ? new Date(detail.pushed_at).getTime() : null,
+      category: detail.raw_content?.category || detail.processed_content?.category || detail.category || 'unknown',
+      dataSource: detail.raw_content?.source || detail.processed_content?.source || detail.source || detail.job_id || 'unknown',
+      rawContent: detail.raw_content,
+      processedContent: detail.processed_content,
+    };
+  }, [listSelectedRecord, detailQuery.data?.data, selectedId]);
+
+  // 补齐 stable subject，即使用户只带 delivery 旧式链接进入，也会自动 canonicalize。
+  useEffect(() => {
+    if (!selectedRecord?.fingerprint || searchParams.get('subject') === selectedRecord.fingerprint) return;
+    updateUrlState({ subject: selectedRecord.fingerprint });
+  }, [selectedRecord?.fingerprint, searchParams]);
 
   const parseCstString = (value: string): Date => {
     const normalized = value
@@ -120,10 +165,7 @@ function SchedulerPage() {
               type="text"
               placeholder="搜索标题或摘要..."
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(0);
-              }}
+              onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
           </div>
@@ -154,7 +196,7 @@ function SchedulerPage() {
                 return (
                   <div
                     key={record.id}
-                    onClick={() => setSelectedId(record.id)}
+                    onClick={() => setSelectedRecord(record)}
                     className={`p-4 cursor-pointer transition-colors hover:bg-gray-50 ${
                       isSelected ? 'bg-primary-50 border-l-4 border-primary-600' : ''
                     }`}
@@ -252,14 +294,31 @@ function SchedulerPage() {
                   ID: {selectedRecord.id} · {formatTime(selectedRecord)}
                 </p>
               </div>
-              <button
-                onClick={() => resendMutation.mutate(selectedRecord.id)}
-                disabled={resendMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
-              >
-                <Send className="w-4 h-4" />
-                {resendMutation.isPending ? '推送中...' : '重新推送'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(window.location.href);
+                      toast.success('已复制当前推送深链接');
+                    } catch {
+                      toast.error('复制失败，请直接复制浏览器地址栏');
+                    }
+                  }}
+                  className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <Copy className="w-4 h-4" />
+                  复制链接
+                </button>
+                <button
+                  onClick={() => resendMutation.mutate(selectedRecord.id)}
+                  disabled={resendMutation.isPending}
+                  className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4" />
+                  {resendMutation.isPending ? '推送中...' : '重新推送'}
+                </button>
+              </div>
             </div>
 
             {/* 内容区域 */}
