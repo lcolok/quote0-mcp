@@ -400,7 +400,7 @@ function isUniversalResearchDecision(decision: ResearchTriageDecision): boolean 
     && decision.reasons.includes('universal-evidence');
 }
 
-function minimumEditorialFactCount(decision: ResearchTriageDecision): number {
+export function minimumEditorialFactCount(decision: ResearchTriageDecision): number {
   if (isUniversalResearchDecision(decision)) {
     return Math.min(2, decision.budget?.maxPublishableClaims ?? 2);
   }

@@ -13,6 +13,7 @@ import {
   researchCanaryIdentity,
   researchExtensionOutcomeErrors,
   shouldExtendDigestResearch,
+  minimumEditorialFactCount,
   structuredFinalizationSchema,
   validateResearchCandidateShape,
   type ResearchCanaryConfig,
@@ -1410,6 +1411,17 @@ describe('research canary adapter', () => {
     expect(getResearchCanaryConfig({ QUOTE0_RESEARCH_PHASE_B_MODE: 'structured-inference' } as NodeJS.ProcessEnv)).toEqual(
       expect.objectContaining({ phaseBMode: 'structured-inference', structuredFinalizer: true }),
     );
+  });
+
+  it('lifts an explicit universal flag into the same universal hard gates as the auto worker', () => {
+    // Default manual canary must remain unchanged: no universal reason, min fact count 1.
+    const defaultDecision = triageResearchCandidate({ seed, manual: true });
+    expect(defaultDecision.reasons).not.toContain('universal-evidence');
+    expect(minimumEditorialFactCount(defaultDecision)).toBe(1);
+
+    const universalDecision = triageResearchCandidate({ seed, manual: true, universal: true });
+    expect(universalDecision.reasons).toContain('universal-evidence');
+    expect(minimumEditorialFactCount(universalDecision)).toBe(2);
   });
 
   it('dispatches the terminal-tool continuation on the SAME thread with a single non-terminal call budget', async () => {

@@ -423,6 +423,7 @@ app.post('/api/news/research/canary/jobs', async (c) => {
     conflict?: unknown;
     requestKey?: unknown;
     phaseBMode?: unknown;
+    universal?: unknown;
   } | null;
   const seed = normalizeSeed(body?.seed);
   if (!seed) return c.json({ success: false, error: 'seed.title 不能为空' }, 400);
@@ -445,6 +446,9 @@ app.post('/api/news/research/canary/jobs', async (c) => {
     seed,
     manual: body?.manual === true,
     conflict: body?.conflict === true,
+    // Pass the universal flag through so the manual canary goes through the exact same universal
+    // hard gates (minimumEditorialFactCount etc.) as the auto worker for the same seed.
+    universal: body?.universal === true,
   });
   if (triage.lane !== 'research') {
     return c.json({

@@ -231,6 +231,27 @@ describe('Patch A: manual canary phaseBMode override', () => {
   });
 });
 
+describe('Patch 1c: manual canary universal passthrough', () => {
+  beforeEach(() => {
+    runRow = makeRunRow();
+    lastInsertedTriage = undefined;
+    process.env.QUOTE0_RESEARCH_CANARY_ENABLED = 'true';
+    process.env.STRAYLIGHT_RESEARCH_BASE_URL = 'https://straylight.example/api';
+  });
+
+  it('pushes universal=true into the frozen run triage with the universal evidence reason', async () => {
+    const res = await manualPost({ seed, universal: true });
+    expect(res.status).toBe(200);
+    expect(lastInsertedTriage?.reasons).toContain('universal-evidence');
+  });
+
+  it('keeps default (universal omitted) behaviour identical to today', async () => {
+    const res = await manualPost({ seed });
+    expect(res.status).toBe(200);
+    expect(lastInsertedTriage?.reasons).not.toContain('universal-evidence');
+  });
+});
+
 describe('Patch B: terminal token file source', () => {
   const tokenDir = join(tmpdir(), 'quote0-terminal-test');
   const tokenFile = join(tokenDir, 'quote0-research-terminal.token');

@@ -157,6 +157,19 @@ Quote0 必须返回 200 + JSON：
 - 未指定时行为不变（仍由 env 决定）；`auto` worker 创建的 run 不受影响（仍用 env）。
 - `agent-job` 仍属内部 legacy 模式，不被 manual 覆盖接受。
 
+## 补丁 1c：manual canary 透传 `universal` 标志（与 auto 线同门）
+
+`POST /api/news/research/canary/jobs` 另支持可选 body 字段 `universal: boolean`（默认 false，保持现状）：
+
+- 为 `true` 时调用 `triageResearchCandidate({ seed, manual, conflict, universal: true })`，
+  与 auto worker（`research-canary-worker.ts` 的 `triageResearchCandidate({ seed, universal })`）
+  对同一 seed 的决策**逐字段一致**（reasons / researchMode / budget / 最低事实数）。
+- 关键效果：reasons 会含 `universal-evidence`，`minimumEditorialFactCount` 升到 2（而非默认 1），
+  canary 因此走与生产 auto 线完全相同的 universal 硬门（`materializeServerOwnedEditorialArtifact`
+  里的事实最少条数、内容信息量 content-quality 等），结论可外推。
+- 缺省时行为与现状一致（不含 `universal-evidence`，最低事实数 1）。
+- 用途：Phase 3 想针对单条 seed 复现 auto 线的 universal 裁决时，用 `{ seed, universal: true, phaseBMode: "terminal-tool" }`。
+
 ## 补丁 B：terminal token 支持从文件读取
 
 新 env `QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE`：
