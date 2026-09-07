@@ -19,7 +19,7 @@ interface PushRecord {
   fingerprint?: string | null;
   title: string;
   originalTitle: string;
-  summary: string;
+  summary?: string;
   imagePath: string | null;
   publishTime: string;
   pushedAt: string;
@@ -27,8 +27,8 @@ interface PushRecord {
   pushedAtEpoch?: number | null;
   category: string;
   dataSource: string;
-  rawContent: any;
-  processedContent: any;
+  rawContent?: any;
+  processedContent?: any;
 }
 
 function SchedulerPage() {
@@ -61,7 +61,8 @@ function SchedulerPage() {
         limit,
         offset: page * limit,
       }),
-    refetchInterval: 10000, // 每10秒刷新
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
   });
 
   // URL 深链接可直接指向不在当前分页里的 delivery；详情 API 独立恢复它。
@@ -163,7 +164,7 @@ function SchedulerPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="搜索标题或摘要..."
+              placeholder="搜索标题、来源或分类..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
@@ -237,9 +238,9 @@ function SchedulerPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-gray-600 line-clamp-2 mb-2">
-                          {record.summary}
-                        </p>
+                        {record.summary && (
+                          <p className="text-xs text-gray-600 line-clamp-2 mb-2">{record.summary}</p>
+                        )}
                         <div className="flex items-center gap-3 text-xs text-gray-500">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
@@ -342,7 +343,7 @@ function SchedulerPage() {
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
                     <Sparkles className="w-4 h-4 text-primary-600" />
-                    优化后的内容
+                    处理后的内容
                   </div>
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
                     <div>

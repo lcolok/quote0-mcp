@@ -43,6 +43,10 @@ export interface ProcessedDataItem {
     generationProfileVersion?: string;
     /** Quality must come from measured review/evaluation, never processor self-report. */
     evaluationStatus?: 'unmeasured' | 'measured';
+    /** Identifies what qualityScore measures; absent means no measured score. */
+    qualityMetric?: 'constraint-compliance';
+    /** Version of the prompt profile used for this output. */
+    profileVersion?: string;
     confidence?: number;
   };
   rawData: RawDataItem;

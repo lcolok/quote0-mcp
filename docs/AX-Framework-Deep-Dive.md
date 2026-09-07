@@ -1,5 +1,7 @@
 # AX框架深度解析：自动优化与智能学习系统
 
+> **历史文档，不代表当前生产行为。** 生产运行时不执行 AX optimizer；`ax-optimized` 仅是 `prompt-profile` 的兼容别名，旧准确率不得视为已验证指标。当前契约见 [标注系统优化内容字段](./Annotation-Optimized-Content-Fields.md)。
+
 > 本文档深入探讨AX框架的内部机制、优化能力和在新闻处理系统中的实际应用
 
 ## 📖 目录

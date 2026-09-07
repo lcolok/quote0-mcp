@@ -399,6 +399,19 @@ describe('runJob(producer) — LLM 失败时确定性降级到 passthrough', () 
     expect(inventoryInsert()!.processedContent.degradedFrom).toBe('basic-llm');
   });
 
+  it('prompt-profile 新键同样纳入降级范围', async () => {
+    renderableBehavior = async (processor) => {
+      if (processor === 'prompt-profile') throw new Error('LLM 挂了');
+      return PASSTHROUGH_OUTPUT;
+    };
+
+    await scheduler.runJob(makeProducerJob('prompt-profile'));
+    restore();
+
+    expect(getRenderableCalls.map((c) => c.processor)).toEqual(['prompt-profile', 'passthrough']);
+    expect(inventoryInsert()!.processedContent.degradedFrom).toBe('prompt-profile');
+  });
+
   it('passthrough 也失败（数据源坏了）→ 不入库，保持抛原始 LLM 错误', async () => {
     renderableBehavior = async (processor) => {
       if (processor === 'ax-optimized') throw new Error('LLM 402 欠费');

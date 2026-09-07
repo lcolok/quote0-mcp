@@ -1,7 +1,9 @@
 // @ts-nocheck
 /**
- * AX训练管理API
- * 提供训练版本管理、模型训练、版本切换等功能的HTTP接口
+ * Legacy candidate-snapshot API.
+ *
+ * Historical routes are retained for compatibility, but automatic "training"
+ * and deployment are disabled until a held-out evaluation gate exists.
  */
 
 import { Hono } from 'hono';
@@ -89,7 +91,7 @@ app.get('/versions/:version', async (c) => {
 });
 
 /**
- * 从标注系统创建新的训练版本（自动版本号）
+ * 从评审系统创建不可变数据快照（自动版本号）
  */
 app.post('/versions/create', async (c) => {
   try {
@@ -114,15 +116,15 @@ app.post('/versions/create', async (c) => {
       }, 400);
     }
 
-    // 转换为训练样本格式
+    // 转换为评估/提示候选所需的可追溯样本格式。
     const trainingSamples = annotationSamples.map((sample: any, index: number) => ({
       sampleId: index + 1,
-      title: sample.title,
-      newsId: 0,
-      fingerprint: '',
-      newsContent: sample.description,
-      optimizedTitle: sample.title,
-      optimizedSummary: sample.description.substring(0, 200),
+      title: sample.original_title,
+      newsId: sample.news_id,
+      fingerprint: sample.fingerprint,
+      newsContent: sample.original_content || sample.original_description || sample.original_title,
+      optimizedTitle: sample.optimized_title || sample.processed_title || sample.original_title,
+      optimizedSummary: sample.optimized_summary || sample.processed_summary || sample.original_description || '',
       annotatedAt: sample.created_at,
       annotator: sample.annotator,
       score: sample.overall_score,
@@ -157,156 +159,30 @@ app.post('/versions/create', async (c) => {
 });
 
 /**
- * 激活指定版本
+ * 旧“激活”入口已停用；数据快照不能绕过评估门禁进入生产。
  */
 app.post('/versions/:version/activate', async (c) => {
-  try {
-    const version = c.req.param('version');
-    const manager = await getSnapshotManager();
-
-    await manager.activateVersion(version);
-
-    return c.json({
-      success: true,
-      data: {
-        version,
-        message: '版本已激活，请重启API服务以应用更改'
-      }
-    });
-  } catch (error) {
-    console.error('激活版本失败:', error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误'
-    }, 500);
-  }
+  return c.json({
+    success: false,
+    error: '自动激活已停用：数据快照必须先通过独立留出集评估，不能直接改变生产提示配置。',
+    data: { version: c.req.param('version'), requiredGate: 'held-out-evaluation' },
+  }, 410);
 });
 
 /**
- * 训练模型
+ * 旧“训练”入口已停用：静态示例选择和随机准确率不是模型训练。
  */
 app.post('/versions/:version/train', async (c) => {
-  try {
-    const version = c.req.param('version');
-    const body = await c.req.json();
-    const { deploy } = body;
-
-    const manager = await getSnapshotManager();
-
-    // 获取训练数据
-    const details = await manager.getVersionDetails(version);
-    if (!details) {
-      return c.json({
-        success: false,
-        error: '版本不存在'
-      }, 404);
-    }
-
-    // 简化的训练逻辑（实际应该在后台任务中执行）
-    const fs = await import('fs/promises');
-    const path = await import('path');
-
-    const titleDemos = details.samples.slice(0, Math.min(5, details.samples.length)).map((s: any, index: number) => ({
-      input: { newsContent: s.newsContent },
-      output: { optimizedTitle: s.optimizedTitle },
-      score: 0.9 + (index * 0.01)
-    }));
-
-    const summaryDemos = details.samples.slice(0, Math.min(3, details.samples.length)).map((s: any, index: number) => ({
-      input: { newsContent: s.newsContent },
-      output: { summary: s.optimizedSummary },
-      score: 0.85 + (index * 0.02)
-    }));
-
-    const titleAccuracy = 0.90 + Math.random() * 0.08;
-    const summaryAccuracy = 0.85 + Math.random() * 0.08;
-    const overall = (titleAccuracy + summaryAccuracy) / 2;
-
-    const optimizedModel = {
-      timestamp: new Date().toISOString(),
+  const version = c.req.param('version');
+  return c.json({
+    success: false,
+    error: '自动训练已停用：当前实现只是选择 few-shot 示例，且没有独立留出集评估，不能生成可信准确率或自动部署。',
+    data: {
       version,
-      programs: {
-        titleProgram: {
-          instruction: '将新闻内容优化为简洁标题，严格控制在20字符以内，突出核心事件和关键实体',
-          demos: titleDemos,
-          modelConfig: {
-            temperature: 0.3,
-            topP: 0.9,
-            maxTokens: 100
-          },
-          stats: {
-            trained: true,
-            version,
-            accuracy: titleAccuracy,
-            compliance: 0.95
-          }
-        },
-        summaryProgram: {
-          instruction: '将新闻内容提炼为200字符以内的精炼摘要，保留核心信息，适合水墨屏快速阅读',
-          demos: summaryDemos,
-          modelConfig: {
-            temperature: 0.5,
-            topP: 0.9,
-            maxTokens: 512
-          },
-          stats: {
-            trained: true,
-            version,
-            accuracy: summaryAccuracy,
-            compliance: 0.92
-          }
-        }
-      },
-      metadata: {
-        trainedAt: new Date().toISOString(),
-        framework: 'ax-llm',
-        optimizationType: 'BootstrapFewShot',
-        trainingDuration: 45000,
-        totalExamplesTested: details.samples.length,
-        finalPerformance: overall,
-        sourceVersion: version
-      }
-    };
-
-    // 保存模型快照
-    const baseDir = path.join(process.cwd(), 'ax-framework');
-    const snapshotsDir = path.join(baseDir, 'models', 'snapshots');
-    await fs.mkdir(snapshotsDir, { recursive: true });
-
-    // 防止路径遍历：version 只能包含字母、数字、连字符、下划线和点
-    if (!/^[a-zA-Z0-9._-]+$/.test(version)) {
-      return c.json({ success: false, error: '版本号格式无效' }, 400);
-    }
-    const modelPath = path.join(snapshotsDir, `${version}.json`);
-    await fs.writeFile(modelPath, JSON.stringify(optimizedModel, null, 2));
-
-    // 如果需要部署
-    if (deploy) {
-      const targetPath = path.join(baseDir, 'models', 'production', 'latest.json');
-      await fs.writeFile(targetPath, JSON.stringify(optimizedModel, null, 2));
-    }
-
-    return c.json({
-      success: true,
-      data: {
-        version,
-        performance: {
-          titleAccuracy,
-          summaryAccuracy,
-          overall
-        },
-        modelPath,
-        deployed: deploy,
-        message: deploy ? '模型已训练并部署，请重启API服务' : '模型已训练'
-      }
-    });
-  } catch (error) {
-    console.error('训练模型失败:', error);
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误'
-    }, 500);
-  }
+      requiredGate: 'held-out-evaluation',
+      replacement: '/api/annotation/samples/export',
+    },
+  }, 410);
 });
 
 /**

@@ -202,7 +202,10 @@ describe('reasoning_content 被忽略（只取 choices[].message.content）', ()
   it('mock openai 返回 reasoning_content，产物标题/正文来自 content', async () => {
     const { OpenAI } = require('openai') as any;
     const createMock = mock(async () => ({
-      choices: [{ message: { content: 'REAL_CONTENT', reasoning_content: 'HIDDEN_THINK' } }],
+      choices: [{ message: {
+        content: '{"title":"REAL_TITLE","summary":"REAL_CONTENT"}',
+        reasoning_content: 'HIDDEN_THINK',
+      } }],
     }));
     mock.module('openai', () => ({
       OpenAI: class {
@@ -226,11 +229,14 @@ describe('reasoning_content 被忽略（只取 choices[].message.content）', ()
     } as any);
 
     const out = await proc.processNewsWithOptimizedProgram('新闻内容');
-    expect(out.title).toBe('REAL_CONTENT');
+    expect(out.title).toBe('REAL_TITLE');
     expect(out.body).toBe('REAL_CONTENT');
     expect(out.title).not.toContain('HIDDEN_THINK');
-    expect(out.generationProfileVersion).toBe('evidence-bounded-direct/v1');
+    // 标题和摘要合并为一次结构化请求，避免每条新闻重复调用 LLM。
+    expect(createMock).toHaveBeenCalledTimes(1);
+    // 事实边界约束（evidence-bounded contract）必须并进唯一一次调用的 prompt。
     expect(createMock.mock.calls[0]?.[0]?.messages?.[0]?.content).toContain('只能使用“输入”中明确出现的事实');
-    expect(createMock.mock.calls[1]?.[0]?.messages?.[0]?.content).toContain('不得提高事实强度');
+    expect(createMock.mock.calls[0]?.[0]?.messages?.[0]?.content).toContain('不得提高事实强度');
+    expect(out.generationProfileVersion).toBe('evidence-bounded-direct/v1');
   });
 });

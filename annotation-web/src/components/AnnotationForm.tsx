@@ -203,14 +203,14 @@ function AnnotationForm({ onSubmit, isSubmitting, initialData }: AnnotationFormP
         </div>
       </div>
 
-      {/* 优化内容 - 用于AX训练 */}
+      {/* 人工改写建议 - 用于离线评估 */}
       <div className="border-t border-gray-200 pt-6">
         <div className="mb-4">
           <h3 className="text-sm font-semibold text-gray-900 mb-1">
-            ✨ 内容优化（可选 - 用于AX训练）
+            ✨ 人工改写建议（可选 - 用于离线评估）
           </h3>
           <p className="text-xs text-gray-600">
-            填写优化后的标题和摘要，用于训练AX模型学习如何改进内容
+            填写可追溯的人工参考改写，用于候选提示配置的离线评估；保存评审不会自动训练或激活模型
           </p>
         </div>
 

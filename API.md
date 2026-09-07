@@ -82,7 +82,7 @@ Content-Type: application/json
   "category": "technology",
   "dataSource": "rss", 
   "rssSource": "sspai",
-  "processor": "ax-optimized",
+  "processor": "prompt-profile",
   "index": 7,
   "renderer": "device",
   "options": {
@@ -102,7 +102,7 @@ Content-Type: application/json
   },
   "metadata": {
     "processingTime": 23800,
-    "workflow": "rss -> ax-optimized -> device",
+    "workflow": "rss -> prompt-profile -> device",
     "nodeTimings": {
       "datasource": 602,
       "processing": 20682,
@@ -121,7 +121,7 @@ Content-Type: application/json
 | `category` | string | `technology` | 新闻分类：`technology`、`finance`、`sports` |
 | `dataSource` | string | `mock` | 数据源：`rss`、`mock`、`api`、`hackernews` |
 | `rssSource` | string | `solidot` | RSS订阅源（当dataSource=rss时） |
-| `processor` | string | `passthrough` | 处理器：`passthrough`、`basic-llm`、`ax-optimized` |
+| `processor` | string | `passthrough` | 处理器：`passthrough`、`basic-llm`、`prompt-profile`；`ax-optimized` 仅为旧配置兼容别名 |
 | `index` | number | `0` | 新闻条目索引 |
 | `renderer` | string | `news` | 渲染器：`news`、`json`、`device` |
 
@@ -176,17 +176,17 @@ curl -X POST http://localhost:3001/api/news/process \
   }'
 ```
 
-### AI优化处理
+### 提示配置处理
 
 ```bash
-# 使用AX优化处理器处理新闻并推送到设备
+# 使用版本化提示配置处理新闻并推送到设备
 curl -X POST http://localhost:3001/api/news/process \
   -H "Content-Type: application/json" \
   -d '{
     "category": "technology",
     "dataSource": "rss",
     "rssSource": "solidot",
-    "processor": "ax-optimized",
+    "processor": "prompt-profile",
     "index": 3,
     "renderer": "device"
   }'
@@ -237,7 +237,7 @@ API提供完整的CLI功能替代：
 
 | CLI命令 | API等价调用 |
 |---------|-------------|
-| `bun widget:modular-news technology rss ax-optimized 7 device sspai` | `POST /api/news/process` 附带相应参数 |
+| `bun widget:modular-news technology rss prompt-profile 7 device sspai` | `POST /api/news/process` 附带相应参数 |
 
 ## 🔧 故障排除
 

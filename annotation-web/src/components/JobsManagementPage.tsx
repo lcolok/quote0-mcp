@@ -656,7 +656,8 @@ function JobsManagementPage() {
                 >
                   <option value="passthrough">passthrough</option>
                   <option value="basic-llm">basic-llm</option>
-                  <option value="ax-optimized">ax-optimized</option>
+                  <option value="prompt-profile">prompt-profile（推荐）</option>
+                  <option value="ax-optimized">ax-optimized（兼容旧任务）</option>
                 </select>
               </div>
 

@@ -240,8 +240,8 @@ LOG_FORMAT=json
     console.log('4. 使用LLM优化处理:');
     console.log('   bun widget:modular-news technology rss basic-llm 3 device');
     console.log('');
-    console.log('5. 使用AX优化处理:');
-    console.log('   bun widget:modular-news technology rss ax-optimized 5 device');
+    console.log('5. 使用版本化提示配置处理:');
+    console.log('   bun widget:modular-news technology rss prompt-profile 5 device');
     console.log('');
     console.log('🔧 管理命令:');
     console.log('   bun setup         - 重新运行此设置脚本');

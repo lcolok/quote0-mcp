@@ -103,7 +103,7 @@ describe("DevicePushRenderingModule", () => {
         {}
       );
 
-      expect(result.signature).toBe("AI优化");
+      expect(result.signature).toBe("AI编辑·LLM");
       expect(result.signature).not.toContain("Q");
       expect(result.metadata?.processingMetadata?.evaluationStatus).toBe("unmeasured");
       expect(result.metadata).not.toHaveProperty("qualityScore");

@@ -1,10 +1,10 @@
 import { AxOptimizedNewsProcessor } from '../src/react-widgets/services/ax-optimized-news-processor.js';
 
 /**
- * AX自动优化演示脚本
- * 展示AX框架的真正威力：自动学习和优化
+ * @deprecated 历史 AX 研究演示，不是生产训练或发布流程。
  */
 async function runAxOptimizationDemo() {
+  console.warn('⚠️ 历史研究演示：指标不得视为生产质量证明。');
   console.log('🚀 AX框架自动优化演示开始');
 
   // 1. 创建优化处理器

@@ -7,7 +7,7 @@ import { useTheme } from './theme';
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const AnnotationPage = lazy(() => import('./components/AnnotationPage'));
 const ExportPage = lazy(() => import('./components/ExportPage'));
-const TrainingPage = lazy(() => import('./components/TrainingPage'));
+const EvaluationPage = lazy(() => import('./components/EvaluationPage'));
 const SchedulerPage = lazy(() => import('./components/SchedulerPage'));
 const SourcesPage = lazy(() => import('./components/SourcesPage'));
 const LLMProvidersPage = lazy(() => import('./components/LLMProvidersPage'));
@@ -46,7 +46,8 @@ function App() {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="annotate" element={<AnnotationPage />} />
             <Route path="export" element={<ExportPage />} />
-            <Route path="training" element={<TrainingPage />} />
+            <Route path="evaluation" element={<EvaluationPage />} />
+            <Route path="training" element={<Navigate to="/evaluation" replace />} />
             <Route path="scheduler" element={<SchedulerPage />} />
             <Route path="sources" element={<SourcesPage />} />
             <Route path="llm-providers" element={<LLMProvidersPage />} />

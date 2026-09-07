@@ -86,8 +86,8 @@
     }
   },
   "metadata": {
-    "trainedAt": "2026-08-20T00:00:00.000Z",
-    "framework": "quote0-governed-profile",
-    "optimizationType": "manual-evidence-bounded-profile"
+    "createdAt": "2026-08-20T00:00:00.000Z",
+    "profileType": "curated-few-shot",
+    "source": "repository-reviewed"
   }
 }
