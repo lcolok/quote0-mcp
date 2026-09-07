@@ -109,6 +109,9 @@ application:
     # 2026-07-19：用户确认能访问懒猫域名的都是私有网络内部，component-labels*
     # 两个路径不再要求 Bearer token，完全公开（COMPONENT_LABELS_API_TOKEN 中间件
     # 未设置该变量时自动跳过鉴权，见 news-api-server.ts）。
+    # Phase B terminal-tool 回调自鉴权（与 news-api 服务 env 同步）：token 优先读文件。
+    QUOTE0_RESEARCH_TERMINAL_TOKEN: ""
+    QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE: /app/secrets/quote0-research-terminal.token
 
   # 健康检查
   health_check:
@@ -248,7 +251,9 @@ services:
       # 模式，中途改 env 不影响在途 run。
       QUOTE0_RESEARCH_PHASE_B_MODE: structured-inference
       # Phase B terminal-tool 回调自鉴权 token。真实值只通过懒猫控制台注入，绝不写进本仓。
+      # 优先读 QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE（存在且非空则用其内容），否则回退 env token。
       QUOTE0_RESEARCH_TERMINAL_TOKEN: ""
+      QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE: /app/secrets/quote0-research-terminal.token
       STRAYLIGHT_RESEARCH_REQUEST_TIMEOUT_MS: "15000"
       # Universal Evidence Research：每条 producer 新闻都必须先经过 Neuromancer evidence digestion。
       # 取消按天“研究几条”的采样上限；初版仍固定 concurrency=1，并由每条 digest=4 / enrichment=6 /
@@ -292,6 +297,8 @@ services:
       - redis
     binds:
       - /lzcapp/var/images:/app/processed-images
+      # Phase B terminal-tool 回调 token 文件挂载（参考 images binds 写法，精确单文件目录）。
+      - /lzcapp/var/secrets:/app/secrets
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
       interval: 30s

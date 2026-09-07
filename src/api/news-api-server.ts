@@ -869,6 +869,7 @@ app.get('/api/health', (c) => {
       phaseAProvider: research.researchProviderId,
       phaseBProvider: research.finalizerProviderId,
       phaseBMode: research.phaseBMode,
+      terminalTokenSource: research.terminalTokenSource,
       strictProvider: true,
       fallback: 'none',
       triagePolicy: RESEARCH_TRIAGE_POLICY_VERSION,

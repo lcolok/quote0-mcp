@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
 import {
   NEUROMANCER_RESEARCH_RECEIPT_VERSION,
@@ -39,8 +40,32 @@ export interface ResearchCanaryConfig {
   structuredFinalizer: boolean;
   /** Phase B mode: structured-inference (default) | terminal-tool | agent-job (legacy). */
   phaseBMode: ResearchPhaseBMode;
+  /** Resolved terminal-tool auth token (env token, or file token when QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE is set). */
+  terminalToken?: string;
+  /** Where terminalToken came from; used by /health without ever leaking the value. */
+  terminalTokenSource: TerminalTokenSource;
   bearerToken?: string;
   requestTimeoutMs: number;
+}
+
+/** Where the terminal-tool auth token is sourced from. */
+export type TerminalTokenSource = 'file' | 'env' | 'missing';
+
+function resolveTerminalToken(env: NodeJS.ProcessEnv): { token?: string; source: TerminalTokenSource } {
+  const filePath = cleanString(env.QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE);
+  if (filePath) {
+    try {
+      if (existsSync(filePath)) {
+        const content = readFileSync(filePath, 'utf8').trim();
+        if (content) return { token: content, source: 'file' };
+      }
+    } catch {
+      // Unreadable/missing file is not fatal in itself: fall back to the env token, and if that is
+      // also absent the terminal endpoint stays fail-closed (missing) with a 503.
+    }
+  }
+  const token = cleanString(env.QUOTE0_RESEARCH_TERMINAL_TOKEN);
+  return token ? { token, source: 'env' } : { source: 'missing' };
 }
 
 export interface StraylightCanaryDispatch {
@@ -164,6 +189,7 @@ export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): R
     : rawMode === 'structured-inference' || legacyStructuredRaw !== 'false'
       ? 'structured-inference'
       : 'agent-job';
+  const terminalAuth = resolveTerminalToken(env);
   return {
     enabled,
     ...(baseUrlRaw ? { baseUrl: normalizeBaseUrl(baseUrlRaw) } : {}),
@@ -172,6 +198,8 @@ export function getResearchCanaryConfig(env: NodeJS.ProcessEnv = process.env): R
     finalizerProviderId: quote0OnlyResearchProvider(env.STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID, 'STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID'),
     phaseBMode,
     structuredFinalizer: phaseBMode === 'structured-inference',
+    ...(terminalAuth.token ? { terminalToken: terminalAuth.token } : {}),
+    terminalTokenSource: terminalAuth.source,
     ...(cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN)
       ? { bearerToken: cleanString(env.STRAYLIGHT_RESEARCH_BEARER_TOKEN) }
       : {}),

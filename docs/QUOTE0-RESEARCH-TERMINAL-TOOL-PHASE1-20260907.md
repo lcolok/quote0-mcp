@@ -2,7 +2,7 @@
 
 - 日期：2026-09-07
 - 分支：`feat/research-terminal-tool-20260907`
-- 状态：Phase 1 实现 + 全仓测试通过（`bun test` 绿，`tsc -p tsconfig.build.json` exit 0）
+- 状态：Phase 1 实现 + 全仓测试通过（`bun test` 绿，`tsc -p tsconfig.build.json` exit 0）；Patch A/B 已并入。
 - 关联：Straylight 侧按同一契约并行施工，本仓不单方面改字段名。
 
 ## TL;DR
@@ -141,6 +141,41 @@ Quote0 必须返回 200 + JSON：
 - `research-terminal-endpoint.test.ts`（HTTP 端点，mock PG 单测，cache-bust 隔离 import）：
   - 503（token 未配）、401（Bearer 错）、400（runId 缺失）、200+rejected（run 不存在 / schema 拒）；
     `accepted` 返回可信 artifact 且不动 inventory。
+
+## 补丁 A：manual canary 按请求指定 Phase B 模式
+
+`POST /api/news/research/canary/jobs` 新增可选 body 字段 `phaseBMode`：
+
+```json
+{ "seed": {...}, "phaseBMode": "terminal-tool" }
+```
+
+- 允许值：`structured-inference` | `terminal-tool`；其它值返回 400（error 提示只允许这两种）。
+- 指定时**覆盖 env 默认值**，并照旧冻结进 `run.triage.phaseBMode`。
+- **路径一致性**：reconcile / 终端端点 / inspection 全部读 `run.triage.phaseBMode`（单一数据源），
+  已由 Phase 1 主体实现保证；本补丁只是把请求覆盖值接入同一入口。
+- 未指定时行为不变（仍由 env 决定）；`auto` worker 创建的 run 不受影响（仍用 env）。
+- `agent-job` 仍属内部 legacy 模式，不被 manual 覆盖接受。
+
+## 补丁 B：terminal token 支持从文件读取
+
+新 env `QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE`：
+
+- 启动/调用时若该文件存在且非空，其内容（trim）**优先于** `QUOTE0_RESEARCH_TERMINAL_TOKEN`。
+- 两者皆空 → 终端端点 503（fail closed，现状不变）。
+- 解析在 `getResearchCanaryConfig()` 中集中完成，暴露 `terminalToken`（值）与 `terminalTokenSource`
+  （`"file" | "env" | "missing"`），同一个 config 被终端端点与 health 共用，保证不泄露值。
+- `/api/health` 的 `researchRoute` 新增 `terminalTokenSource`（只报来源，不报 token 值）。
+
+manifest（`lazycat/lzc-manifest.yml`）：
+
+- `news-api` 服务 `binds` 增加 `- /lzcapp/var/secrets:/app/secrets`（参考 images binds 写法，
+  精确单目录挂载）。
+- `news-api` 服务 env 增加 `QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE: /app/secrets/quote0-research-terminal.token`，
+  保留 `QUOTE0_RESEARCH_TERMINAL_TOKEN: ""`。
+- 顶层 `api` 入口 env 也同步（两处 env 块都改）：加 `QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE` 与
+  `QUOTE0_RESEARCH_TERMINAL_TOKEN: ""`。
+- 不 bump 版本；不在仓库写入真实 token。
 
 ## 状态机（Phase B terminal-tool）
 

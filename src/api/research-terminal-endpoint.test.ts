@@ -7,14 +7,30 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test';
-import { buildResearchEvidencePacket, researchCanaryIdentity } from './research-canary.js';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildResearchEvidencePacket, getResearchCanaryConfig, researchCanaryIdentity } from './research-canary.js';
 import { triageResearchCandidate } from './research-triage.js';
 
 // --- mock PG（bun 的 mock.module 进程全局生效，本文件用 cache-bust import 拿到 stub） ---
 let runRow: Record<string, unknown>;
+/** Last triage JSON written by the manual canary INSERT (index 10 of the params array). */
+let lastInsertedTriage: Record<string, unknown> | undefined;
 const postgresStub: any = {
   initialize: async () => undefined,
   query: async (sql: string, params?: unknown[]) => {
+    if (String(sql).includes('INSERT INTO research_runs')) {
+      const raw = Array.isArray(params) ? params[10] : undefined;
+      try {
+        lastInsertedTriage = typeof raw === 'string' ? JSON.parse(raw) : undefined;
+      } catch {
+        lastInsertedTriage = undefined;
+      }
+      // Manual canary mints a fresh candidate id; the stub returns a single row regardless so the
+      // store's INSERT ... RETURNING * line resolves.
+      return { rows: [runRow] };
+    }
     // getResearchRun 与 markResearchRunTerminalReceipt 都以第一个参数为 runId。
     const requestedId = Array.isArray(params) ? String(params[0]) : '';
     if (requestedId && requestedId !== 'run-terminal') return { rows: [] };
@@ -116,9 +132,17 @@ const post = (body: unknown, token?: string) =>
     body: JSON.stringify(body),
   });
 
+const manualPost = (body: unknown) =>
+  researchCanaryApp.request('/api/news/research/canary/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
 describe('POST /api/news/research/terminal/finish', () => {
   beforeEach(() => {
     runRow = makeRunRow();
+    lastInsertedTriage = undefined;
     delete process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN;
   });
 
@@ -170,5 +194,82 @@ describe('POST /api/news/research/terminal/finish', () => {
     expect(body.deeplink).toContain('/annotate?view=neuromancer');
     // No inventory writes from the endpoint — terminal_receipt is the only durable trace.
     expect(body).not.toHaveProperty('resultArtifact');
+  });
+});
+
+describe('Patch A: manual canary phaseBMode override', () => {
+  beforeEach(() => {
+    runRow = makeRunRow();
+    lastInsertedTriage = undefined;
+    process.env.QUOTE0_RESEARCH_CANARY_ENABLED = 'true';
+    process.env.STRAYLIGHT_RESEARCH_BASE_URL = 'https://straylight.example/api';
+  });
+
+  it('freezes an explicit terminal-tool override into run.triage.phaseBMode', async () => {
+    const res = await manualPost({ seed, phaseBMode: 'terminal-tool' });
+    expect(res.status).toBe(200);
+    expect(lastInsertedTriage?.phaseBMode).toBe('terminal-tool');
+  });
+
+  it('freezes an explicit structured-inference override into run.triage.phaseBMode', async () => {
+    const res = await manualPost({ seed, phaseBMode: 'structured-inference' });
+    expect(res.status).toBe(200);
+    expect(lastInsertedTriage?.phaseBMode).toBe('structured-inference');
+  });
+
+  it('rejects an invalid phaseBMode value with 400', async () => {
+    const res = await manualPost({ seed, phaseBMode: 'agent-job' });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('structured-inference');
+  });
+
+  it('falls back to the env default when phaseBMode is omitted', async () => {
+    process.env.QUOTE0_RESEARCH_PHASE_B_MODE = 'terminal-tool';
+    const res = await manualPost({ seed });
+    expect(res.status).toBe(200);
+    expect(lastInsertedTriage?.phaseBMode).toBe('terminal-tool');
+  });
+});
+
+describe('Patch B: terminal token file source', () => {
+  const tokenDir = join(tmpdir(), 'quote0-terminal-test');
+  const tokenFile = join(tokenDir, 'quote0-research-terminal.token');
+
+  beforeEach(() => {
+    runRow = makeRunRow();
+    delete process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN;
+    delete process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE;
+  });
+
+  it('reports "missing" when neither token nor file is configured', () => {
+    const config = getResearchCanaryConfig({
+      QUOTE0_RESEARCH_PHASE_B_MODE: 'terminal-tool',
+    } as NodeJS.ProcessEnv);
+    expect(config.terminalTokenSource).toBe('missing');
+    expect(config.terminalToken).toBeUndefined();
+  });
+
+  it('prefers the file token over the env token and trims it', () => {
+    mkdirSync(tokenDir, { recursive: true });
+    writeFileSync(tokenFile, '  file-secret\n');
+    process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN = 'env-secret';
+    process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE = tokenFile;
+    const config = getResearchCanaryConfig({
+      QUOTE0_RESEARCH_TERMINAL_TOKEN: 'env-secret',
+      QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE: tokenFile,
+    } as NodeJS.ProcessEnv);
+    expect(config.terminalTokenSource).toBe('file');
+    expect(config.terminalToken).toBe('file-secret');
+  });
+
+  it('falls back to env when the file is absent or empty', () => {
+    rmSync(tokenDir, { recursive: true, force: true });
+    process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN = 'env-secret';
+    const config = getResearchCanaryConfig({
+      QUOTE0_RESEARCH_TERMINAL_TOKEN: 'env-secret',
+      QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE: tokenFile,
+    } as NodeJS.ProcessEnv);
+    expect(config.terminalTokenSource).toBe('env');
+    expect(config.terminalToken).toBe('env-secret');
   });
 });

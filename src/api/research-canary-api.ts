@@ -422,9 +422,24 @@ app.post('/api/news/research/canary/jobs', async (c) => {
     manual?: unknown;
     conflict?: unknown;
     requestKey?: unknown;
+    phaseBMode?: unknown;
   } | null;
   const seed = normalizeSeed(body?.seed);
   if (!seed) return c.json({ success: false, error: 'seed.title 不能为空' }, 400);
+
+  // Optional manual Phase B mode override. Throws a 400 on any value outside the two public
+  // lanes; agent-job stays an internal-only legacy mode and is never accepted here.
+  const requestedPhaseBMode = body && typeof body.phaseBMode === 'string'
+    ? (body.phaseBMode.trim() as 'structured-inference' | 'terminal-tool')
+    : undefined;
+  if (requestedPhaseBMode !== undefined
+    && requestedPhaseBMode !== 'structured-inference'
+    && requestedPhaseBMode !== 'terminal-tool') {
+    return c.json({
+      success: false,
+      error: 'phaseBMode 只允许 structured-inference 或 terminal-tool',
+    }, 400);
+  }
 
   const triage = triageResearchCandidate({
     seed,
@@ -453,9 +468,11 @@ app.post('/api/news/research/canary/jobs', async (c) => {
     seed,
     triage,
     // Freeze the Phase B mode at run creation so a mid-flight env switch never flips the
-    // lane an in-flight run is already committed to. The manual canary respects the current
-    // mode so it exercises exactly the same path the auto worker will use.
-    phaseBMode: canaryConfig.phaseBMode,
+    // lane an in-flight run is already committed to. A request-supplied phaseBMode (Patch A)
+    // overrides the env default; otherwise the manual canary follows the current env mode so it
+    // exercises the same path the auto worker will use. All downstream reconcile/endpoint/
+    // inspection read run.triage.phaseBMode (single source of truth).
+    phaseBMode: requestedPhaseBMode ?? canaryConfig.phaseBMode,
   });
 
   // Idempotency: repeating the same research intent never creates another Straylight job.
@@ -485,17 +502,19 @@ app.post('/api/news/research/terminal/finish', async (c) => {
   // Independent bearer auth. Like COMPONENT_LABELS_API_TOKEN, this endpoint is surfaced through the
   // component-labels style public_path and must NOT reuse the global API_AUTH_TOKEN middleware
   // (which covers all of /api/* and would break the browser-token quick-tap used to call it here).
-  // Env unset ⇒ fail closed with 503; bad bearer ⇒ 401.
-  const token = process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN;
-  if (!token) {
+  // Env unset ⇒ fail closed with 503; bad bearer ⇒ 401. Token resolution (env or file) lives in
+  // getResearchCanaryConfig so /health can report the source without ever leaking the value.
+  const { terminalToken } = getResearchCanaryConfig();
+  if (!terminalToken) {
     return c.json({
       trusted: false, outcome: 'rejected', runId: '',
-      summary: 'QUOTE0_RESEARCH_TERMINAL_TOKEN 未配置，terminal-tool 模式不可用（fail closed）',
-      errors: ['terminal 端点未启用：QUOTE0_RESEARCH_TERMINAL_TOKEN 未配置'], artifact: null,
+      summary: 'QUOTE0_RESEARCH_TERMINAL_TOKEN / QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE 均未配置，terminal-tool 模式不可用（fail closed）',
+      errors: ['terminal 端点未启用：缺少 QUOTE0_RESEARCH_TERMINAL_TOKEN 且 QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE 为空'],
+      artifact: null,
     }, 503);
   }
   const header = c.req.header('Authorization');
-  if (!header || !header.startsWith('Bearer ') || header.slice('Bearer '.length) !== token) {
+  if (!header || !header.startsWith('Bearer ') || header.slice('Bearer '.length) !== terminalToken) {
     return c.json({ trusted: false, outcome: 'rejected', runId: '', summary: '鉴权失败', errors: ['Unauthorized'], artifact: null }, 401);
   }
 
