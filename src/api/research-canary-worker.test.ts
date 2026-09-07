@@ -62,6 +62,7 @@ describe('research auto-canary worker policy', () => {
     })).toEqual({
       title: 'raw title',
       content: '点击查看原文>',
+      sourceId: 'fallback-source',
       source: 'InfoQ',
       link: 'https://example.com/raw',
       category: 'technology',

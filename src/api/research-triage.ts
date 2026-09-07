@@ -1,10 +1,18 @@
 import { assessSourceEvidence, type EvidenceMode } from './content-quality.js';
 
-export const RESEARCH_TRIAGE_POLICY_VERSION = 'quote0-research-triage/v10';
+export const RESEARCH_TRIAGE_POLICY_VERSION = 'quote0-research-triage/v13';
+/** Existing v12 Research artifacts remain replay-eligible during the v13 rollout; new runs always write v13. */
+export const RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS = [
+  RESEARCH_TRIAGE_POLICY_VERSION,
+  'quote0-research-triage/v12',
+] as const;
 
 export interface ResearchSeed {
   title: string;
   content?: string;
+  /** Stable ingestion source id (for example infoq-cn / hackernews); server-owned provenance only. */
+  sourceId?: string;
+  /** Human-facing feed title captured from RSS. Never used as the final publisher SSoT when sourceId/link are available. */
   source?: string;
   link?: string;
   category?: string;
@@ -26,7 +34,7 @@ export interface ResearchBudget {
   maxToolCalls: number;
   /** Optional first-stage hard ceiling before Quote0 evaluates marginal evidence gain. */
   initialToolCalls?: number;
-  /** Optional one-shot continuation budget granted only when deterministic coverage is still insufficient. */
+  /** Optional continuation budget granted only after deterministic evidence-gain evaluation. */
   extensionToolCalls?: number;
   maxPostSeedArtifacts: number;
   maxPublishableClaims: number;
@@ -71,14 +79,17 @@ function hasHighRiskSignal(seed: ResearchSeed): boolean {
 function budgetFor(mode: ResearchMode): ResearchBudget {
   if (mode === 'recovery') {
     return {
-      // Real production seed-only recovery repeatedly reached 10 successful calls while
-      // recovering canonical text + targeted corroboration + primary/official evidence.
-      // Keep the item budget bounded, but do not discard useful research at 8 post-hoc.
-      maxToolCalls: 10,
-      maxPostSeedArtifacts: 4,
+      // Seed-only recovery is the highest-yield Research lane. Production delivery 366356
+      // exhausted 10 successful calls yet still had high-relevance uncrawled candidates.
+      // Keep 10 as the first-stage ceiling, then conditionally authorize up to 5 more calls
+      // only when the deterministic Evidence Ledger still exposes useful evidence gain.
+      maxToolCalls: 15,
+      initialToolCalls: 10,
+      extensionToolCalls: 5,
+      maxPostSeedArtifacts: 6,
       maxPublishableClaims: 5,
       maxFinalizationRetries: 1,
-      maxEvidenceChars: 8_000,
+      maxEvidenceChars: 10_000,
       targetIndependentClusters: 2,
     };
   }

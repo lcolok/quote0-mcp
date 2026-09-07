@@ -1,12 +1,12 @@
 import type { PostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
-import type { DigestResearchExtensionDecision, ResearchRuntimeReceipt } from './research-canary.js';
+import type { ResearchExtensionDecision, ResearchRuntimeReceipt } from './research-canary.js';
 import type { ResearchSeed, ResearchTriageDecision } from './research-triage.js';
 
 export type ResearchRunState = 'queued' | 'running' | 'waiting_user' | 'completed' | 'invalid' | 'failed' | 'cancelled';
 
 export interface ResearchExtensionReceipt {
-  reason: DigestResearchExtensionDecision['reason'];
+  reason: ResearchExtensionDecision['reason'];
   required: boolean;
   candidateCount: number;
   authorizedCandidateUrls: string[];

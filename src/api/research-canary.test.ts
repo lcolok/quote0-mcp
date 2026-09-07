@@ -31,6 +31,7 @@ const finalizerConfig: ResearchCanaryConfig = { ...config };
 const seed = {
   title: 'MCP 新规范取消会话',
   content: '点击查看原文>',
+  sourceId: 'infoq-cn',
   source: 'InfoQ',
   link: 'https://www.infoq.cn/example',
   category: 'technology',
@@ -158,7 +159,52 @@ describe('research canary adapter', () => {
     expect(captured.message).toContain('Phase A：只负责检索和事实核验');
     expect(captured.message).toContain('研究模式：recovery');
     expect(captured.message).toContain('最多 10 次工具调用');
+    expect(captured.message).toContain('整个 Research 的绝对总上限仍为 15 次');
+    expect(captured.message).toContain('额外授权 5 次');
     expect(captured.message).toContain('Marginal-gain stop');
+  });
+
+  it('uses a 10 + conditional 5 staged recovery budget instead of mechanically spending 15 calls', async () => {
+    const recoveryDecision = triageResearchCandidate({ seed });
+    const packet = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: seed.link },
+        output: { status: 'completed', url: seed.link, engine: 'scrapling', result: { title: seed.title, url: seed.link, text: 'InfoQ canonical body with concrete Agent engineering details and deployment context.' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'MCP stateless gateway independent verification' },
+        output: { query: 'MCP stateless gateway independent verification', results: [
+          { title: 'MCP 新规范取消会话：独立验证 stateless gateway', url: 'https://www.reuters.com/technology/mcp-stateless-gateway-verification/', content: 'MCP 新规范取消会话，并调整 stateless gateway 的会话与路由机制。', engine: 'bing', score: 0.7 },
+        ] },
+      },
+    ]), 10_000, seed);
+    const runtime: ResearchRuntimeReceipt = { toolCalls: 10, searchRequests: 5, crawlRequests: 5, failedToolCalls: 0 };
+    const extension = shouldExtendDigestResearch(packet, runtime, recoveryDecision);
+    expect(extension).toEqual(expect.objectContaining({
+      extend: true,
+      required: false,
+      reason: 'novel-evidence-candidate',
+      candidateUrls: ['https://www.reuters.com/technology/mcp-stateless-gateway-verification'],
+    }));
+
+    let capturedHeaders: Headers | undefined;
+    let captured: any;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers);
+      captured = JSON.parse(String(init?.body));
+      return jsonResponse({ jobId: 'job-recovery-extension', threadId: 'thread-recovery' }, 202);
+    }) as typeof fetch;
+    await dispatchResearchExtension(
+      'run-recovery', 'thread-recovery', seed, packet, recoveryDecision,
+      { reason: extension.reason, authorizedCandidateUrls: extension.candidateUrls }, config, fetchImpl,
+    );
+    expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('5');
+    expect(captured.message).toContain('最多再调用 5 次工具');
+    expect(captured.message).toContain('本段**只允许 crawl**');
+    expect(captured.message).toContain('Quote0 明确授权的候选 URL（白名单）');
+    expect(captured.message).toContain('https://www.reuters.com/technology/mcp-stateless-gateway-verification');
+    expect(captured.message).toContain('禁止自行替换 URL');
+    expect(captured.message).toContain('不机械耗尽 5 次');
   });
 
   it('uses a hard 3 + conditional 1 staged budget for universal digest research', async () => {
@@ -208,13 +254,14 @@ describe('research canary adapter', () => {
     captured = undefined;
     const extended = await dispatchResearchExtension(
       'run-digest', 'thread-digest', digestSeed, initialPacket, digestDecision,
-      { reason: extensionDecision.reason }, config, fetchImpl,
+      { reason: extensionDecision.reason, authorizedCandidateUrls: extensionDecision.candidateUrls }, config, fetchImpl,
     );
     expect(extended).toEqual({ jobId: 'job-digest', threadId: 'thread-digest' });
     expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('1');
     expect(captured.threadId).toBe('thread-digest');
     expect(captured.message).toContain('只额外授权 1 次工具调用');
     expect(captured.message).toContain('禁止新的 search');
+    expect(captured.message).toContain('https://independent.example/report');
 
     const enoughPacket = buildResearchEvidencePacket(phaseATurns([
       initialTools[0],
@@ -228,6 +275,48 @@ describe('research canary adapter', () => {
       extend: false,
       reason: 'coverage-sufficient',
     }));
+  });
+
+  it('reserves most of a crowded digest packet for real tool evidence instead of Ledger discovery metadata', () => {
+    const icelandSeed = {
+      title: 'Iceland rejects reopening talks on EU entry',
+      content: 'Article URL: https://www.ft.com/content/iceland-eu Comments URL: https://news.ycombinator.com/item?id=1 Points: 35 # Comments: 34',
+      source: 'Hacker News: Front Page',
+      link: 'https://www.ft.com/content/iceland-eu',
+      category: 'news',
+    };
+    const searchResults = Array.from({ length: 12 }, (_, index) => ({
+      title: `Iceland rejects reopening talks on EU entry independent report ${index}`,
+      url: `https://independent-${index}.example.com/world/iceland-eu-accession-referendum-${index}`,
+      content: 'Independent coverage of the Iceland EU accession referendum result, turnout and political background. '.repeat(4),
+      engine: 'anysearch',
+      score: 0.95 - index * 0.01,
+    }));
+    const ruvBody = `${'RÚV referendum background and coalition context. '.repeat(7)}The No side received 52.8% and the result halted plans to reopen EU accession negotiations.`;
+    const packet = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: icelandSeed.link },
+        output: { status: 'completed', url: icelandSeed.link, engine: 'stealth', result: { title: icelandSeed.title, url: icelandSeed.link, text: 'Financial Times canonical article about the referendum and EU accession talks. '.repeat(12) } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'Iceland EU referendum result reopening accession talks' },
+        output: { query: 'Iceland EU referendum result reopening accession talks', results: searchResults },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'Iceland EU accession referendum turnout result RUV' },
+        output: { query: 'Iceland EU accession referendum turnout result RUV', results: searchResults.slice().reverse() },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://www.ruv.is/english/iceland-rejects-eu-accession-talks' },
+        output: { status: 'completed', url: 'https://www.ruv.is/english/iceland-rejects-eu-accession-talks', engine: 'stealth', result: { title: 'Iceland rejects EU accession talks - RÚV.is', url: 'https://www.ruv.is/english/iceland-rejects-eu-accession-talks', text: ruvBody } },
+      },
+    ]), 5_000, icelandSeed);
+
+    const toolSectionStart = packet.indexOf('\n[EVIDENCE 1]');
+    expect(packet.length).toBeLessThanOrEqual(5_000);
+    expect(toolSectionStart).toBeGreaterThan(0);
+    expect(packet.length - toolSectionStart).toBeGreaterThanOrEqual(2_500);
+    expect(packet).toContain('52.8%');
   });
 
   it('rejects irrelevant scholarly search noise instead of spending the conditional fourth call', () => {
@@ -403,6 +492,37 @@ describe('research canary adapter', () => {
     )).toEqual([]);
 
     expect(researchExtensionOutcomeErrors(
+      stagedTurns([
+        { name: 'crawl', status: 'completed', input: { url: 'https://www.reuters.com/technology/authorized-report' }, output: { status: 'completed', url: 'https://www.reuters.com/technology/authorized-report' } },
+        { name: 'crawl', status: 'completed', input: { url: 'https://www.bbc.com/news/authorized-second' }, output: { status: 'completed', url: 'https://www.bbc.com/news/authorized-second' } },
+      ]),
+      'run-1',
+      seed,
+      {
+        reason: 'novel-evidence-candidate', required: false,
+        authorizedCandidateUrls: [
+          'https://www.reuters.com/technology/authorized-report',
+          'https://www.bbc.com/news/authorized-second',
+        ],
+        initialToolCalls: 10, extensionToolCalls: 5,
+      },
+    )).toEqual([]);
+
+    expect(researchExtensionOutcomeErrors(
+      stagedTurns([
+        { name: 'crawl', status: 'completed', input: { url: 'https://www.reuters.com/technology/authorized-report' }, output: { status: 'completed', url: 'https://www.reuters.com/technology/authorized-report' } },
+        { name: 'search', status: 'completed', input: { q: 'should not search again' }, output: { results: [] } },
+      ]),
+      'run-1',
+      seed,
+      {
+        reason: 'novel-evidence-candidate', required: false,
+        authorizedCandidateUrls: ['https://www.reuters.com/technology/authorized-report'],
+        initialToolCalls: 10, extensionToolCalls: 5,
+      },
+    ).join(' ')).toContain('只能执行 crawl');
+
+    expect(researchExtensionOutcomeErrors(
       stagedTurns([{ name: 'crawl', status: 'completed', input: { url: seed.link }, output: { status: 'completed', url: seed.link } }]),
       'run-1',
       seed,
@@ -412,8 +532,9 @@ describe('research canary adapter', () => {
 
   it('treats completed+empty with successful tool evidence as research_complete, not invalid', async () => {
     const tools = [
-      { name: 'crawl', status: 'completed', input: { url: seed.link }, output: { content: 'InfoQ seed evidence' } },
-      { name: 'crawl', status: 'completed', input: { url: 'https://modelcontextprotocol.io/spec' }, output: { content: 'Official MCP evidence' } },
+      { name: 'crawl', status: 'completed', input: { url: seed.link }, output: { content: 'InfoQ seed evidence describes the MCP session change.' } },
+      { name: 'search', status: 'completed', input: { q: 'MCP session change provenance' }, output: { results: [] } },
+      { name: 'crawl', status: 'completed', input: { url: 'https://modelcontextprotocol.io/spec' }, output: { content: 'Official MCP evidence confirms the protocol session and routing change.' } },
     ];
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -427,8 +548,8 @@ describe('research canary adapter', () => {
     }, config, fetchImpl);
 
     expect(result.status).toBe('research_complete');
-    expect(result.runtime).toEqual(phaseARuntime);
-    expect(result.phaseRuntime).toEqual(phaseARuntime);
+    expect(result.runtime).toEqual({ toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 });
+    expect(result.phaseRuntime).toEqual({ toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 });
     expect(result.evidencePacket).toContain(`version=${RESEARCH_EVIDENCE_PACKET_VERSION}`);
     expect(result.evidencePacket).toContain('Official MCP evidence');
   });
@@ -519,8 +640,8 @@ describe('research canary adapter', () => {
       { reason: extensionDecision.reason }, config, extensionFetch,
     );
     expect(capturedHeaders?.get('x-straylight-max-tool-calls')).toBe('1');
-    expect(captured.message).toContain('唯一一次工具调用**必须是 targeted search**');
-    expect(captured.message).toContain('禁止 crawl/browser');
+    expect(captured.message).toContain('第 1 次工具调用**必须是 targeted search**');
+    expect(captured.message).toContain('若还有扩展额度，只允许 crawl 这次 search 新发现的高价值候选');
   });
 
   it('treats a failed search as missing minimum coverage and requires a successful repair', async () => {
@@ -598,6 +719,45 @@ describe('research canary adapter', () => {
       required: true,
       reason: 'minimum-evidence-repair',
     }));
+  });
+
+  it('rejects the real 366356 empty/JavaScript shell crawl shapes while retaining substantive evidence', () => {
+    const harnessSeed = {
+      title: 'AI Coding 之后，如何让 Agent 进入企业研发全链路？得物推荐的 Harness 实践',
+      content: '点击查看原文>',
+      source: 'InfoQ',
+      link: 'https://www.infoq.cn/article/sDyQxrWR6zDPJuLX4FA8',
+      category: 'news',
+    };
+    const toutiao = 'https://www.toutiao.com/article/7657063975737164330';
+    const packet = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: harnessSeed.link },
+        output: { status: 'completed', url: harnessSeed.link, engine: 'scrapling', result: {
+          title: harnessSeed.title,
+          url: harnessSeed.link,
+          body: '得物在 AICon 上海分享 AI Harness 工程实践，讨论如何把 Agent 从代码生成扩展到研发流程中的规划、验证和交付环节。',
+        } },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${toutiao}/` },
+        output: { status: 'completed', url: `${toutiao}/`, engine: 'scrapling', result: {
+          title: '', url: `${toutiao}/`,
+          body: JSON.stringify({ formatted: '', format: 'markdown', title: '', text: '', url: `${toutiao}/` }),
+        } },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: `${toutiao}/` },
+        output: { status: 'completed', url: `${toutiao}/`, engine: 'playwright', result: {
+          title: '今日头条', url: `${toutiao}/`, body: '# 今日头条\n\n今日头条\n您需要允许该网站执行 JavaScript',
+        } },
+      },
+    ]), 10_000, harnessSeed);
+    const ledger = JSON.parse((packet.split('\n').find((line) => line.startsWith('ledger=')) || 'ledger={}').slice(7));
+    expect(ledger.entries).toHaveLength(1);
+    expect(ledger.entries[0].canonicalUrl).toBe(harnessSeed.link);
+    expect(ledger.entries.some((entry: any) => entry.canonicalUrl.includes('toutiao.com'))).toBe(false);
+    expect(ledger.toolSummary.successfulCrawlRequests).toBe(3);
   });
 
   it('allows universal digest to advance once targeted search evidence is present', async () => {
@@ -778,12 +938,13 @@ describe('research canary adapter', () => {
     expect(result.policyViolation).toBe(false);
     expect(result.artifact?.title).toBe('MCP新规范取消会话');
     expect(result.artifact?.message).toBe('MCP新规范取消协议会话和初始化握手；请求新增Mcp-Method与Mcp-Name标头，网关可据此路由和限流。');
-    expect(result.artifact?.source).toBe('modelcontextprotocol.io');
+    expect(result.artifact?.source).toBe('InfoQ 中文');
     expect(result.artifact?.highlights).toBeUndefined();
     expect(result.artifact?.metadata?.researchArtifactOwnership).toBe('quote0-server/v1');
     expect(result.artifact?.publishTime).toBe('2026-08-17T00:00:00.000Z');
     expect(result.artifact?.metadata?.publishTimeSource).toBe('seed');
     expect(result.artifact?.metadata?.researchReceipt?.threadId).toBe('phase-a-thread');
+    expect(result.artifact?.metadata?.researchReceipt?.seed?.sourceId).toBe('infoq-cn');
     expect(result.artifact?.metadata?.researchReceipt?.seed?.publishTime).toBe('2026-08-17T00:00:00.000Z');
     expect(result.artifact?.metadata?.researchReceipt?.sources).toEqual([
       expect.objectContaining({ id: 'E1', url: 'https://modelcontextprotocol.io/example', role: 'secondary' }),
@@ -792,10 +953,208 @@ describe('research canary adapter', () => {
       { text: 'MCP新规范取消协议会话和初始化握手', sourceIds: ['E1'], status: 'supported' },
       { text: '请求新增Mcp-Method与Mcp-Name标头，网关可据此路由和限流', sourceIds: ['E1'], status: 'supported' },
     ]);
+    expect(result.artifact?.metadata?.displayProvenance).toEqual(expect.objectContaining({
+      schemaVersion: 'quote0-display-provenance/v1',
+      publisher: expect.objectContaining({ label: 'InfoQ 中文', derivedFrom: 'rss-registry' }),
+      research: expect.objectContaining({ agent: 'neuromancer', evidenceSourceCount: 1 }),
+    }));
     expect(result.artifact?.metadata?.researchReceipt?.usage?.providerReportedTokens).toEqual({
       status: 'reported', input: 100, output: 40, total: 140, cacheRead: 5,
     });
     expect(result.artifact?.metadata?.researchReceipt?.usage?.llmCalls).toBe(2);
+  });
+
+  it('fails closed when a digest finalizer only translates or restates the headline', () => {
+    const icelandSeed = {
+      title: 'Iceland rejects reopening talks on EU entry',
+      content: 'Article URL: https://www.ft.com/content/iceland-eu Comments URL: https://news.ycombinator.com/item?id=1 Points: 35 # Comments: 34',
+      source: 'Hacker News: Front Page',
+      link: 'https://www.ft.com/content/iceland-eu',
+      category: 'news',
+    };
+    const digestDecision = triageResearchCandidate({ seed: icelandSeed, universal: true });
+    const evidencePacket = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: icelandSeed.link },
+        output: { status: 'completed', url: icelandSeed.link, engine: 'stealth', result: { title: icelandSeed.title, url: icelandSeed.link, text: 'The referendum rejected reopening EU accession talks.' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'Iceland EU referendum result RUV' },
+        output: { query: 'Iceland EU referendum result RUV', results: [{ title: 'Iceland rejects EU accession talks', url: 'https://www.ruv.is/english/iceland-eu', content: 'Referendum result and turnout', engine: 'anysearch', score: 0.9 }] },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://www.ruv.is/english/iceland-eu' },
+        output: { status: 'completed', url: 'https://www.ruv.is/english/iceland-eu', engine: 'stealth', result: { title: 'Iceland rejects EU accession talks', url: 'https://www.ruv.is/english/iceland-eu', text: 'The No side won 52.8%; the government will not reopen accession talks.' } },
+      },
+    ]), 5_000, icelandSeed);
+
+    expect(digestDecision.researchMode).toBe('digest');
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-iceland-title-only',
+      phaseAThreadId: 'phase-a-thread',
+      seed: icelandSeed,
+      evidencePacket,
+      decision: digestDecision,
+      runtime: { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 },
+      finalization: {
+        candidate: {
+          titleCandidates: ['冰岛拒绝重启入欧谈判', '冰岛否决重启入欧谈判', '冰岛拒绝恢复入欧谈判'],
+          facts: [{ text: '冰岛拒绝重启加入欧盟的谈判', evidenceIds: ['E1', 'E3'] }],
+          linkEvidenceId: 'E3',
+        },
+        telemetry: {
+          mode: 'structured-inference', providerId: 'local-qwen', model: 'qwen3.8-27b', latencyMs: 900, attempt: 1,
+        },
+      },
+    });
+
+    expect(result.artifact).toBeUndefined();
+    expect(result.policyViolation).toBe(false);
+    expect(result.errors.join(' ')).toContain('facts 至少 2 项');
+  });
+
+  it('still rejects a digest that pads the headline into two equivalent facts', () => {
+    const icelandSeed = {
+      title: 'Iceland rejects reopening talks on EU entry',
+      content: 'Referendum coverage with independent evidence.',
+      source: 'Hacker News: Front Page',
+      link: 'https://www.ft.com/content/iceland-eu',
+      category: 'news',
+    };
+    const digestDecision = triageResearchCandidate({ seed: icelandSeed, universal: true });
+    const evidencePacket = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: icelandSeed.link },
+        output: { status: 'completed', url: icelandSeed.link, result: { title: icelandSeed.title, url: icelandSeed.link, text: 'Canonical evidence.' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'Iceland EU accession referendum result' },
+        output: { query: 'Iceland EU accession referendum result', results: [{ title: 'Iceland rejects EU accession talks', url: 'https://www.ruv.is/english/iceland-eu', content: 'Independent result coverage', engine: 'anysearch', score: 0.9 }] },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://www.ruv.is/english/iceland-eu' },
+        output: { status: 'completed', url: 'https://www.ruv.is/english/iceland-eu', result: { title: 'Iceland rejects EU accession talks', url: 'https://www.ruv.is/english/iceland-eu', text: 'Independent evidence.' } },
+      },
+    ]), 5_000, icelandSeed);
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-iceland-double-restatement',
+      phaseAThreadId: 'phase-a-thread',
+      seed: icelandSeed,
+      evidencePacket,
+      decision: digestDecision,
+      runtime: { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 },
+      finalization: {
+        candidate: {
+          titleCandidates: ['冰岛拒绝重启入欧谈判', '冰岛否决恢复入欧谈判', '冰岛拒绝恢复入欧谈判'],
+          facts: [
+            { text: '冰岛拒绝重启加入欧盟谈判', evidenceIds: ['E1', 'E3'] },
+            { text: '冰岛拒绝恢复入欧谈判', evidenceIds: ['E1', 'E3'] },
+          ],
+          linkEvidenceId: 'E3',
+        },
+        telemetry: {
+          mode: 'structured-inference', providerId: 'local-qwen', model: 'qwen3.8-27b', latencyMs: 900, attempt: 2,
+        },
+      },
+    });
+
+    expect(result.artifact).toBeUndefined();
+    expect(result.errors.join(' ')).toContain('Research 信息增益不足');
+  });
+
+  it('rejects a headline that drifts to a different evidence topic than the selected facts', () => {
+    const reportSeed = {
+      title: 'InfoQ 2026 年云计算与 DevOps 趋势报告',
+      content: '点击查看原文>',
+      source: 'InfoQ',
+      link: 'https://www.infoq.cn/article/cloud-devops-2026',
+      category: 'news',
+    };
+    const recoveryDecision = triageResearchCandidate({ seed: reportSeed, universal: true });
+    const evidencePacket = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: reportSeed.link },
+        output: { status: 'completed', url: reportSeed.link, result: { title: reportSeed.title, url: reportSeed.link, text: 'InfoQ发布2026年云计算与DevOps趋势报告，面向软件架构师总结年度技术变化。' } },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://www.linuxfoundation.org/press/aaif' },
+        output: { status: 'completed', url: 'https://www.linuxfoundation.org/press/aaif', result: { title: 'Linux Foundation announces AAIF', url: 'https://www.linuxfoundation.org/press/aaif', text: 'Linux基金会成立Agentic AI基金会，并接收MCP、goose和AGENTS.md等项目贡献。' } },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://www.thousandeyes.com/blog/aws-outage' },
+        output: { status: 'completed', url: 'https://www.thousandeyes.com/blog/aws-outage', result: { title: 'AWS outage analysis', url: 'https://www.thousandeyes.com/blog/aws-outage', text: 'AWS us-east-1故障导致多个网站服务中断。' } },
+      },
+    ]), 8_000, reportSeed);
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-cross-topic-title',
+      phaseAThreadId: 'phase-a-thread',
+      seed: reportSeed,
+      evidencePacket,
+      decision: recoveryDecision,
+      runtime: { toolCalls: 3, searchRequests: 0, crawlRequests: 3, failedToolCalls: 0 },
+      finalization: {
+        candidate: {
+          titleCandidates: ['AWS美东1区故障致多网站宕机', 'AWS云故障波及多站点', '美东AWS故障引发服务中断'],
+          facts: [
+            { text: 'InfoQ发布了2026年云计算与DevOps趋势报告，旨在为软件架构师提供年度技术洞察', evidenceIds: ['E1'] },
+            { text: 'Linux基金会宣布成立Agentic AI基金会，并接收MCP、goose和AGENTS.md等项目贡献', evidenceIds: ['E2'] },
+          ],
+          linkEvidenceId: 'E1',
+        },
+        telemetry: {
+          mode: 'structured-inference', providerId: 'local-qwen', model: 'qwen3.8-27b', latencyMs: 900, attempt: 1,
+        },
+      },
+    });
+
+    expect(recoveryDecision.researchMode).toBe('recovery');
+    expect(result.artifact).toBeUndefined();
+    expect(result.policyViolation).toBe(false);
+    expect(result.errors.join(' ')).toContain('标题不能从 Evidence Packet 的其他话题漂移');
+  });
+
+  it('rejects a universal enrichment card that still collapses to one sparse fact', () => {
+    const benqSeed = {
+      title: '屏幕之外，桌面之上：走过十年，明基探索了一束光的更多可能',
+      content: '明基回顾其照明产品十年发展历程。',
+      source: '少数派',
+      link: 'https://sspai.com/post/benq-light-ten-years',
+      category: 'news',
+    };
+    const enrichmentDecision = triageResearchCandidate({ seed: benqSeed, universal: true });
+    const evidencePacket = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: benqSeed.link },
+        output: { status: 'completed', url: benqSeed.link, result: { title: benqSeed.title, url: benqSeed.link, text: '明基在走过十年的发展历程中，持续探索屏幕之外、桌面之上的一束光的更多可能性。' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: '明基 一束光 十年 照明' },
+        output: { query: '明基 一束光 十年 照明', results: [] },
+      },
+    ]), 6_000, benqSeed);
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-benq-sparse',
+      phaseAThreadId: 'phase-a-thread',
+      seed: benqSeed,
+      evidencePacket,
+      decision: enrichmentDecision,
+      runtime: { toolCalls: 2, searchRequests: 1, crawlRequests: 1, failedToolCalls: 0 },
+      finalization: {
+        candidate: {
+          titleCandidates: ['明基十年深耕一束光应用', '明基探索桌面照明十年', '明基回顾十年照明实践'],
+          facts: [{ text: '明基在走过十年的发展历程中，持续探索屏幕之外、桌面之上的一束光的更多可能性', evidenceIds: ['E1'] }],
+          linkEvidenceId: 'E1',
+        },
+        telemetry: {
+          mode: 'structured-inference', providerId: 'local-qwen', model: 'qwen3.8-27b', latencyMs: 900, attempt: 1,
+        },
+      },
+    });
+
+    expect(enrichmentDecision.researchMode).toBe('enrichment');
+    expect(result.artifact).toBeUndefined();
+    expect(result.policyViolation).toBe(false);
+    expect(result.errors.join(' ')).toContain('Universal Research 不能退化成单条事实');
   });
 
   it('skips an over-capacity fact as a whole instead of truncating a sentence', () => {
@@ -966,12 +1325,14 @@ describe('research canary adapter', () => {
     expect(result.errors.join(' ')).toContain('11 > 10');
   });
 
-  it('fails closed when a recovery artifact exceeds its five-source/five-claim cap', async () => {
+  it('fails closed when a recovery artifact exceeds its seven-source/five-claim cap', async () => {
     const candidate = validCandidate() as any;
     candidate.metadata.researchReceipt.sources.push(
       { id: 'extra1', url: 'https://example.com/extra1', role: 'secondary' },
       { id: 'extra2', url: 'https://example.com/extra2', role: 'secondary' },
       { id: 'extra3', url: 'https://example.com/extra3', role: 'secondary' },
+      { id: 'extra4', url: 'https://example.com/extra4', role: 'secondary' },
+      { id: 'extra5', url: 'https://example.com/extra5', role: 'secondary' },
     );
     candidate.metadata.researchReceipt.claims.push(
       { text: 'claim-3', sourceIds: ['official'], status: 'supported' },

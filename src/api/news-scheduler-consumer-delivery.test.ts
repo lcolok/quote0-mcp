@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS } from './research-triage.js';
 
 // ---- 可编排的 enqueue 结果 ----
 let nextEnqueueResult: any = null;
@@ -150,6 +151,8 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
     expect(readySelect?.sql).toContain("<> 'hold'");
     expect(readySelect?.sql).toContain('researchGate');
     expect(readySelect?.sql).toContain("->>'state' = 'ready'");
+    expect(readySelect?.sql).toContain("->>'researchPolicyVersion' = ANY($2::text[])");
+    expect(readySelect?.params).toEqual([24, [...RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS]]);
 
     // inventory 推进语义与 Phase 0 完全一致（SQL 未改动）
     const updates = inventoryUpdateQueries();
@@ -176,10 +179,15 @@ describe('runConsumerJob — Phase 1 只登记 delivery，不物理推送', () =
       && /source_last_pushed_at/i.test(q.sql),
     );
     expect(fallbackSelect).toBeDefined();
-    expect(fallbackSelect?.sql).toContain('MAX(ci.last_pushed_at) OVER (PARTITION BY ci.source)');
+    expect(fallbackSelect?.sql).toContain('freshness_tier');
+    expect(fallbackSelect?.sql).toContain('replay_budget_tier');
+    expect(fallbackSelect?.sql).toContain('PARTITION BY ci.source');
+    expect(fallbackSelect?.sql).toContain('ranked.freshness_tier ASC');
+    expect(fallbackSelect?.sql).toContain('ranked.replay_budget_tier ASC');
     expect(fallbackSelect?.sql).toContain('ranked.source_last_pushed_at ASC NULLS FIRST');
     expect(fallbackSelect?.sql).toContain('ranked.last_pushed_at ASC NULLS FIRST');
-    expect(fallbackSelect?.params).toEqual([24]);
+    expect(fallbackSelect?.sql).toContain("->>'researchPolicyVersion' = ANY($2::text[])");
+    expect(fallbackSelect?.params).toEqual([24, [...RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS], 6]);
     expect(enqueueMock).not.toHaveBeenCalled();
     expect(historyUpdates[0]?.pushReason).toBe('inventory_empty');
   });

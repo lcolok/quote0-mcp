@@ -12,7 +12,7 @@ import {
   RESEARCH_CANARY_MODE,
   researchCanaryFingerprint,
   researchCanaryIdempotencyKey,
-  shouldExtendDigestResearch,
+  shouldExtendResearch,
 } from './research-canary.js';
 import {
   createResearchRun,
@@ -491,7 +491,7 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
       validationErrors: inspection.errors,
     });
 
-    const extensionDecision = shouldExtendDigestResearch(
+    const extensionDecision = shouldExtendResearch(
       inspection.evidencePacket,
       inspection.runtime,
       run.triage,
@@ -504,7 +504,10 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
           run.inputSnapshot,
           inspection.evidencePacket,
           run.triage,
-          { reason: extensionDecision.reason },
+          {
+            reason: extensionDecision.reason,
+            authorizedCandidateUrls: extensionDecision.candidateUrls,
+          },
         );
         const updated = await markResearchRunResearchExtended(
           postgres,

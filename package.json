@@ -21,6 +21,7 @@
     "test:gate": "bun run test:unit && bun run build",
     "test:all": "bun run test:unit && bun run test:integration && bun run build",
     "quality:synthetic-eval": "bun scripts/run-neuromancer-synthetic-evaluation.ts",
+    "quality:research-corpus": "bun scripts/replay-qwen-research-corpus.ts",
     "image:send": "node dist/image-sender/interfaces/cli/cli-main.js send",
     "image:preview": "node dist/image-sender/interfaces/cli/cli-main.js preview",
     "image:mono": "node dist/image-sender/interfaces/cli/cli-main.js mono",

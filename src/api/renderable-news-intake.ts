@@ -17,6 +17,7 @@ export interface NeuromancerResearchReceipt {
   seed?: {
     title: string;
     content?: string;
+    sourceId?: string;
     source?: string;
     link?: string;
     publishTime?: string;
@@ -288,17 +289,20 @@ function validateResearchReceipt(value: unknown, errors: string[]): NeuromancerR
     } else {
       const title = cleanString(value.seed.title);
       const content = cleanString(value.seed.content);
+      const sourceId = cleanString(value.seed.sourceId);
       const source = cleanString(value.seed.source);
       const link = cleanString(value.seed.link);
       const publishTime = cleanString(value.seed.publishTime);
       if (!title || title.length > 240) errors.push('metadata.researchReceipt.seed.title 无效');
       if (content.length > 1_000) errors.push('metadata.researchReceipt.seed.content 过长（最多 1000 字符）');
+      if (sourceId.length > 80) errors.push('metadata.researchReceipt.seed.sourceId 过长');
       if (source.length > 120) errors.push('metadata.researchReceipt.seed.source 过长');
       if (link && !validateHttpUrl(link)) errors.push('metadata.researchReceipt.seed.link 必须是 http/https URL');
       if (publishTime && Number.isNaN(Date.parse(publishTime))) errors.push('metadata.researchReceipt.seed.publishTime 必须是合法时间');
       seed = {
         title,
         ...(content ? { content } : {}),
+        ...(sourceId ? { sourceId } : {}),
         ...(source ? { source } : {}),
         ...(link ? { link } : {}),
         ...(publishTime ? { publishTime: new Date(publishTime).toISOString() } : {}),

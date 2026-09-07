@@ -23,7 +23,9 @@ describe('Neuromancer research prompts', () => {
     expect(prompt).toContain('Phase A：只负责检索和事实核验');
     expect(prompt).toContain('研究模式：recovery');
     expect(prompt).toContain('最多 10 次工具调用');
-    expect(prompt).toContain('seed 之外最多形成 4 个高价值来源制品');
+    expect(prompt).toContain('seed 之外最多形成 6 个高价值来源制品');
+    expect(prompt).toContain('绝对总上限仍为 15 次');
+    expect(prompt).toContain('额外授权 5 次');
     expect(prompt).toContain('目标独立来源簇至少 2 个');
     expect(prompt).toContain('Canonical');
     expect(prompt).toContain('Provenance');
@@ -89,7 +91,7 @@ describe('Neuromancer research prompts', () => {
     expect(prompt).toContain(`version=${EINK_NEWS_FEW_SHOT_VERSION}`);
     expect(prompt).toContain('不要编造 usage/token 数值');
     expect(prompt).toContain('单行紧凑 JSON');
-    expect(prompt).toContain('sources 总数最多 5');
+    expect(prompt).toContain('sources 总数最多 7');
     expect(prompt).toContain('claims 最多 5');
     expect(prompt).toContain('同一转载链不能当多源确认');
     expect(prompt).toContain('冲突/过时信息');

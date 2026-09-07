@@ -1242,6 +1242,7 @@ app.get('/api/scheduler/push-history', async (c) => {
       ), deduped AS (
         SELECT DISTINCT ON (fingerprint)
           log.id,
+          log.fingerprint,
           log.raw_content,
           log.processed_content,
           log.image_path,
@@ -1255,6 +1256,7 @@ app.get('/api/scheduler/push-history', async (c) => {
       ), without_fingerprint AS (
         SELECT
           id,
+          NULL::text AS fingerprint,
           raw_content,
           processed_content,
           image_path,
@@ -1303,6 +1305,7 @@ app.get('/api/scheduler/push-history', async (c) => {
       const pushedAtLocal = pushedAtUtcDate ? formatToChinaTime(pushedAtUtcDate) : null;
       return {
         id: row.id,
+        fingerprint: row.fingerprint || null,
         title: row.processed_content?.title || row.raw_content?.title || '未知标题',
         originalTitle: row.raw_content?.title,
         summary: row.processed_content?.message || row.raw_content?.description,

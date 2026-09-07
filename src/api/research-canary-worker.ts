@@ -112,7 +112,8 @@ export function inventoryRowToResearchSeed(row: InventoryResearchRow): ResearchS
   const title = cleanString(raw.title) || cleanString(row.title);
   if (!title) return undefined;
   const content = cleanString(raw.content) || cleanString(raw.description);
-  const source = cleanString(raw.source) || cleanString(row.source);
+  const sourceId = cleanString(row.source);
+  const source = cleanString(raw.source) || sourceId;
   const link = cleanString(raw.link) || cleanString(row.link);
   const category = cleanString(raw.category) || cleanString(row.category) || 'news';
   const publishTimeRaw = cleanString(raw.publishTime);
@@ -122,6 +123,7 @@ export function inventoryRowToResearchSeed(row: InventoryResearchRow): ResearchS
   return {
     title,
     ...(content ? { content } : {}),
+    ...(sourceId ? { sourceId } : {}),
     ...(source ? { source } : {}),
     ...(link ? { link } : {}),
     category,

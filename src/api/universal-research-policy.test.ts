@@ -75,7 +75,7 @@ describe('universal evidence research policy', () => {
       metadata: { researchReceipt: { claims: [] } },
     } as any, {
       id: 'run-1',
-      triage: { researchMode: 'digest' } as any,
+      triage: { researchMode: 'digest', policyVersion: RESEARCH_TRIAGE_POLICY_VERSION } as any,
       runtimeReceipt: { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 },
       evidenceSnapshot: 'evidence',
       completedAt: '2026-08-21T00:01:00.000Z',
@@ -85,6 +85,7 @@ describe('universal evidence research policy', () => {
       state: 'ready',
       researchRunId: 'run-1',
       researchMode: 'digest',
+      researchPolicyVersion: RESEARCH_TRIAGE_POLICY_VERSION,
       toolCalls: 3,
       evidenceChars: 8,
     }));

@@ -35,6 +35,7 @@ import {
 } from './delivery-attempt-store.js';
 import { enqueueDeviceHealthTransition } from './device-health-alerts.js';
 import { readDeliveryPngPayload } from './delivery-payload-store.js';
+import { buildServerOwnedDisplayProvenance } from './news-display-provenance.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
 const TICK_MS = 5000;
@@ -412,19 +413,45 @@ export async function loadContent(contentId: number): Promise<any> {
   return buildRenderableFromInventory(item);
 }
 
-/** 纯映射：inventory 行 → RenderableDataItem。与 consumer 原有映射逐字段一致。 */
+/** 纯映射：inventory 行 → RenderableDataItem。Research provenance 在这里补成服务器 SSoT，兼容已有 v12 库存。 */
 export function buildRenderableFromInventory(item: any): any {
   const raw = item.raw_content || {};
   const processed = item.processed_content || {};
+  const metadata = processed.metadata && typeof processed.metadata === 'object' && !Array.isArray(processed.metadata)
+    ? { ...processed.metadata }
+    : {};
+  const receipt = metadata.researchReceipt && typeof metadata.researchReceipt === 'object' && !Array.isArray(metadata.researchReceipt)
+    ? metadata.researchReceipt as Record<string, any>
+    : undefined;
+  const isNeuromancer = String(receipt?.agent || '').toLowerCase() === 'neuromancer'
+    || processed.signature === '神经漫游者';
+  const existingProvenance = metadata.displayProvenance && typeof metadata.displayProvenance === 'object' && !Array.isArray(metadata.displayProvenance)
+    ? metadata.displayProvenance
+    : undefined;
+  const displayProvenance = existingProvenance || (isNeuromancer
+    ? buildServerOwnedDisplayProvenance({
+        sourceId: item.source || receipt?.seed?.sourceId,
+        seedSource: receipt?.seed?.source || raw.source,
+        seedLink: receipt?.seed?.link || raw.link || item.link,
+        evidenceSources: Array.isArray(receipt?.sources) ? receipt.sources : [],
+        research: {
+          policyVersion: metadata.researchGate?.researchPolicyVersion,
+          runId: receipt?.runId || metadata.researchGate?.researchRunId,
+        },
+      })
+    : undefined);
+  if (displayProvenance) metadata.displayProvenance = displayProvenance;
+
   return {
     id: String(item.id),
     title: processed.title || item.title || raw.title || '未知标题',
     message: processed.message || processed.summary || raw.description || raw.content || '',
     signature: processed.signature || 'RSS智能',
-    source: processed.source || item.source || raw.source || 'unknown',
+    source: displayProvenance?.publisher?.label || processed.source || item.source || raw.source || 'unknown',
     publishTime: processed.publishTime || raw.publishTime || new Date().toISOString(),
     category: processed.category || item.category || raw.category || '新闻',
     link: processed.link || item.link || raw.link,
+    ...(Object.keys(metadata).length ? { metadata } : {}),
   };
 }
 

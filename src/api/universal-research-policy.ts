@@ -99,6 +99,7 @@ export function markUniversalResearchReady(
         required: true,
         state: 'ready',
         researchRunId: run.id,
+        researchPolicyVersion: run.triage.policyVersion,
         ...(run.triage.researchMode ? { researchMode: run.triage.researchMode } : {}),
         completedAt: run.completedAt || now.toISOString(),
         ...(run.runtimeReceipt ? { toolCalls: run.runtimeReceipt.toolCalls } : {}),

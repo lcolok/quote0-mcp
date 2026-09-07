@@ -194,22 +194,28 @@ export function buildNeuromancerResearchExtensionPrompt(
   evidencePacket: string,
   decision: ResearchTriageDecision,
   runId: string,
-  plan: { reason?: string } = {},
+  plan: { reason?: string; authorizedCandidateUrls?: string[] } = {},
 ): string {
   const extension = decision.budget?.extensionToolCalls ?? 0;
-  if (decision.researchMode !== 'digest' || extension < 1) {
-    throw new Error('只有 staged digest 才能构建 Research extension prompt');
+  if ((decision.researchMode !== 'digest' && decision.researchMode !== 'recovery') || extension < 1) {
+    throw new Error('只有 staged digest/recovery 才能构建 Research extension prompt');
   }
   const reason = plan.reason || 'novel-evidence-candidate';
+  const authorizedCandidateUrls = [...new Set((plan.authorizedCandidateUrls || []).map((url) => url.trim()).filter(Boolean))];
+  const authorizedSection = reason === 'novel-evidence-candidate'
+    ? `\n- **Quote0 明确授权的候选 URL（白名单）**：\n${authorizedCandidateUrls.length
+        ? authorizedCandidateUrls.map((url) => `  - ${url}`).join('\n')
+        : '  - （无；不得调用任何工具）'}\n- 只能 crawl 上述白名单 URL；Evidence Packet 中其它 searchCandidates 即使相关也没有本段 capability，禁止自行替换 URL。`
+    : '';
   const actionContract = reason === 'minimum-search-repair'
-    ? `本次扩展是**最低覆盖修复**：第一段没有完成 mandatory freshness/provenance search。\n- 这唯一一次工具调用**必须是 targeted search**，禁止 crawl/browser。\n- 查询必须围绕 Seed 的核心实体/事件 + provenance/freshness，避免宽泛搜索；搜索结果仅作为线索，本次不把未 crawl 的结果升级成 supported evidence。`
+    ? `本次扩展是**最低覆盖修复**：第一段没有完成 mandatory freshness/provenance search。\n- 第 1 次工具调用**必须是 targeted search**。\n- 查询必须围绕 Seed 的核心实体/事件 + provenance/freshness，避免宽泛搜索；搜索结果仅作为线索。\n- 若还有扩展额度，只允许 crawl 这次 search 新发现的高价值候选；没有高质量候选就立即结束。`
     : reason === 'minimum-evidence-repair'
-      ? `本次扩展是**最低证据修复**：第一段尚未获得任何 support-eligible crawl。\n- 这唯一一次工具调用**必须是 crawl**，禁止新的 search。\n- 优先恢复 Seed canonical/primary 页面；若同一 URL 的某引擎已失败，可换已知可用引擎重试，但不要改去无关页面。`
-      : `本次扩展是**边际信息增益**：最低覆盖已满足，但仍缺一个高价值独立证据簇。\n- 这唯一一次工具调用应是 **crawl**，禁止新的 search。\n- 只从第一段 search 已发现但尚未 crawl 的候选中，选择与 Seed 核心事件真正相关、能增加独立 provenance cluster、primary/official 证据或解决冲突的最高信息增益 URL。\n- 若候选明显无关、重复、低价值或只是搜索噪声，可以不调用工具直接结束；绝不要为了“第二域”而抓取不相关页面。`;
+      ? `本次扩展是**最低证据修复**：第一段尚未获得任何 support-eligible crawl。\n- 第 1 次工具调用**必须是 crawl Seed canonical/primary**。\n- 若还有扩展额度，只围绕同一核心事件做一次 targeted search，并 crawl 其中最高价值的 primary/official/independent 候选；禁止泛搜。`
+      : `本次扩展是**边际信息增益**：第一段已经完成最低覆盖，但 Quote0 deterministic gate 已筛出少量高相关、尚未 crawl 的候选。\n- 本段**只允许 crawl**，禁止新的 search/browser 探索。${authorizedSection}\n- 每次 crawl 后重新判断边际增益；若剩余白名单候选只是重复、空壳或低价值页面，立即停止，不机械耗尽 ${extension} 次。`;
   return `你是“神经漫游者”。这是 Quote0 bounded research run=${runId} 的 Phase A 条件扩展段。第一段已经结束；Quote0 deterministic gate 的扩展原因是 ${reason}，因此只额外授权 ${extension} 次工具调用。
 
 这是硬预算扩展，不是重新研究：
-- **只允许再调用 ${extension} 次工具**，严禁并行；不要重新执行第一段已经成功完成的动作。
+- **最多再调用 ${extension} 次工具**，严禁并行；这是上限不是配额，不要重新执行第一段已经成功完成的动作。
 - Evidence Packet 顶部 Ledger 是当前已确认可支持证据；search snippet 永远只是候选线索。
 ${actionContract}
 - 这段仍然不写新闻、不生成最终 JSON、不向用户提问。
@@ -239,8 +245,8 @@ export function buildNeuromancerServerOwnedEditorialPrompt(
 这一步只做编辑决策，不生成完整新闻 artifact。Quote0 服务器会自行生成 researchReceipt、sources、source、highlights、signature、category、publishTime、usage、run/thread id 与 retrieval telemetry。你禁止输出 URL、publishTime、source role、claim status 或任何 ledger 中不存在的证据。
 
 输出语义：
-- titleCandidates：恰好 3 个不同的紧凑中文标题候选，按优先级排序；保留关键实体/动作/数字，优先 <=22 display units，必要时 <=28。
-- facts：1~${decision.budget?.maxPublishableClaims ?? 4} 条按信息增益排序的完整事实句。每条 text 必须是一句可以独立放进新闻卡片的完整中文句子，不写半句，不写来源列表；evidenceIds 只能引用 Ledger 中 supportEligible=true 的 E 编号。Quote0 会按真实 display units 逐句装箱，放不下的整句会被丢弃，所以最重要事实放最前。
+- titleCandidates：恰好 3 个不同的紧凑中文标题候选，按优先级排序；**每个标题都必须是 facts 中某条高优先事实的紧凑摘要，必须共享同一核心事件/实体，禁止从 Evidence Packet 的其他段落另挑一个“更吸睛”的话题当标题**；保留关键实体/动作/数字，优先 <=22 display units，必要时 <=28。
+- facts：${decision.reasons.includes('universal-evidence') ? '至少 2 条、最多' : '1~'}${decision.budget?.maxPublishableClaims ?? 4} 条按信息增益排序、互不重复的完整事实句。每条 text 必须是一句可以独立放进新闻卡片的完整中文句子，不写半句，不写来源列表；evidenceIds 只能引用 Ledger 中 supportEligible=true 的 E 编号。**正文禁止只是标题的翻译、扩写或同义复述**；至少保留证据支持的数字、时间线、背景、因果、影响或后续行动之一。Quote0 会按真实 display units 逐句装箱，放不下的整句会被丢弃，所以最重要事实放最前。
 - linkEvidenceId：选择最适合继续阅读的一个 Ledger E 编号，优先 canonical/primary/official 对应页面。
 
 Direct Draft 只是编辑参考，不是证据；任何事实必须由 Ledger E 编号支撑：

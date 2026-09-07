@@ -17,7 +17,9 @@ import {
   buildNeuromancerServerOwnedEditorialPrompt,
   type NeuromancerEditorialDraft,
 } from './research-few-shot.js';
+import { assessSourceEvidence } from './content-quality.js';
 import { RESEARCH_TRIAGE_POLICY_VERSION, type ResearchSeed, type ResearchTriageDecision } from './research-triage.js';
+import { buildServerOwnedDisplayProvenance } from './news-display-provenance.js';
 
 export const RESEARCH_CANARY_MODE = 'straylight-jobs-canary/v1';
 export const RESEARCH_CANARY_SOURCE_PREFIX = 'quote0-research-canary';
@@ -240,13 +242,16 @@ export async function dispatchResearchExtension(
   seed: ResearchSeed,
   evidencePacket: string,
   decision: ResearchTriageDecision,
-  plan: { reason?: DigestResearchExtensionDecision['reason'] } = {},
+  plan: {
+    reason?: ResearchExtensionDecision['reason'];
+    authorizedCandidateUrls?: string[];
+  } = {},
   config: ResearchCanaryConfig = getResearchCanaryConfig(),
   fetchImpl: typeof fetch = fetch,
 ): Promise<StraylightCanaryDispatch> {
   const extensionToolCalls = decision.budget?.extensionToolCalls ?? 0;
-  if (decision.researchMode !== 'digest' || extensionToolCalls < 1) {
-    throw new Error('Research extension 只允许 staged digest');
+  if ((decision.researchMode !== 'digest' && decision.researchMode !== 'recovery') || extensionToolCalls < 1) {
+    throw new Error('Research extension 只允许 staged digest/recovery');
   }
   const payload = await requestJson(config, '/jobs', {
     method: 'POST',
@@ -333,6 +338,18 @@ export interface StructuredResearchFinalization {
   telemetry: StructuredFinalizationTelemetry;
 }
 
+function isUniversalResearchDecision(decision: ResearchTriageDecision): boolean {
+  return decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION
+    && decision.reasons.includes('universal-evidence');
+}
+
+function minimumEditorialFactCount(decision: ResearchTriageDecision): number {
+  if (isUniversalResearchDecision(decision)) {
+    return Math.min(2, decision.budget?.maxPublishableClaims ?? 2);
+  }
+  return 1;
+}
+
 function structuredFinalizationSchema(
   runId: string,
   decision: ResearchTriageDecision,
@@ -341,6 +358,7 @@ function structuredFinalizationSchema(
   if (!decision.budget) throw new Error('finalization 缺少 Research budget');
   const maxSources = decision.budget.maxPostSeedArtifacts + 1;
   const maxClaims = decision.budget.maxPublishableClaims;
+  const minClaims = minimumEditorialFactCount(decision);
   const ledger = parseEvidenceLedger(evidencePacket);
   if (decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION && ledger?.entries.length) {
     const evidenceIds = ledger.entries.map((entry) => entry.id);
@@ -356,7 +374,7 @@ function structuredFinalizationSchema(
         },
         facts: {
           type: 'array',
-          minItems: 1,
+          minItems: minClaims,
           maxItems: maxClaims,
           items: {
             type: 'object',
@@ -597,8 +615,8 @@ export function researchMinimumCoverageErrors(
   // Neuromancer Research while doing no independent freshness/provenance lookup.
   // Keep the bounded four-call budget, but make one targeted search an enforced
   // floor before Phase A can advance to synthesis.
-  if (decision.researchMode === 'digest' && runtime.searchRequests < 1) {
-    errors.push('digest minimum coverage 未满足: 至少需要 1 次 freshness/provenance targeted search');
+  if ((decision.researchMode === 'digest' || decision.researchMode === 'recovery') && runtime.searchRequests < 1) {
+    errors.push(`${decision.researchMode} minimum coverage 未满足: 至少需要 1 次 freshness/provenance targeted search`);
   }
   return errors;
 }
@@ -616,7 +634,7 @@ function latestAgentTurn(turns: StraylightThreadTurn[]): StraylightThreadTurn | 
 }
 
 interface ResearchExtensionAuditReceipt {
-  reason: DigestResearchExtensionDecision['reason'];
+  reason: ResearchExtensionDecision['reason'];
   required: boolean;
   authorizedCandidateUrls?: string[];
   initialToolCalls: number;
@@ -680,6 +698,17 @@ export function researchExtensionOutcomeErrors(
   if (receipt.reason === 'minimum-search-repair') {
     if (!toolName.includes('search')) return [`minimum-search-repair 必须执行 search，实际为 ${toolName || 'unknown'}`];
     if (!toolCallSucceeded(call)) return ['minimum-search-repair 的 targeted search 未成功'];
+    if (calls.length === 1) return [];
+    const discovered = new Set(searchCandidateLedger([call], seed).candidates.map((candidate) => candidate.canonicalUrl));
+    for (const followup of calls.slice(1)) {
+      const name = cleanString(followup.name).toLowerCase();
+      if (!name.includes('crawl')) return [`minimum-search-repair 后续只允许 crawl，实际为 ${name || 'unknown'}`];
+      if (!toolCallSucceeded(followup)) return ['minimum-search-repair 后续候选 crawl 未成功'];
+      const actualUrls = toolCallCanonicalUrls(followup);
+      if (!actualUrls.some((url) => discovered.has(url))) {
+        return [`minimum-search-repair 后续 crawl 不在本次 search 候选中: actual=${actualUrls.join(',') || 'missing'}`];
+      }
+    }
     return [];
   }
 
@@ -695,14 +724,21 @@ export function researchExtensionOutcomeErrors(
   }
 
   if (receipt.reason === 'novel-evidence-candidate') {
-    if (!toolName.includes('crawl')) return [`novel-evidence-candidate 只能执行 crawl，实际为 ${toolName || 'unknown'}`];
-    if (!toolCallSucceeded(call)) return ['novel-evidence-candidate 的授权 crawl 未成功'];
     const authorized = new Set((receipt.authorizedCandidateUrls || [])
       .map((url) => canonicalEvidenceUrl(cleanString(url)))
       .filter((url): url is string => Boolean(url)));
-    const actualUrls = toolCallCanonicalUrls(call);
-    if (!actualUrls.some((url) => authorized.has(url))) {
-      return [`optional extension crawl 越权: actual=${actualUrls.join(',') || 'missing'} authorized=${[...authorized].join(',') || 'none'}`];
+    const seen = new Set<string>();
+    for (const extensionCall of calls) {
+      const name = cleanString(extensionCall.name).toLowerCase();
+      if (!name.includes('crawl')) return [`novel-evidence-candidate 只能执行 crawl，实际为 ${name || 'unknown'}`];
+      if (!toolCallSucceeded(extensionCall)) return ['novel-evidence-candidate 的授权 crawl 未成功'];
+      const actualUrls = toolCallCanonicalUrls(extensionCall);
+      const authorizedUrl = actualUrls.find((url) => authorized.has(url));
+      if (!authorizedUrl) {
+        return [`optional extension crawl 越权: actual=${actualUrls.join(',') || 'missing'} authorized=${[...authorized].join(',') || 'none'}`];
+      }
+      if (seen.has(authorizedUrl)) return [`optional extension 重复 crawl: ${authorizedUrl}`];
+      seen.add(authorizedUrl);
     }
     return [];
   }
@@ -874,6 +910,55 @@ interface EvidenceLedgerV2 {
   };
 }
 
+const CRAWL_BLOCK_PAGE_PATTERN = /(?:^|\b)(?:403 forbidden|404 not found|access denied|captcha)(?:\b|$)|enable javascript and cookies|please enable javascript|javascript (?:is )?disabled|you need to enable javascript|just a moment\.\.\.|checking your browser|sign in to continue|log in to continue|请启用\s*javascript|需要允许(?:该网站)?执行\s*javascript|请登录(?:后|以继续)|登录后(?:查看|继续)/iu;
+
+function crawlTextFragments(value: unknown, depth = 0): string[] {
+  if (depth > 2 || value == null) return [];
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+      try {
+        const parsed = JSON.parse(text);
+        const nested = crawlTextFragments(parsed, depth + 1);
+        // A JSON transport wrapper with no textual payload is not evidence. Do not fall
+        // back to counting field names / URLs as semantic body text.
+        return nested;
+      } catch {
+        // Normal prose can contain braces; if parsing fails, keep it as text.
+      }
+    }
+    return [text];
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => crawlTextFragments(item, depth + 1));
+  if (!isPlainObject(value)) return [];
+  return ['formatted', 'markdown', 'text', 'body', 'content', 'description']
+    .flatMap((key) => crawlTextFragments(value[key], depth + 1));
+}
+
+function crawlEvidenceBody(payload: Record<string, any>, result: Record<string, any>): string {
+  const fragments = [
+    ...crawlTextFragments(result.formatted),
+    ...crawlTextFragments(result.markdown),
+    ...crawlTextFragments(result.text),
+    ...crawlTextFragments(result.body),
+    ...crawlTextFragments(result.content),
+    ...crawlTextFragments(payload.content),
+    ...crawlTextFragments(payload.body),
+  ];
+  return [...new Set(fragments.map((item) => item.replace(/\s+/gu, ' ').trim()).filter(Boolean))].join('\n');
+}
+
+function crawlEvidenceIsSupportEligible(title: string, body: string): boolean {
+  const surface = `${title}\n${body}`.slice(0, 2_400);
+  if (CRAWL_BLOCK_PAGE_PATTERN.test(surface)) return false;
+  const quality = assessSourceEvidence({ title, content: body });
+  // A successful HTTP/browser action is not automatically factual evidence. Require at
+  // least one semantic proposition beyond the title/transport shell. Sparse one-fact
+  // official pages remain admissible; empty/placeholder/title-restatement shells do not.
+  return quality.mode !== 'seed-only' && quality.evidenceAtoms >= 1;
+}
+
 function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: ResearchSeed): EvidenceLedgerEntry[] {
   const seedCanonical = canonicalEvidenceUrl(cleanString(seed?.link));
   const seen = new Set<string>();
@@ -883,27 +968,26 @@ function successfulCrawlEvidenceEntries(calls: StraylightToolCall[], seed?: Rese
     if (!cleanString(call.name).toLowerCase().includes('crawl') || call.isError) continue;
     const status = cleanString(call.status).toLowerCase();
     if (status === 'error' || status === 'failed') continue;
-    const payload = unwrapToolPayload(call.output);
-    const payloadStatus = cleanString(payload?.status).toLowerCase();
+    const payload = unwrapToolPayload(call.output) ?? {};
+    const payloadStatus = cleanString(payload.status).toLowerCase();
     if (payloadStatus === 'error' || payloadStatus === 'failed') continue;
     const input = isPlainObject(call.input) ? call.input : {};
-    const result = isPlainObject(payload?.result) ? payload.result : {};
-    const canonicalUrl = [result.url, payload?.url, input.url]
+    const result = isPlainObject(payload.result) ? payload.result : {};
+    const canonicalUrl = [result.url, payload.url, input.url]
       .map((value) => canonicalEvidenceUrl(cleanString(value)))
       .find((value): value is string => Boolean(value));
     if (!canonicalUrl || seen.has(canonicalUrl)) continue;
-    const crawlSurface = `${cleanString(result.title)}\n${cleanString(result.formatted)}\n${cleanString(result.text)}\n${cleanString(payload?.content)}`.slice(0, 1_200);
-    if (/(?:^|\b)(?:403 forbidden|404 not found|access denied|captcha)(?:\b|$)|enable javascript and cookies|just a moment\.\.\.|checking your browser/iu.test(crawlSurface)) {
-      continue;
-    }
+    const crawlTitle = cleanString(result.title);
+    const crawlBody = crawlEvidenceBody(payload, result);
+    if (!crawlEvidenceIsSupportEligible(crawlTitle, crawlBody)) continue;
     const urlDigest = evidenceUrlDigest(canonicalUrl);
     if (!urlDigest) continue;
     seen.add(canonicalUrl);
-    let title = cleanString(result.title);
+    let title = crawlTitle;
     if (!title) {
       try { title = new URL(canonicalUrl).hostname.replace(/^www\./u, ''); } catch { title = canonicalUrl; }
     }
-    const engine = cleanString(payload?.engine);
+    const engine = cleanString(payload.engine);
     entries.push({
       id: `E${index + 1}`,
       evidenceNumber: index + 1,
@@ -1103,6 +1187,42 @@ function buildEvidenceLedger(calls: StraylightToolCall[], seed?: ResearchSeed): 
     searchCandidateStats: searchCandidates.stats,
     retrieval: evidenceRetrievalLedger(calls),
   };
+}
+
+function serializeEvidenceLedgerForPacket(ledger: EvidenceLedgerV2, maxPacketChars: number): string {
+  // Ledger metadata is operational context, not the evidence body itself. A production
+  // regression showed an 8-candidate ledger consuming 4,413 / 5,000 chars, leaving only
+  // 587 chars for four real tool outputs. Reserve a majority of the packet for tool
+  // evidence and prune discovery-only candidates first; support-eligible crawl entries
+  // are never removed.
+  const reservedToolChars = Math.floor(maxPacketChars * 0.55);
+  const maxLedgerChars = Math.max(900, maxPacketChars - reservedToolChars - 48);
+  const existingClusters = new Set(ledger.entries.map((entry) => entry.provenanceCluster).filter(Boolean));
+  const searchCandidates = [...ledger.searchCandidates];
+  const compact = (): EvidenceLedgerV2 => ({ ...ledger, searchCandidates: [...searchCandidates] });
+  let serialized = JSON.stringify(compact());
+
+  while (serialized.length > maxLedgerChars && searchCandidates.length > 0) {
+    let removeIndex = -1;
+    for (let index = searchCandidates.length - 1; index >= 0; index -= 1) {
+      if (!optionalExtensionCandidateAllowed(searchCandidates[index])) {
+        removeIndex = index;
+        break;
+      }
+    }
+    if (removeIndex < 0) {
+      for (let index = searchCandidates.length - 1; index >= 0; index -= 1) {
+        if (existingClusters.has(searchCandidates[index].provenanceCluster)) {
+          removeIndex = index;
+          break;
+        }
+      }
+    }
+    if (removeIndex < 0) removeIndex = searchCandidates.length - 1;
+    searchCandidates.splice(removeIndex, 1);
+    serialized = JSON.stringify(compact());
+  }
+  return serialized;
 }
 
 function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefined {
@@ -1313,19 +1433,22 @@ function optionalExtensionCandidateAllowed(candidate: EvidenceSearchCandidate): 
   return titleAnchorCount >= 3 && (candidate.score ?? 0) >= 0.3;
 }
 
-export interface DigestResearchExtensionDecision {
+export interface ResearchExtensionDecision {
   extend: boolean;
   required: boolean;
-  reason: 'not-staged-digest' | 'initial-budget-not-reached' | 'max-budget-reached' | 'minimum-evidence-repair' | 'minimum-search-repair' | 'coverage-sufficient' | 'no-novel-search-candidate' | 'novel-evidence-candidate';
+  reason: 'not-staged-research' | 'initial-budget-not-reached' | 'max-budget-reached' | 'minimum-evidence-repair' | 'minimum-search-repair' | 'coverage-sufficient' | 'no-novel-search-candidate' | 'novel-evidence-candidate';
   candidateUrls: string[];
   existingClusters: string[];
 }
 
-export function shouldExtendDigestResearch(
+/** @deprecated Use ResearchExtensionDecision; kept for existing callers/tests during rollout. */
+export type DigestResearchExtensionDecision = ResearchExtensionDecision;
+
+export function shouldExtendResearch(
   evidencePacket: string,
   runtime: ResearchRuntimeReceipt,
   decision: ResearchTriageDecision,
-): DigestResearchExtensionDecision {
+): ResearchExtensionDecision {
   const budget = decision.budget;
   const initial = budget?.initialToolCalls ?? 0;
   const extension = budget?.extensionToolCalls ?? 0;
@@ -1333,8 +1456,9 @@ export function shouldExtendDigestResearch(
   const existingEntries = ledger?.entries ?? [];
   const existingClusters = [...new Set(existingEntries.map((entry) => entry.provenanceCluster || evidenceDomainKey(entry.canonicalUrl)).filter(Boolean))];
   const base = { candidateUrls: [] as string[], existingClusters, required: false };
-  if (decision.researchMode !== 'digest' || initial < 1 || extension < 1 || !budget) {
-    return { ...base, extend: false, reason: 'not-staged-digest' };
+  const stagedMode = decision.researchMode === 'digest' || decision.researchMode === 'recovery';
+  if (!stagedMode || initial < 1 || extension < 1 || !budget) {
+    return { ...base, extend: false, reason: 'not-staged-research' };
   }
   if (runtime.toolCalls < initial) return { ...base, extend: false, reason: 'initial-budget-not-reached' };
   if (runtime.toolCalls >= budget.maxToolCalls) return { ...base, extend: false, reason: 'max-budget-reached' };
@@ -1346,10 +1470,6 @@ export function shouldExtendDigestResearch(
   if ((requireSuccessfulSearch && successfulSearchRequests < 1) || (!requireSuccessfulSearch && runtime.searchRequests < 1)) {
     return { ...base, extend: true, required: true, reason: 'minimum-search-repair' };
   }
-  if (existingClusters.length >= budget.targetIndependentClusters) {
-    return { ...base, extend: false, reason: 'coverage-sufficient' };
-  }
-
   const crawled = new Set(existingEntries.map((entry) => entry.canonicalUrl));
   const existingClusterSet = new Set(existingClusters);
   const relevanceGoverned = Boolean(ledger && (ledger.searchCandidateStats.total > 0 || ledger.searchCandidates.length > 0));
@@ -1364,17 +1484,31 @@ export function shouldExtendDigestResearch(
     const cluster = candidate?.provenanceCluster || evidenceDomainKey(url);
     return Boolean(cluster) && !existingClusterSet.has(cluster);
   });
+  // Digest stops as soon as the target cluster coverage is already satisfied. Recovery
+  // starts from a seed-only stub, so after its first 10 calls we still convert any strong,
+  // already-discovered uncrawled candidates into evidence before finalization. This is the
+  // bounded 10+5 policy: no blind new search round, only evidence-yield work with known URLs.
+  if (decision.researchMode === 'digest' && existingClusters.length >= budget.targetIndependentClusters) {
+    return { ...base, extend: false, reason: 'coverage-sufficient' };
+  }
   if (!candidateUrls.length) {
-    return { ...base, extend: false, reason: 'no-novel-search-candidate' };
+    return {
+      ...base,
+      extend: false,
+      reason: existingClusters.length >= budget.targetIndependentClusters ? 'coverage-sufficient' : 'no-novel-search-candidate',
+    };
   }
   return {
     extend: true,
     required: false,
     reason: 'novel-evidence-candidate',
-    candidateUrls: candidateUrls.slice(0, 5),
+    candidateUrls: candidateUrls.slice(0, Math.max(1, extension)),
     existingClusters,
   };
 }
+
+/** @deprecated Use shouldExtendResearch; digest behavior remains byte-compatible. */
+export const shouldExtendDigestResearch = shouldExtendResearch;
 
 function evidenceGroundingErrors(rawReceipt: Record<string, unknown>, evidencePacket?: string): string[] {
   const supportEligible = parseSupportEligibleDigests(evidencePacket);
@@ -1413,15 +1547,24 @@ export function buildResearchEvidencePacket(
   const calls = turns
     .filter((turn) => turn.participantType === 'agent')
     .flatMap((turn) => Array.isArray(turn.toolCalls) ? turn.toolCalls! : []);
-  const ledger = JSON.stringify(buildEvidenceLedger(calls, seed));
+  const ledger = serializeEvidenceLedgerForPacket(buildEvidenceLedger(calls, seed), MAX_PACKET_CHARS);
 
   const chunks: string[] = [`version=${RESEARCH_EVIDENCE_PACKET_VERSION}\nledger=${ledger}`];
   let used = chunks[0].length;
+  const evidenceWeight = (call: StraylightToolCall): number => {
+    const name = cleanString(call.name).toLowerCase();
+    // Search hits are discovery-only and already represented compactly in Ledger v2.
+    // Crawl bodies are the only current support-eligible evidence for publishable claims,
+    // so they must receive materially more of the frozen Phase-B packet.
+    if (name.includes('crawl')) return 3;
+    if (name.includes('search')) return 1;
+    return 2;
+  };
   for (let index = 0; index < calls.length; index += 1) {
     const call = calls[index];
-    const remainingCalls = calls.length - index;
     const remainingChars = Math.max(0, MAX_PACKET_CHARS - used);
-    const callBudget = Math.floor(remainingChars / remainingCalls);
+    const remainingWeight = calls.slice(index).reduce((sum, item) => sum + evidenceWeight(item), 0);
+    const callBudget = Math.floor(remainingChars * evidenceWeight(call) / Math.max(1, remainingWeight));
     const input = truncateEvidence(stringifyEvidence(call.input ?? '').trim(), 420);
     const header = `\n[EVIDENCE ${index + 1}] tool=${cleanString(call.name) || 'unknown'} status=${cleanString(call.status) || 'unknown'} isError=${Boolean(call.isError)}`;
     const inputLine = input ? `\ninput=${input}` : '';
@@ -1454,6 +1597,7 @@ function seedReceipt(seed: ResearchSeed): NonNullable<NeuromancerResearchReceipt
   return {
     title: seed.title.trim(),
     ...(content ? { content } : {}),
+    ...(cleanString(seed.sourceId) ? { sourceId: cleanString(seed.sourceId) } : {}),
     ...(cleanString(seed.source) ? { source: cleanString(seed.source) } : {}),
     ...(cleanString(seed.link) ? { link: cleanString(seed.link) } : {}),
     ...(cleanString(seed.publishTime) && !Number.isNaN(Date.parse(cleanString(seed.publishTime)))
@@ -1466,26 +1610,66 @@ function cleanFactSentence(value: unknown): string {
   return cleanString(value).replace(/[。；;\s]+$/u, '').trim();
 }
 
-function chooseRenderableTitle(value: unknown): string | undefined {
+function chooseRenderableTitle(
+  value: unknown,
+  facts: Array<{ text: string }> = [],
+): string | undefined {
   if (!Array.isArray(value)) return undefined;
   const candidates = [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
   for (const cap of [22, 28, 32]) {
-    const candidate = candidates.find((item) => textUnits(item) <= cap);
+    const candidate = candidates.find((item) =>
+      textUnits(item) <= cap
+      && (facts.length === 0 || facts.some((fact) => isTitleFactAligned(item, fact.text)))
+    );
     if (candidate) return candidate;
   }
   return undefined;
 }
 
-function sourceLabelFromEvidence(entries: EvidenceLedgerEntry[]): string {
-  const labels: string[] = [];
-  for (const entry of entries) {
-    const label = evidenceDomainKey(entry.canonicalUrl) || entry.title;
-    if (!label || labels.includes(label)) continue;
-    const next = [...labels, label].join('/');
-    if (textUnits(next) > 36) break;
-    labels.push(label);
-  }
-  return labels.join('/') || 'Research';
+function normalizeEditorialComparisonText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase('zh-CN')
+    .replace(/[\p{P}\p{S}\s]/gu, '');
+}
+
+function editorialBigrams(value: string): Set<string> {
+  const chars = [...normalizeEditorialComparisonText(value)];
+  const grams = new Set<string>();
+  for (let index = 0; index < chars.length - 1; index += 1) grams.add(`${chars[index]}${chars[index + 1]}`);
+  return grams;
+}
+
+function isTitleRestatement(title: string, fact: string): boolean {
+  const normalizedTitle = normalizeEditorialComparisonText(title);
+  const normalizedFact = normalizeEditorialComparisonText(fact);
+  if (!normalizedTitle || !normalizedFact) return false;
+  if (normalizedTitle === normalizedFact) return true;
+  const titleChars = [...normalizedTitle].length;
+  const factChars = [...normalizedFact].length;
+  if (titleChars < 4 || factChars > Math.ceil(titleChars * 1.45)) return false;
+  const titleGrams = editorialBigrams(normalizedTitle);
+  const factGrams = editorialBigrams(normalizedFact);
+  if (!titleGrams.size || !factGrams.size) return false;
+  let shared = 0;
+  for (const gram of titleGrams) if (factGrams.has(gram)) shared += 1;
+  return shared / titleGrams.size >= 0.6;
+}
+
+function isTitleFactAligned(title: string, fact: string): boolean {
+  const normalizedTitle = normalizeEditorialComparisonText(title);
+  const normalizedFact = normalizeEditorialComparisonText(fact);
+  if (!normalizedTitle || !normalizedFact) return false;
+  if (normalizedFact.includes(normalizedTitle) || normalizedTitle.includes(normalizedFact)) return true;
+  const titleGrams = editorialBigrams(normalizedTitle);
+  const factGrams = editorialBigrams(normalizedFact);
+  if (!titleGrams.size || !factGrams.size) return false;
+  let shared = 0;
+  for (const gram of titleGrams) if (factGrams.has(gram)) shared += 1;
+  // A title must be a compact headline of at least one selected fact, not an unrelated
+  // detail found elsewhere in the Evidence Packet. Keep the threshold intentionally
+  // permissive for concise Chinese headlines while still rejecting cross-topic drift.
+  return shared / titleGrams.size >= 0.18;
 }
 
 function materializeServerOwnedEditorialArtifact(input: {
@@ -1511,11 +1695,12 @@ function materializeServerOwnedEditorialArtifact(input: {
     return { errors: policyErrors, policyViolation: true };
   }
 
-  const title = chooseRenderableTitle(candidate.titleCandidates);
-  if (!title) errors.push('titleCandidates 没有任何候选满足 32 display units 上限');
   const entryById = new Map(ledger.entries.map((entry) => [entry.id, entry]));
   const rawFacts = Array.isArray(candidate.facts) ? candidate.facts : [];
-  if (rawFacts.length < 1) errors.push('facts 至少 1 项');
+  const minimumFacts = minimumEditorialFactCount(input.decision);
+  if (rawFacts.length < minimumFacts) {
+    errors.push(`facts 至少 ${minimumFacts} 项；Universal Research 不能退化成单条事实或标题复述`);
+  }
   if (budget && rawFacts.length > budget.maxPublishableClaims) {
     policyErrors.push(`Research fact budget 超限: ${rawFacts.length} > ${budget.maxPublishableClaims}`);
   }
@@ -1538,6 +1723,10 @@ function materializeServerOwnedEditorialArtifact(input: {
     if (text && evidenceIds.length && evidenceIds.every((id) => entryById.has(id))) validFacts.push({ text, evidenceIds });
   }
 
+  const title = chooseRenderableTitle(candidate.titleCandidates, validFacts);
+  if (!title) {
+    errors.push('titleCandidates 没有任何候选同时满足显示容量并与 facts 的核心事件/实体一致；标题不能从 Evidence Packet 的其他话题漂移');
+  }
   if (policyErrors.length || errors.length || !title) {
     return { errors: [...policyErrors, ...errors], policyViolation: policyErrors.length > 0 };
   }
@@ -1548,13 +1737,40 @@ function materializeServerOwnedEditorialArtifact(input: {
     const candidateMessage = `${[...selectedFacts.map((item) => item.text), fact.text].join('；')}。`;
     if (textUnits(candidateMessage) <= capacity) selectedFacts.push(fact);
   }
-  if (!selectedFacts.length) {
+  if (selectedFacts.length < minimumFacts) {
     return {
-      errors: [`facts 中没有完整事实句能装入当前 ${capacity} display units 正文容量；请缩短最高优先事实句`],
+      errors: [
+        `正文容量内只保留了 ${selectedFacts.length} 条完整事实，低于当前 Research 最低 ${minimumFacts} 条；请缩短事实句而不是丢掉信息增益`,
+      ],
+      policyViolation: false,
+    };
+  }
+  if (!selectedFacts.some((fact) => isTitleFactAligned(title, fact.text))) {
+    return {
+      errors: ['Research 标题/正文主题错配：最终标题必须是至少一条已选 supported fact 的紧凑摘要，不能取 Evidence Packet 中另一个话题'],
+      policyViolation: false,
+    };
+  }
+  if (selectedFacts.every((fact) => isTitleRestatement(title, fact.text))) {
+    return {
+      errors: ['Research 信息增益不足：正文事实只是标题的同义复述，必须加入证据支持的数字、时间线、背景、因果或行动信息'],
       policyViolation: false,
     };
   }
   const message = `${selectedFacts.map((item) => item.text).join('；')}。`;
+  if (isUniversalResearchDecision(input.decision)) {
+    const finalEvidenceQuality = assessSourceEvidence({ title, content: message });
+    if (finalEvidenceQuality.mode !== 'adequate') {
+      return {
+        errors: [
+          `Research 成品信息量不足：content-quality=${finalEvidenceQuality.mode}/${finalEvidenceQuality.sufficiency}; `
+            + `atoms=${finalEvidenceQuality.evidenceAtoms} hardFacts=${finalEvidenceQuality.hardFactCount} `
+            + `novelty=${finalEvidenceQuality.bodyNoveltyRatio}; Universal Research 必须达到 adequate 才能推送`,
+        ],
+        policyViolation: false,
+      };
+    }
+  }
 
   const usedEvidenceIds: string[] = [];
   for (const fact of selectedFacts) {
@@ -1605,12 +1821,22 @@ function materializeServerOwnedEditorialArtifact(input: {
       crawlRequests: input.runtime.crawlRequests,
     },
   };
+  const displayProvenance = buildServerOwnedDisplayProvenance({
+    sourceId: input.seed.sourceId,
+    seedSource: input.seed.source,
+    seedLink: input.seed.link,
+    evidenceSources: sources,
+    research: {
+      policyVersion: input.decision.policyVersion,
+      runId: input.runId,
+    },
+  });
   const artifactCandidate: RenderableDataItem = {
     id: `quote0-neuromancer-${input.runId}`,
     title,
     message,
     signature: '神经漫游者',
-    source: sourceLabelFromEvidence(sources),
+    source: displayProvenance.publisher.label,
     publishTime,
     category: 'news',
     link: linkEntry.canonicalUrl,
@@ -1620,6 +1846,7 @@ function materializeServerOwnedEditorialArtifact(input: {
       researchReceipt: receipt,
       researchFinalizer: telemetry,
       researchArtifactOwnership: 'quote0-server/v1',
+      displayProvenance,
       publishTimeSource,
     },
   };
@@ -1704,7 +1931,10 @@ export function materializeStructuredResearchFinalization(input: {
   runtime: ResearchRuntimeReceipt;
   finalization: StructuredResearchFinalization;
 }): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
-  if (input.decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION && parseEvidenceLedger(input.evidencePacket)?.entries.length) {
+  const candidateLooksServerOwned = Array.isArray(input.finalization.candidate.titleCandidates)
+    && Array.isArray(input.finalization.candidate.facts);
+  if ((input.decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION || candidateLooksServerOwned)
+    && parseEvidenceLedger(input.evidencePacket)?.entries.length) {
     return materializeServerOwnedEditorialArtifact(input);
   }
   return materializeArtifact(
@@ -1769,13 +1999,16 @@ export async function inspectResearchCanary(
         retryable: false,
       };
     }
-    if (phaseRuntime.toolCalls > budget.maxToolCalls) {
+    const phaseToolLimit = params.extensionReceipt
+      ? budget.maxToolCalls
+      : (budget.initialToolCalls ?? budget.maxToolCalls);
+    if (phaseRuntime.toolCalls > phaseToolLimit) {
       return {
         ...base,
         status: 'invalid',
         jobStatus,
         evidencePacket: buildResearchEvidencePacket(turns, budget.maxEvidenceChars, params.seed),
-        errors: [...errors, `Research tool budget 超限: ${phaseRuntime.toolCalls} > ${budget.maxToolCalls}`],
+        errors: [...errors, `Research phase tool budget 超限: ${phaseRuntime.toolCalls} > ${phaseToolLimit}`],
         retryable: false,
       };
     }
@@ -1798,18 +2031,20 @@ export async function inspectResearchCanary(
         };
       }
       const coverageErrors = researchMinimumCoverageErrors(phaseRuntime, params.decision);
-      if (params.decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION && params.decision.researchMode === 'digest') {
+      if (params.decision.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION
+        && (params.decision.researchMode === 'digest' || params.decision.researchMode === 'recovery')) {
         const ledger = parseEvidenceLedger(evidencePacket);
+        const mode = params.decision.researchMode;
         if (!ledger?.entries.length) {
-          coverageErrors.push('digest minimum coverage 未满足: 至少需要 1 个 support-eligible crawl');
+          coverageErrors.push(`${mode} minimum coverage 未满足: 至少需要 1 个 support-eligible crawl`);
         }
         if ((ledger?.toolSummary.successfulSearchRequests ?? 0) < 1
           && !coverageErrors.some((error) => error.includes('成功的 freshness/provenance targeted search'))) {
-          coverageErrors.push('digest minimum coverage 未满足: 至少需要 1 次成功的 freshness/provenance targeted search');
+          coverageErrors.push(`${mode} minimum coverage 未满足: 至少需要 1 次成功的 freshness/provenance targeted search`);
         }
       }
       const initialToolCalls = budget.initialToolCalls ?? 0;
-      const stagedRepairAvailable = params.decision.researchMode === 'digest'
+      const stagedRepairAvailable = (params.decision.researchMode === 'digest' || params.decision.researchMode === 'recovery')
         && (budget.extensionToolCalls ?? 0) > 0
         && initialToolCalls > 0
         && phaseRuntime.toolCalls >= initialToolCalls

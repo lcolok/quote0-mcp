@@ -4,6 +4,7 @@ import {
   markUniversalResearchPending,
   universalResearchEnabled,
 } from './universal-research-policy.js';
+import { RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS } from './research-triage.js';
 import { devicePusher } from './device-pusher.js';
 import { enqueueDeliveriesForContent, enqueuePreRenderedImageDeliveries } from './delivery-enqueue.js';
 import { resolveSchedulerExtraRenderers } from './scheduler-extra-renderers.js';
@@ -204,6 +205,35 @@ const DEFAULT_MIN_FETCH_COUNT = 8;
 // 复播时间窗：consumer 只循环复播 created_at 落在此窗口内的库存（单位：小时）。
 // env INVENTORY_REPLAY_WINDOW_HOURS 可覆盖，默认 24h。
 const REPLAY_WINDOW_HOURS = Number(process.env.INVENTORY_REPLAY_WINDOW_HOURS) || 24;
+const FRESH_REPLAY_HOURS = Math.max(1, Number(process.env.INVENTORY_FRESH_REPLAY_HOURS) || 6);
+
+export interface ProducerSupplySnapshot {
+  freshEligible: number;
+  pendingResearch: number;
+}
+
+function boundedEnvInt(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(value || '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+/**
+ * Low-water refill only changes how many RSS sources one normal producer tick may inspect.
+ * It never increases the long-term timer cadence and never creates extra Neuromancer work
+ * unless a genuinely fresh candidate is found.
+ */
+export function producerRefillScanLimit(
+  snapshot: ProducerSupplySnapshot,
+  enabledSourceCount: number,
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const lowWater = boundedEnvInt(env.PRODUCER_REFILL_LOW_WATER, 12, 1, 100);
+  const pendingMax = boundedEnvInt(env.PRODUCER_REFILL_PENDING_MAX, 2, 1, 20);
+  const scanMax = boundedEnvInt(env.PRODUCER_REFILL_SCAN_MAX, 4, 1, 12);
+  if (enabledSourceCount <= 1 || snapshot.freshEligible >= lowWater || snapshot.pendingResearch >= pendingMax) return 1;
+  return Math.max(1, Math.min(enabledSourceCount, scanMax));
+}
 
 // 依赖外部 LLM 的 processor。这类 processor 失败（402 欠费/超时/连接错）属于
 // 「外部供给中断」而非「内容本身不可用」，producer 应降级续产而不是停产。
@@ -525,6 +555,42 @@ export class NewsScheduler {
     }, actualDelay);
   }
 
+  private async getProducerSupplySnapshot(): Promise<ProducerSupplySnapshot> {
+    try {
+      const result = await this.postgres.query(`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE state IN ('ready', 'pushed')
+              AND COALESCE(processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
+              AND (
+                COALESCE(processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
+                OR (
+                  processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+                  AND processed_content->'metadata'->'researchGate'->>'researchPolicyVersion' = ANY($3::text[])
+                )
+              )
+              AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
+          )::int AS fresh_eligible,
+          COUNT(*) FILTER (
+            WHERE processed_content->'metadata'->'researchGate'->>'state' = 'pending'
+              AND created_at > CURRENT_TIMESTAMP - ($2 * INTERVAL '1 hour')
+          )::int AS pending_research
+        FROM content_inventory
+        WHERE created_at > CURRENT_TIMESTAMP - ($2 * INTERVAL '1 hour')
+      `, [FRESH_REPLAY_HOURS, REPLAY_WINDOW_HOURS, [...RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS]]);
+      const row = result.rows[0];
+      if (!row) throw new Error('missing supply snapshot row');
+      return {
+        freshEligible: Math.max(0, Number(row.fresh_eligible) || 0),
+        pendingResearch: Math.max(0, Number(row.pending_research) || 0),
+      };
+    } catch (error) {
+      // Refill is an optimization, never a reason to multiply RSS requests when telemetry
+      // is unavailable. Fail closed to one source/run and keep the historical cadence.
+      console.warn('⚠️ producer supply snapshot unavailable; refill scan disabled for this tick:', error);
+      return { freshEligible: Number.MAX_SAFE_INTEGER, pendingResearch: Number.MAX_SAFE_INTEGER };
+    }
+  }
 
   private async runJob(job: SchedulerJobInstance, overrideIndex?: number): Promise<void> {
     if (job.state.running) {
@@ -573,8 +639,69 @@ export class NewsScheduler {
         }
       });
 
-      const selectionOutcome = await this.selectCandidate(job, currentRssSource, overrideIndex);
+      const enabledSources = this.getEnabledRssSources(job);
+      const supplySnapshot = job.config.jobRole === 'producer' && overrideIndex === undefined
+        ? await this.getProducerSupplySnapshot()
+        : { freshEligible: Number.MAX_SAFE_INTEGER, pendingResearch: Number.MAX_SAFE_INTEGER };
+      const refillScanLimit = job.config.jobRole === 'producer' && overrideIndex === undefined
+        ? producerRefillScanLimit(supplySnapshot, enabledSources.length)
+        : 1;
+      const scannedSources: Array<{ source: string; outcome: 'selected' | 'no-fresh' | 'failure' }> = [];
+      let selectionOutcome: CandidateSelectionOutcome = { selection: null, attempts: [], totalCandidates: 0, poolSize: 0 };
+
+      for (let scanIndex = 0; scanIndex < refillScanLimit; scanIndex += 1) {
+        selectionOutcome = await this.selectCandidate(job, currentRssSource, overrideIndex);
+        const sourceFailure = selectionOutcome.attempts.some((item) =>
+          item.reason === 'fetch_error' || item.reason === 'data_source_missing'
+        );
+        if (selectionOutcome.selection) {
+          scannedSources.push({ source: currentRssSource, outcome: 'selected' });
+          break;
+        }
+        scannedSources.push({ source: currentRssSource, outcome: sourceFailure ? 'failure' : 'no-fresh' });
+        if (scanIndex + 1 >= refillScanLimit) break;
+
+        // Low-water scan-ahead keeps source health truthful while refusing to waste the
+        // whole 10-minute producer slot on one empty/transiently failing feed. The normal
+        // run still owns one history record and one timer tick; source index advances are
+        // persisted so crash recovery resumes from the actual scan position.
+        if (sourceFailure) {
+          this.incrementFailureCount(job, currentRssSource);
+          const failureCount = this.getFailureCount(job, currentRssSource);
+          const threshold = this.strategyConfig.sourceFailureSkipThreshold ?? 0;
+          const failureReason = selectionOutcome.attempts.length
+            ? selectionOutcome.attempts.map((item) => `${item.layer}:${item.reason}`).join('|')
+            : 'no_candidate';
+          await recordRssSourceFailure(this.postgres, {
+            sourceId: currentRssSource,
+            consecutiveFailures: failureCount,
+            threshold: Math.max(1, threshold || 1),
+            reason: failureReason,
+          }).catch((healthError) => {
+            console.warn(`⚠️ RSS源健康状态失败记录失败: source=${currentRssSource}`, healthError);
+          });
+          if (threshold > 0 && failureCount >= threshold) {
+            const cooldownUntil = this.setSourceCooldown(job, currentRssSource);
+            console.warn(`⚠️ refill scan: 源 ${currentRssSource} 进入冷却到 ${cooldownUntil.toISOString()}`);
+          }
+        } else {
+          this.resetFailureCount(job, currentRssSource);
+          await recordRssSourceSuccess(this.postgres, currentRssSource).catch((healthError) => {
+            console.warn(`⚠️ RSS源健康状态恢复记录失败: source=${currentRssSource}`, healthError);
+          });
+        }
+        await this.rotateRssSource(job);
+        const nextSourceInfo = await this.resolveRunnableSource(job);
+        currentRssSource = nextSourceInfo.source;
+      }
+
       const selection = selectionOutcome.selection;
+      if (refillScanLimit > 1) {
+        console.log(
+          `🫗 Producer low-water refill fresh=${supplySnapshot.freshEligible} pending=${supplySnapshot.pendingResearch} `
+            + `scan=${scannedSources.map((item) => `${item.source}:${item.outcome}`).join(',')}`,
+        );
+      }
 
       if (!selection) {
         const sourceFailure = selectionOutcome.attempts.some((item) =>
@@ -591,13 +718,20 @@ export class NewsScheduler {
           try {
             await this.postgres.updateSchedulerRunHistory(runHistoryId, {
               layer: overrideIndex !== undefined ? 'override' : null,
+              source: currentRssSource,
               pushStatus: 'skipped',
               pushReason: reason,
               runFinishedAt: new Date(),
               metadata: {
                 selectionAttempts: selectionOutcome.attempts,
                 totalCandidates: selectionOutcome.totalCandidates,
-                poolSize: selectionOutcome.poolSize
+                poolSize: selectionOutcome.poolSize,
+                refill: {
+                  freshEligible: supplySnapshot.freshEligible,
+                  pendingResearch: supplySnapshot.pendingResearch,
+                  scanLimit: refillScanLimit,
+                  scannedSources,
+                },
               }
             });
           } catch (historyError) {
@@ -846,6 +980,7 @@ export class NewsScheduler {
         title: candidate.context.title,
         link: candidate.context.link,
         publishTime: candidate.context.publishTime,
+        rssSourceId: currentRssSource,
         source: candidate.context.source,
         category: candidate.context.category || job.config.category,
         fingerprint: candidate.fingerprint,
@@ -995,6 +1130,7 @@ export class NewsScheduler {
         try {
           await this.postgres.updateSchedulerRunHistory(runHistoryId, {
             layer: selection.layer,
+            source: currentRssSource,
             candidateId: candidate.index,
             candidateFingerprint: candidate.fingerprint,
             candidatePublishTime: candidate.context.publishTime ? new Date(candidate.context.publishTime) : null,
@@ -1011,7 +1147,13 @@ export class NewsScheduler {
               processingDurationMs,
               totalCandidates: selection.totalCandidates,
               poolSize: selection.poolSize,
-              jobRole: job.config.jobRole
+              jobRole: job.config.jobRole,
+              refill: {
+                freshEligible: supplySnapshot.freshEligible,
+                pendingResearch: supplySnapshot.pendingResearch,
+                scanLimit: refillScanLimit,
+                scannedSources,
+              },
             },
             runFinishedAt: new Date()
           });
@@ -2243,39 +2385,55 @@ export class NewsScheduler {
           AND COALESCE(processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
           AND (
             COALESCE(processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
-            OR processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+            OR (
+              processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+              AND processed_content->'metadata'->'researchGate'->>'researchPolicyVersion' = ANY($2::text[])
+            )
           )
           AND created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
         ORDER BY created_at ASC
         LIMIT 1
-      `, [REPLAY_WINDOW_HOURS]);
+      `, [REPLAY_WINDOW_HOURS, [...RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS]]);
 
-      // 2. Fallback to pushed items using source-fair LRU.
-      // Historical plain item-LRU made display share proportional to inventory size,
-      // so high-volume DEV/HN could visually drown low-volume sources such as Solidot
-      // even though the producer itself rotates sources fairly. Rank the source by its
-      // most recent display first, then the oldest item inside that source. The existing
-      // replay window still bounds staleness and fresh `ready` content remains FIFO-first.
+      // 2. Fallback to pushed items using freshness-first, soft-budget, source-fair LRU.
+      // `max_replays` remains a SOFT budget: under-budget recent items win, but when the
+      // pool is exhausted the historical infinite-LRU safety net still keeps the E-Ink
+      // moving. This preserves the 2026-06 product decision without letting a tiny old
+      // pool visually dominate newly researched content.
       if (item.rows.length === 0) {
         item = await this.postgres.query(`
           SELECT ranked.*
           FROM (
             SELECT ci.*,
-                   MAX(ci.last_pushed_at) OVER (PARTITION BY ci.source) AS source_last_pushed_at
+                   CASE
+                     WHEN ci.created_at > CURRENT_TIMESTAMP - ($3 * INTERVAL '1 hour') THEN 0
+                     ELSE 1
+                   END AS freshness_tier,
+                   CASE WHEN ci.replay_count < ci.max_replays THEN 0 ELSE 1 END AS replay_budget_tier,
+                   MAX(ci.last_pushed_at) OVER (
+                     PARTITION BY ci.source,
+                       CASE WHEN ci.created_at > CURRENT_TIMESTAMP - ($3 * INTERVAL '1 hour') THEN 0 ELSE 1 END,
+                       CASE WHEN ci.replay_count < ci.max_replays THEN 0 ELSE 1 END
+                   ) AS source_last_pushed_at
             FROM content_inventory ci
             WHERE ci.state='pushed'
               AND COALESCE(ci.processed_content->'metadata'->'contentQuality'->>'disposition', 'deliver') <> 'hold'
               AND (
                 COALESCE(ci.processed_content->'metadata'->'researchGate'->>'required', 'false') <> 'true'
-                OR ci.processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+                OR (
+                  ci.processed_content->'metadata'->'researchGate'->>'state' = 'ready'
+                  AND ci.processed_content->'metadata'->'researchGate'->>'researchPolicyVersion' = ANY($2::text[])
+                )
               )
               AND ci.created_at > CURRENT_TIMESTAMP - ($1 * INTERVAL '1 hour')
           ) ranked
-          ORDER BY ranked.source_last_pushed_at ASC NULLS FIRST,
+          ORDER BY ranked.freshness_tier ASC,
+                   ranked.replay_budget_tier ASC,
+                   ranked.source_last_pushed_at ASC NULLS FIRST,
                    ranked.last_pushed_at ASC NULLS FIRST,
-                   ranked.created_at ASC
+                   ranked.created_at DESC
           LIMIT 1
-        `, [REPLAY_WINDOW_HOURS]);
+        `, [REPLAY_WINDOW_HOURS, [...RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS], FRESH_REPLAY_HOURS]);
       }
 
       // 3. Empty inventory → skip gracefully

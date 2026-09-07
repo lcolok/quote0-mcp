@@ -17,11 +17,13 @@ describe('research triage', () => {
     expect(decision.signals.evidenceMode).toBe('seed-only');
     expect(decision.researchMode).toBe('recovery');
     expect(decision.budget).toEqual({
-      maxToolCalls: 10,
-      maxPostSeedArtifacts: 4,
+      maxToolCalls: 15,
+      initialToolCalls: 10,
+      extensionToolCalls: 5,
+      maxPostSeedArtifacts: 6,
       maxPublishableClaims: 5,
       maxFinalizationRetries: 1,
-      maxEvidenceChars: 8_000,
+      maxEvidenceChars: 10_000,
       targetIndependentClusters: 2,
     });
   });

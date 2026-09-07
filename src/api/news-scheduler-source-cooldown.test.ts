@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'bun:test';
-import { buildRssFingerprintAliasMap, NewsScheduler } from './news-scheduler.js';
+import { buildRssFingerprintAliasMap, NewsScheduler, producerRefillScanLimit } from './news-scheduler.js';
 import { getSchedulerStrategyConfig } from './scheduler-strategy-config.js';
+
+describe('producer low-water refill budget', () => {
+  it('keeps normal one-source cadence when the current-policy pool is healthy', () => {
+    expect(producerRefillScanLimit({ freshEligible: 12, pendingResearch: 0 }, 8, {})).toBe(1);
+  });
+
+  it('scans a bounded number of additional sources only when supply is low and Research is not backlogged', () => {
+    expect(producerRefillScanLimit({ freshEligible: 3, pendingResearch: 0 }, 8, {})).toBe(4);
+    expect(producerRefillScanLimit({ freshEligible: 3, pendingResearch: 2 }, 8, {})).toBe(1);
+    expect(producerRefillScanLimit(
+      { freshEligible: 3, pendingResearch: 0 },
+      8,
+      { PRODUCER_REFILL_LOW_WATER: '10', PRODUCER_REFILL_PENDING_MAX: '3', PRODUCER_REFILL_SCAN_MAX: '2' },
+    )).toBe(2);
+  });
+});
 
 function makeJob() {
   return {
