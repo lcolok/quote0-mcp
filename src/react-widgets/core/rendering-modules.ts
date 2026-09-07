@@ -189,7 +189,8 @@ export class NewsRenderingModule extends BaseRenderingModule<string> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: toHighlightedWords(data.message, data.highlights)
+        highlights: toHighlightedWords(data.message, data.highlights),
+        metadata: data.metadata,
       };
       
       // 渲染组件为图片
@@ -438,7 +439,8 @@ export class DevicePushRenderingModule extends BaseRenderingModule<any> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: toHighlightedWords(data.message, data.highlights) // 使用正文真实位置，避免高亮重排文本
+        highlights: toHighlightedWords(data.message, data.highlights), // 使用正文真实位置，避免高亮重排文本
+        metadata: data.metadata,
       };
       
       console.log(`🎨 渲染新闻数据:`, {
@@ -614,7 +616,8 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
         publishTime: data.publishTime,
         category: data.category,
         link: data.link,
-        highlights: toHighlightedWords(data.message, data.highlights)
+        highlights: toHighlightedWords(data.message, data.highlights),
+        metadata: data.metadata,
       };
 
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
