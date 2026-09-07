@@ -110,6 +110,8 @@ application:
     # 两个路径不再要求 Bearer token，完全公开（COMPONENT_LABELS_API_TOKEN 中间件
     # 未设置该变量时自动跳过鉴权，见 news-api-server.ts）。
     # Phase B terminal-tool 回调自鉴权（与 news-api 服务 env 同步）：token 优先读文件。
+    # Phase B 模式：terminal-tool（2026-09-08 起生产默认；回滚=改回 structured-inference）。
+    QUOTE0_RESEARCH_PHASE_B_MODE: terminal-tool
     QUOTE0_RESEARCH_TERMINAL_TOKEN: ""
     QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE: /app/secrets/quote0-research-terminal.token
 
@@ -246,10 +248,10 @@ services:
       STRAYLIGHT_RESEARCH_PROVIDER_ID: local-qwen
       STRAYLIGHT_RESEARCH_FINALIZER_PROVIDER_ID: local-qwen
       QUOTE0_RESEARCH_STRUCTURED_FINALIZER: "true"
-      # Phase B 模式：structured-inference（现状默认）| terminal-tool。terminal-tool 下 agent 在
-      # 同一线程调用一次 finish_research_turn，由 Quote0 用全部发布门裁决。每次 run 创建时冻结该
-      # 模式，中途改 env 不影响在途 run。
-      QUOTE0_RESEARCH_PHASE_B_MODE: structured-inference
+      # Phase B 模式：terminal-tool（2026-09-08 起生产默认；回滚=改回 structured-inference 重装）。
+      # terminal-tool 下 agent 在同一线程调用一次 finish_research_turn，由 Quote0 用全部发布门裁决。
+      # 每次 run 创建时冻结该模式，中途改 env 不影响在途 run；代码里 env 缺省值仍为 structured-inference。
+      QUOTE0_RESEARCH_PHASE_B_MODE: terminal-tool
       # Phase B terminal-tool 回调自鉴权 token。真实值只通过懒猫控制台注入，绝不写进本仓。
       # 优先读 QUOTE0_RESEARCH_TERMINAL_TOKEN_FILE（存在且非空则用其内容），否则回退 env token。
       QUOTE0_RESEARCH_TERMINAL_TOKEN: ""

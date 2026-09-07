@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  buildNeuromancerTerminalFinalizationPrompt,
+} from './research-few-shot.js';
+import {
   buildResearchEvidencePacket,
   dispatchResearchCanary,
   dispatchResearchExtension,
@@ -1422,6 +1425,92 @@ describe('research canary adapter', () => {
     const universalDecision = triageResearchCandidate({ seed, manual: true, universal: true });
     expect(universalDecision.reasons).toContain('universal-evidence');
     expect(minimumEditorialFactCount(universalDecision)).toBe(2);
+  });
+
+  it('reproduces the capacity rejection when terminal-tool facts are ~95 CJK chars each', () => {
+    // Regression for the v1.21.125 canaries (run 0372305f / 8ed1e837 / 4e432ebb / b423be4c):
+    // the model wrote 3 facts of roughly 95-100 CJK chars, so under the existing packing rule
+    // (title <=22 units → 280 body units ≈ 2 units per CJK) only the first fact fits.
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。'.repeat(4),
+      source: 'Example',
+      link: 'https://example.com/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    expect(digestDecision.researchMode).toBe('digest');
+    expect(minimumEditorialFactCount(digestDecision)).toBe(2);
+
+    const evidencePacket = buildResearchEvidencePacket(phaseATurns([
+      {
+        name: 'crawl', status: 'completed', input: { url: digestSeed.link },
+        output: { status: 'completed', url: digestSeed.link, engine: 'scrapling', result: { title: digestSeed.title, url: digestSeed.link, text: 'Seed canonical body with product update details and a changelog number.' } },
+      },
+      {
+        name: 'search', status: 'completed', input: { q: 'product update provenance' },
+        output: { query: 'product update provenance', results: [{ title: 'Independent coverage', url: 'https://independent.example/report', content: 'Independent report', engine: 'anysearch', score: 0.9 }] },
+      },
+      {
+        name: 'crawl', status: 'completed', input: { url: 'https://independent.example/report' },
+        output: { status: 'completed', url: 'https://independent.example/report', engine: 'scrapling', result: { title: 'Independent coverage', url: 'https://independent.example/report', text: 'Independent report corroborating the update.' } },
+      },
+    ]), 6_000, digestSeed);
+
+    // ~95 CJK chars (≈190 display units) each — the shape that triggered the v1.21.125 rejections.
+    const longFactText = '根据独立平台今日发布的产品版本说明本次更新将分阶段开放并逐步覆盖到全体用户而离线模式会在更新完成后默认开启以便在网络断开时依然可以查看内容并且启动速度有明显改善'.repeat(1);
+    const longFacts = Array.from({ length: 3 }, () => ({
+      text: longFactText,
+      evidenceIds: ['E1'],
+    }));
+
+    const result = materializeStructuredResearchFinalization({
+      runId: 'run-capacity-repro',
+      phaseAThreadId: 'thread-a',
+      seed: digestSeed,
+      evidencePacket,
+      decision: digestDecision,
+      runtime: { toolCalls: 3, searchRequests: 1, crawlRequests: 2, failedToolCalls: 0 },
+      finalization: {
+        candidate: {
+          titleCandidates: ['产品更新分阶段开放', '产品更新默认开离线模式', '产品推送离线与提速'],
+          facts: longFacts,
+          linkEvidenceId: 'E1',
+        },
+        telemetry: { mode: 'terminal-tool', providerId: 'server', model: 'server-adjudication', latencyMs: 1, attempt: 1 },
+      },
+    });
+
+    expect(result.artifact).toBeUndefined();
+    expect(result.policyViolation).toBe(false);
+    expect(result.errors.join(' ')).toContain('正文容量内只保留了 1 条完整事实');
+  });
+
+  it('tells the terminal-tool prompt the fact length budget and the reject-and-shorten correction', () => {
+    const digestSeed = {
+      title: '普通产品更新',
+      content: '产品新增离线模式，并改善启动速度。团队同时调整设置页结构，旧配置仍保持兼容；更新会分阶段开放。'.repeat(4),
+      source: 'Example',
+      link: 'https://example.com/update',
+      category: 'technology',
+    };
+    const digestDecision = triageResearchCandidate({ seed: digestSeed, universal: true });
+    const prompt = buildNeuromancerTerminalFinalizationPrompt(
+      digestSeed,
+      'version=quote0-evidence-packet/v1\nledger={\"entry\":1}',
+      'run-1',
+      digestDecision,
+      [],
+      { title: 'Direct', message: 'Direct' },
+    );
+
+    expect(prompt).toContain('第 1、2 条各**不超过 55 个中文字**');
+    expect(prompt).toContain('所有 facts 的 text 总字数**不超过 110');
+    expect(prompt).toContain('给正文留满 280 units');
+    expect(prompt).toContain('不要自行合并事实');
+    expect(prompt).toContain('正文容量内只保留了 1 条完整事实');
+    expect(prompt).toContain('不要删掉第二条事实');
+    expect(prompt).toContain('缩短到 55 个中文字以内');
   });
 
   it('dispatches the terminal-tool continuation on the SAME thread with a single non-terminal call budget', async () => {

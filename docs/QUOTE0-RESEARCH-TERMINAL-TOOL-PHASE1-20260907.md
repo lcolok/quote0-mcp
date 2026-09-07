@@ -208,12 +208,51 @@ running(attempts=2, threadA)  ── 后续 reconcile ——▶ phase=terminal-f
 
 ## 如何切换模式
 
-- **默认不切换**：保持现有 `QUOTE0_RESEARCH_STRUCTURED_FINALIZER=true`（= `structured-inference`）。
-- **启用 terminal-tool**：
+- **默认（2026-09-08 起）**：`lzc-manifest.yml` 两处 env 块的 `QUOTE0_RESEARCH_PHASE_B_MODE` 已切到
+  `terminal-tool`。回滚 = 改回 `structured-inference` 后重装 news-api。
+- **structured-inference（回滚基线）**：`QUOTE0_RESEARCH_PHASE_B_MODE=structured-inference`。
+- **terminal-tool（生产默认）**：
   1. 懒猫控制台给 news-api 注入 `QUOTE0_RESEARCH_TERMINAL_TOKEN=<真实值>`（**不要**写进仓库）。
   2. 把 `QUOTE0_RESEARCH_PHASE_B_MODE` 设为 `terminal-tool`。
   3. 重启 news-api。`GET /api/health` 的 `researchRoute.phaseBMode` 应显示 `terminal-tool`。
-- 在途 run 不受影响：每个 run 创建时冻结自己的 mode。
+- 在途 run 不受影响：每个 run 创建时冻结自己的 mode；代码里 env 缺省值仍为 `structured-inference`，不改。
+
+## 补丁 1d：terminal-tool Phase B 事实长度约束；生产默认切 terminal-tool
+
+### canary 数据（v1.21.125）
+
+`universal:true, phaseBMode:"terminal-tool"` 跑了 4 条 manual canary
+（run `0372305f` recovery / `8ed1e837` digest / `4e432ebb` digest / `b423be4c` digest）：**4/4 最终 accepted**，
+但 **3/4 的首次 `finish_research_turn` 提案被拒**，错误文案完全一致：
+
+```
+正文容量内只保留了 1 条完整事实，低于当前 Research 最低 2 条；请缩短事实句而不是丢掉信息增益
+```
+
+同线程带 errors 重试一次后全部通过。
+
+对比 structured-inference 基线（09-01 起 444 个 auto completed）：Phase B 首次通过 82.7%；
+terminal-tool 首次通过仅 1/4。根因是模型在 `facts[].text` 把每条事实写到 ~90–100 个中文字
+（例 run `c307c7d8` 候选 3 条约 95/100/90 字）；按 296×152 容量规则（title ≤22 units → 280 message units ≈140 全角字，
+否则 220 units），装箱后只剩 1 条完整事实。
+
+### 决策与改动
+
+- 只在 **terminal-tool 模式**的 Phase B 提示词（`buildNeuromancerTerminalFinalizationPrompt`，research-few-shot.ts）
+  增加长度约束，structured-inference（`/inference/structured`）提示词**不动**（该线 82.7% 首次通过，别扰动基线）。
+  - `facts`：第 1、2 条各**不超过 55 个中文字**（ASCII/数字按半字计），第 3 条起可略长，所有 facts text 总长
+    **不超过 110 个中文/等价单位**；一条=一个事实原子，不要自行合并事实。
+  - 标题候选优先 ≤11 个全角字（≤22 units）给正文留满 280 units。
+  - 被拒回「正文容量内只保留了 1 条完整事实」时的修正动作 = 把前两条各自缩短到 55 字以内，**不要删掉第二条**。
+- **生产默认切 terminal-tool**：`lzc-manifest.yml` 两处 env 块的 `QUOTE0_RESEARCH_PHASE_B_MODE` 由
+  `structured-inference` 改 `terminal-tool`（注释注明 2026-09-08 起生产默认、回滚方法）；代码 env 缺省值仍为
+  `structured-inference`，不改。
+- 不改装箱规则本身（renderable-news-intake.ts）。
+
+### 回归测试
+
+- 构造"3 条各 ~95 字事实 + 短标题"的候选，断言按现有装箱规则只能装 1 条（复现拒回）。
+- 断言 terminal-tool 提示词包含长度约束关键句。
 
 ## Canary 步骤（建议）
 

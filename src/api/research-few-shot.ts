@@ -286,9 +286,11 @@ export function buildNeuromancerTerminalFinalizationPrompt(
     ? `
 这一步只做编辑决策，不生成完整新闻 artifact。Quote0 服务器会自行生成 researchReceipt、sources、source、highlights、signature、category、publishTime、usage、run/thread id 与 retrieval telemetry。你禁止输出 URL、publishTime、source role、claim status 或任何 ledger 中不存在的证据。
 输出语义：
-- titleCandidates：恰好 3 个不同的紧凑中文标题候选，按优先级排序；**每个标题都必须是 facts 中某条高优先事实的紧凑摘要，必须共享同一核心事件/实体，禁止从 Evidence Packet 的其他段落另挑一个“更吸睛”的话题当标题**；保留关键实体/动作/数字，优先 <=22 display units，必要时 <=28。
-- facts：${decision.reasons.includes('universal-evidence') ? '至少 2 条、最多' : '1~'}${decision.budget?.maxPublishableClaims ?? 4} 条按信息增益排序、互不重复的完整事实句。每条 text 必须是一句可以独立放进新闻卡片的完整中文句子，不写半句，不写来源列表；evidenceIds 只能引用 Ledger 中 supportEligible=true 的 E 编号。**正文禁止只是标题的翻译、扩写或同义复述**；至少保留证据支持的数字、时间线、背景、因果、影响或后续行动之一。Quote0 会按真实 display units 逐句装箱，放不下的整句会被丢弃，所以最重要事实放最前。
+- titleCandidates：恰好 3 个不同的紧凑中文标题候选，按优先级排序；**每个标题都必须是 facts 中某条高优先事实的紧凑摘要，必须共享同一核心事件/实体，禁止从 Evidence Packet 的其他段落另挑一个“更吸睛”的话题当标题**；保留关键实体/动作/数字，**优先 <=11 个全角字（<=22 display units）给正文留满 280 units**，确有必要才放宽到 <=28 units。
+- facts：${decision.reasons.includes('universal-evidence') ? '至少 2 条、最多' : '1~'}${decision.budget?.maxPublishableClaims ?? 4} 条按信息增益排序、互不重复的完整事实句。每条 text 必须是一句可以独立放进新闻卡片的完整中文句子，不写半句，不写来源列表；evidenceIds 只能引用 Ledger 中 supportEligible=true 的 E 编号。**正文禁止只是标题的翻译、扩写或同义复述**；至少保留证据支持的数字、时间线、背景、因果、影响或后续行动之一（但一条只装一个事实原子）。
+- facts 长度约束（硬性，否则装不进正文）：第 1、2 条各**不超过 55 个中文字**（ASCII/数字按半字计），第 3 条起可略长，但所有 facts 的 text 总字数**不超过 110 个中文/等价单位**。一条=一个事实原子，不要把背景+数字+因果塞进同一句；宁可拆成两条，也不要写进一句。装箱（display units → 容量）完全由服务器做，你**不要自行合并事实**、不要为了“省字数”删掉信息增益。
 - linkEvidenceId：选择最适合继续阅读的一个 Ledger E 编号，优先 canonical/primary/official 对应页面。
+- 若重试提示词里出现「正文容量内只保留了 1 条完整事实，低于当前 Research 最低 2 条」，修正动作是：把前两条事实各自缩短到 55 个中文字以内（去掉修饰语、保留数字与因果主干），再调用一次 finish_research_turn；**不要删掉第二条事实**。
 `
     : `
 只在 Seed + Evidence Packet 基础上生成最终卡片；证据不足就删掉主张或标 unresolved，不得自行补资料。先在内部完成 claim-level 取舍：优先 primary/official + 独立 corroboration 支持的事实；同一转载链不能当多源确认；遇到冲突/过时信息要降措辞强度。最终卡片不是“研究报告摘要”，也不是“越短越好”的一句话摘要；应在真实墨水屏容量内尽可能保留最有信息增益的 3~5 条事实，尤其是关键背景、时间线、数字、因果或行动信息，同时避免重复和无效铺陈。`;
