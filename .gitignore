@@ -154,3 +154,6 @@ scripts/trmnl-poc/
 
 # 工作区治理 2026-08-02：本地考古报告落盘目录（正式版本发布至 skldr /logic_dev/archaeology/）
 reports/
+
+# Command Code 承载在工作区留下的运行目录
+.commandcode/
