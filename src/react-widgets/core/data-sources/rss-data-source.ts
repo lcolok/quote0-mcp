@@ -19,6 +19,7 @@ const MAX_FUTURE_PUBLISH_SKEW_MS = 5 * 60 * 1000;
 
 export function normalizeRssPublishTime(raw: string | undefined, nowMs = Date.now()): {
   publishTime: string;
+  identityPublishTime?: string;
   rawPublishTime?: string;
   futureClamped: boolean;
 } {
@@ -27,10 +28,21 @@ export function normalizeRssPublishTime(raw: string | undefined, nowMs = Date.no
   if (!Number.isFinite(parsed)) {
     return { publishTime: new Date(nowMs).toISOString(), rawPublishTime: raw, futureClamped: false };
   }
+  const stableIdentityTime = new Date(parsed).toISOString();
   if (parsed > nowMs + MAX_FUTURE_PUBLISH_SKEW_MS) {
-    return { publishTime: new Date(nowMs).toISOString(), rawPublishTime: raw, futureClamped: true };
+    return {
+      publishTime: new Date(nowMs).toISOString(),
+      identityPublishTime: stableIdentityTime,
+      rawPublishTime: raw,
+      futureClamped: true,
+    };
   }
-  return { publishTime: new Date(parsed).toISOString(), rawPublishTime: raw, futureClamped: false };
+  return {
+    publishTime: stableIdentityTime,
+    identityPublishTime: stableIdentityTime,
+    rawPublishTime: raw,
+    futureClamped: false,
+  };
 }
 
 export class RSSDataSourceModule extends BaseDataSourceModule {
@@ -103,6 +115,7 @@ export class RSSDataSourceModule extends BaseDataSourceModule {
             rssSource: params.source || 'custom',
             originalIndex: startIndex + index,
             guid: item.guid,
+            identityPublishTime: normalizedTime.identityPublishTime,
             rawPublishTime: normalizedTime.rawPublishTime,
             publishTimeFutureClamped: normalizedTime.futureClamped,
           }

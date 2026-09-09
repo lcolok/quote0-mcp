@@ -104,6 +104,10 @@ export interface NewsPushContext {
   title?: string;
   link?: string;
   publishTime?: string;
+  /** 原始/稳定发布时间，仅作身份与审计证据；展示与新鲜度仍用 publishTime。 */
+  identityPublishTime?: string;
+  rawPublishTime?: string;
+  publishTimeFutureClamped?: boolean;
   source?: string;
   category?: string;
   rawIndex?: number;

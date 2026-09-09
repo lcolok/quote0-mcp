@@ -21,6 +21,7 @@ import { SatoriWeatherWidget } from '../react-widgets/components/SatoriWeatherWi
 import { EINK_DEVICE_WIDTH, EINK_DEVICE_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { RECOMMENDED_RSS_SOURCE_IDS } from '../react-widgets/core/data-sources/rss-source-registry.js';
 import { MindResetDeviceClient } from '../image-sender/services/api/device-client.js';
+import { assessContentQuality, type ContentQualityAssessment } from './content-quality.js';
 
 function sanitizeWeatherData(data: any): WeatherData {
   const toStr = (v: any, fallback?: string): string | undefined => {
@@ -138,6 +139,7 @@ interface CandidateArticle {
   pushCount: number;
   lastPushedAt?: string | null;
   context: NewsPushContext;
+  qualityAssessment: ContentQualityAssessment;
 }
 
 interface LayerAttemptLog {
@@ -786,11 +788,15 @@ export class NewsScheduler {
         title: candidate.context.title,
         link: candidate.context.link,
         publishTime: candidate.context.publishTime,
+        identityPublishTime: candidate.context.identityPublishTime,
+        rawPublishTime: candidate.context.rawPublishTime,
+        publishTimeFutureClamped: candidate.context.publishTimeFutureClamped,
         source: candidate.context.source,
         category: candidate.context.category || job.config.category,
         fingerprint: candidate.fingerprint,
         content: candidate.context.content,
-        description: candidate.context.description
+        description: candidate.context.description,
+        contentQualityShadow: candidate.qualityAssessment,
       };
 
       let processedContent: Record<string, any> | undefined;
@@ -931,7 +937,8 @@ export class NewsScheduler {
               processingDurationMs,
               totalCandidates: selection.totalCandidates,
               poolSize: selection.poolSize,
-              jobRole: job.config.jobRole
+              jobRole: job.config.jobRole,
+              contentQualityShadow: candidate.qualityAssessment
             },
             runFinishedAt: new Date()
           });
@@ -1339,7 +1346,14 @@ export class NewsScheduler {
         publishTime: context.publishTime,
         pushCount: 0,
         lastPushedAt: undefined,
-        context
+        context,
+        qualityAssessment: assessContentQuality({
+          sourceId: currentRssSource,
+          title: context.title,
+          content: context.content,
+          link: context.link,
+          publishTime: context.publishTime,
+        }),
       };
       const reasons: LayerAttemptLog[] = [{ layer: 'override', reason: 'manual_override' }];
       const poolSize = this.getEffectivePoolSize(job);
@@ -1424,10 +1438,11 @@ export class NewsScheduler {
 
     const candidates = rawItems.map((item, idx) => {
       const originalIndex = item.metadata?.originalIndex ?? item.metadata?.index ?? idx;
+      const identityPublishTime = item.metadata?.identityPublishTime || item.publishTime;
       const fingerprint = computeNewsFingerprint({
         title: item.title,
         link: item.link,
-        publishTime: item.publishTime,
+        publishTime: identityPublishTime,
         source: item.source,
         category: item.category || job.config.category,
         fallback: `${job.config.dataSource}:${job.config.rssSource}:${originalIndex}`
@@ -1436,6 +1451,9 @@ export class NewsScheduler {
         title: item.title,
         link: item.link,
         publishTime: item.publishTime,
+        identityPublishTime,
+        rawPublishTime: item.metadata?.rawPublishTime,
+        publishTimeFutureClamped: item.metadata?.publishTimeFutureClamped === true,
         source: item.source,
         category: item.category || job.config.category,
         fingerprint,
@@ -1452,13 +1470,21 @@ export class NewsScheduler {
       const stat = stats[candidate.fingerprint];
       const pushCount = stat?.pushCount ?? 0;
       const lastPushedAt = stat?.lastPushedAt ?? null;
+      const qualityAssessment = assessContentQuality({
+        sourceId: currentRssSource,
+        title: candidate.context.title,
+        content: candidate.context.content,
+        link: candidate.context.link,
+        publishTime: candidate.context.publishTime,
+      });
       return {
         index: candidate.index,
         fingerprint: candidate.fingerprint,
         publishTime: candidate.publishTime,
         pushCount,
         lastPushedAt,
-        context: candidate.context
+        context: candidate.context,
+        qualityAssessment,
       };
     });
 

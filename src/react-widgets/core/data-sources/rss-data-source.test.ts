@@ -15,14 +15,26 @@ describe("RSSDataSourceModule", () => {
     it("keeps normal source timestamps", () => {
       const result = normalizeRssPublishTime("2026-08-15T23:00:00.000Z", now);
       expect(result.publishTime).toBe("2026-08-15T23:00:00.000Z");
+      expect(result.identityPublishTime).toBe("2026-08-15T23:00:00.000Z");
       expect(result.futureClamped).toBe(false);
     });
 
-    it("clamps materially future source timestamps but preserves raw evidence", () => {
+    it("clamps materially future source timestamps but preserves stable identity evidence", () => {
       const result = normalizeRssPublishTime("2026-08-16T00:40:00.000Z", now);
       expect(result.publishTime).toBe("2026-08-16T00:00:00.000Z");
+      expect(result.identityPublishTime).toBe("2026-08-16T00:40:00.000Z");
       expect(result.rawPublishTime).toBe("2026-08-16T00:40:00.000Z");
       expect(result.futureClamped).toBe(true);
+    });
+
+    it("keeps future-dated identity stable across repeated fetch times", () => {
+      const raw = "2026-08-16T02:40:00.000Z";
+      const first = normalizeRssPublishTime(raw, Date.parse("2026-08-16T01:00:00.000Z"));
+      const second = normalizeRssPublishTime(raw, Date.parse("2026-08-16T02:00:00.000Z"));
+
+      expect(first.publishTime).not.toBe(second.publishTime);
+      expect(first.identityPublishTime).toBe(raw);
+      expect(second.identityPublishTime).toBe(raw);
     });
   });
 
