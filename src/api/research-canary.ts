@@ -1502,6 +1502,11 @@ function parseEvidenceLedger(evidencePacket?: string): EvidenceLedgerV2 | undefi
   }
 }
 
+/** True when the evidence packet contains at least one support-eligible Ledger v2 entry. */
+export function hasSupportEligibleEvidence(evidencePacket?: string): boolean {
+  return Boolean(parseEvidenceLedger(evidencePacket)?.entries.length);
+}
+
 function parseSupportEligibleDigests(evidencePacket?: string): Set<string> {
   const ledger = parseEvidenceLedger(evidencePacket);
   if (ledger) return new Set(ledger.supportUrlDigests);

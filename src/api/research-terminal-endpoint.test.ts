@@ -10,8 +10,8 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test';
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildResearchEvidencePacket, getResearchCanaryConfig, researchCanaryIdentity } from './research-canary.js';
-import { triageResearchCandidate } from './research-triage.js';
+import { buildResearchEvidencePacket, getResearchCanaryConfig, RESEARCH_EVIDENCE_LEDGER_VERSION, researchCanaryIdentity } from './research-canary.js';
+import { RESEARCH_TRIAGE_POLICY_VERSION, triageResearchCandidate } from './research-triage.js';
 
 // --- mock PG（bun 的 mock.module 进程全局生效，本文件用 cache-bust import 拿到 stub） ---
 let runRow: Record<string, unknown>;
@@ -20,7 +20,8 @@ let lastInsertedTriage: Record<string, unknown> | undefined;
 const postgresStub: any = {
   initialize: async () => undefined,
   query: async (sql: string, params?: unknown[]) => {
-    if (String(sql).includes('INSERT INTO research_runs')) {
+    const statement = String(sql);
+    if (statement.includes('INSERT INTO research_runs')) {
       const raw = Array.isArray(params) ? params[10] : undefined;
       try {
         lastInsertedTriage = typeof raw === 'string' ? JSON.parse(raw) : undefined;
@@ -31,12 +32,52 @@ const postgresStub: any = {
       // store's INSERT ... RETURNING * line resolves.
       return { rows: [runRow] };
     }
-    // getResearchRun 与 markResearchRunTerminalReceipt 都以第一个参数为 runId。
+    if (statement.startsWith('UPDATE research_runs')) {
+      // Mirror the store's UPDATE ... RETURNING * against the shared runRow so reconcile tests can
+      // observe state/evidence transitions in the response payload.
+      applyResearchRunUpdate(statement, params);
+      return { rows: [runRow] };
+    }
+    // getResearchRun 以第一个参数为 runId。
     const requestedId = Array.isArray(params) ? String(params[0]) : '';
     if (requestedId && requestedId !== 'run-terminal') return { rows: [] };
     return { rows: [runRow] };
   },
 };
+
+/** Apply the column changes of a research_runs UPDATE to the shared runRow stub. */
+function applyResearchRunUpdate(statement: string, params?: unknown[]) {
+  const list = Array.isArray(params) ? params : [];
+  const row = runRow as Record<string, unknown>;
+  if (statement.includes('attempts=attempts+1')) {
+    // markResearchRunDispatched / markResearchRunResearchExtended: [id, jobId, [jobId], threadId, ...]
+    row.attempts = Number(row.attempts || 0) + 1;
+    row.state = 'running';
+    row.straylight_job_id = String(list[1] ?? '');
+    row.straylight_thread_id = String(list[3] ?? '');
+    return;
+  }
+  if (statement.includes('terminal_receipt=$2')) {
+    // markResearchRunTerminalReceipt: [id, receipt]
+    row.terminal_receipt = typeof list[1] === 'string' ? JSON.parse(list[1]) : list[1];
+    return;
+  }
+  if (statement.includes('research_extension_receipt=$5')) {
+    // markResearchRunResearchExtended: [id, jobId, [jobId], threadId, receipt]
+    row.state = 'running';
+    row.straylight_job_id = String(list[1] ?? '');
+    row.straylight_thread_id = String(list[3] ?? '');
+    row.research_extension_receipt = typeof list[4] === 'string' ? JSON.parse(list[4]) : list[4];
+    return;
+  }
+  // markResearchRunState: [id, state, runtime, artifact, validationErrors, evidence, error, terminal]
+  row.state = String(list[1] ?? row.state);
+  if (typeof list[2] === 'string' && list[2]) row.runtime_receipt = JSON.parse(list[2]);
+  if (typeof list[4] === 'string' && list[4]) row.validation_errors = JSON.parse(list[4]);
+  if (typeof list[5] === 'string' && list[5]) row.evidence_snapshot = list[5];
+  if (typeof list[6] === 'string' && list[6]) row.error = list[6];
+  if (list[7] === true && !row.completed_at) row.completed_at = new Date().toISOString();
+}
 
 mock.module('../react-widgets/core/postgres-database.js', () => ({
   getPostgresDatabase: () => postgresStub,
@@ -139,6 +180,65 @@ const manualPost = (body: unknown) =>
     body: JSON.stringify(body),
   });
 
+// --- empty-ledger fixtures for the terminal-tool fail-fast guard ---
+
+// Non-staged (verification) decision: phase A can reach research_complete on a packet whose
+// ledger has zero support-eligible entries, mirroring the production sparse-evidence runs.
+const reconcileDecision = triageResearchCandidate({ seed, manual: true, conflict: true });
+
+function emptyLedgerPhaseATurns() {
+  return phaseATurns([
+    {
+      name: 'crawl', status: 'completed', input: { url: seed.link },
+      output: { status: 'completed', url: seed.link, engine: 'scrapling', result: { title: '403 Forbidden', url: seed.link, text: '403 Forbidden' } },
+    },
+    {
+      name: 'search', status: 'completed', input: { q: 'MCP session cancellation provenance' },
+      output: { query: 'MCP session cancellation provenance', results: [] },
+    },
+  ]);
+}
+
+function emptyLedgerPacket() {
+  const packet = buildResearchEvidencePacket(emptyLedgerPhaseATurns() as never, 6_000, seed);
+  const ledgerLine = packet.split('\n').find((line) => line.startsWith('ledger='));
+  const ledger = JSON.parse(String(ledgerLine).slice('ledger='.length)) as { entries: unknown[] };
+  expect(ledger.entries).toEqual([]);
+  return packet;
+}
+
+function jsonOk(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+type FetchCall = { method: string; url: string };
+
+/** Stub Straylight for the reconcile handler (job/thread inspection + optional dispatches). */
+function replayStraylight(calls: FetchCall[], turns: unknown[], options: { structured?: unknown } = {}) {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = String(init?.method || 'GET').toUpperCase();
+    calls.push({ method, url });
+    if (method === 'GET' && url.endsWith('/jobs/job-t1')) {
+      return jsonOk({ jobId: 'job-t1', threadId: 'thread-a', status: 'completed', response: '' });
+    }
+    if (method === 'GET' && url.endsWith('/threads/thread-a')) {
+      return jsonOk({ turns });
+    }
+    if (method === 'POST' && url.endsWith('/inference/structured')) {
+      if (options.structured === undefined) return jsonOk({ error: 'unexpected structured call' }, 500);
+      return jsonOk(options.structured);
+    }
+    if (method === 'POST' && url.endsWith('/jobs')) {
+      return jsonOk({ jobId: 'job-t2', threadId: 'thread-a' }, 202);
+    }
+    return jsonOk({ error: 'not found' }, 404);
+  }) as typeof fetch;
+}
+
+const reconcilePost = () =>
+  researchCanaryApp.request('/api/news/research/canary/jobs/run-terminal/reconcile', { method: 'POST' });
+
 describe('POST /api/news/research/terminal/finish', () => {
   beforeEach(() => {
     runRow = makeRunRow();
@@ -178,6 +278,21 @@ describe('POST /api/news/research/terminal/finish', () => {
     const body = await res.json();
     expect(body.outcome).toBe('rejected');
     expect(body.errors.join(' ')).toContain('不允许的字段 source');
+  });
+
+  it('rejects with the empty-ledger gate error (200 + rejected) instead of falling back to the legacy schema', async () => {
+    process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN = 'real-secret';
+    runRow.evidence_snapshot = emptyLedgerPacket();
+    const res = await post({ ...validCandidate(), runId: 'run-terminal' }, 'real-secret');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.trusted).toBe(true);
+    expect(body.outcome).toBe('rejected');
+    expect(body.artifact).toBeNull();
+    expect(body.errors[0]).toContain(`缺少 ${RESEARCH_EVIDENCE_LEDGER_VERSION} 可支持证据`);
+    // The legacy full-artifact schema fallback must not leak its misleading missing-field errors.
+    expect(body.errors.join(' ')).not.toContain('缺少必填字段');
+    expect(runRow.terminal_receipt).toMatchObject({ outcome: 'rejected' });
   });
 
   it('accepts a candidate that passes every publish gate and returns the trusted artifact', async () => {
@@ -292,5 +407,56 @@ describe('Patch B: terminal token file source', () => {
     } as NodeJS.ProcessEnv);
     expect(config.terminalTokenSource).toBe('env');
     expect(config.terminalToken).toBe('env-secret');
+  });
+});
+
+describe('POST /api/news/research/canary/jobs/:id/reconcile — empty evidence ledger fail-fast', () => {
+  beforeEach(() => {
+    runRow = makeRunRow();
+    delete process.env.QUOTE0_RESEARCH_TERMINAL_TOKEN;
+    delete process.env.QUOTE0_RESEARCH_PHASE_B_MODE;
+    delete process.env.QUOTE0_RESEARCH_STRUCTURED_FINALIZER;
+    process.env.QUOTE0_RESEARCH_CANARY_ENABLED = 'true';
+    process.env.STRAYLIGHT_RESEARCH_BASE_URL = 'https://straylight.example/api';
+  });
+
+  it('marks a terminal-tool run invalid without dispatching when Phase A froze an empty evidence ledger', async () => {
+    runRow.state = 'running';
+    runRow.attempts = 1;
+    runRow.triage = { ...reconcileDecision, phaseBMode: 'terminal-tool' };
+    const calls: FetchCall[] = [];
+    replayStraylight(calls, emptyLedgerPhaseATurns());
+
+    const res = await reconcilePost();
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.reconciled).toBe(true);
+    expect(body.data.state).toBe('invalid');
+    expect(body.data.validationErrors[0]).toContain(`缺少 ${RESEARCH_EVIDENCE_LEDGER_VERSION} 可支持证据`);
+    // The terminal-tool continuation must never be dispatched: no POST /jobs at all.
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/jobs'))).toHaveLength(0);
+  });
+
+  it('keeps structured-inference behavior unchanged on the same empty packet (no guard interception)', async () => {
+    runRow.state = 'running';
+    runRow.attempts = 1;
+    runRow.triage = { ...reconcileDecision, phaseBMode: 'structured-inference' };
+    const calls: FetchCall[] = [];
+    replayStraylight(calls, emptyLedgerPhaseATurns());
+
+    const res = await reconcilePost();
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.reconciled).toBe(true);
+    expect(body.structuredFinalizer).toBe(true);
+    // Unchanged legacy-structured flow: the empty packet still dispatches its own finalizer
+    // attempts and fails closed there — it is never short-circuited by the terminal-tool gate.
+    expect(body.data.state).toBe('failed');
+    expect(body.error).toContain('Structured Phase B');
+    expect(body.error).not.toContain('可支持证据');
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/inference/structured')).length).toBeGreaterThanOrEqual(1);
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/jobs'))).toHaveLength(0);
   });
 });

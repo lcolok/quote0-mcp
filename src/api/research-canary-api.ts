@@ -8,9 +8,11 @@ import {
   dispatchResearchTerminalFinalization,
   dispatchStructuredResearchFinalization,
   getResearchCanaryConfig,
+  hasSupportEligibleEvidence,
   inspectResearchCanary,
   materializeStructuredResearchFinalization,
   RESEARCH_CANARY_MODE,
+  RESEARCH_EVIDENCE_LEDGER_VERSION,
   researchCanaryFingerprint,
   researchCanaryIdempotencyKey,
   shouldExtendResearch,
@@ -34,6 +36,13 @@ import { applyUniversalResearchArtifact } from './universal-research-finalizatio
 const app = new Hono();
 const postgres = getPostgresDatabase();
 
+// Same sentence the server-owned editorial materializer emits when a frozen packet has no
+// support-eligible Ledger v2 evidence (research-canary.ts), composed from the shared version
+// constants rather than a second literal copy that a policy bump could leave stale.
+function emptyEvidenceLedgerError(): string {
+  return `Research ${RESEARCH_TRIAGE_POLICY_VERSION} 缺少 ${RESEARCH_EVIDENCE_LEDGER_VERSION} 可支持证据`;
+}
+
 function directDraftFromRun(run: ResearchRunRecord): { title: string; message: string } | undefined {
   const draft = run.directSnapshot;
   const title = cleanString(draft?.title);
@@ -53,6 +62,11 @@ async function redispatchResearchFinalization(
 ): Promise<StraylightCanaryDispatch> {
   const mode = run.triage.phaseBMode ?? getResearchCanaryConfig().phaseBMode;
   if (mode === 'terminal-tool') {
+    if (!hasSupportEligibleEvidence(run.evidenceSnapshot)) {
+      // Fail fast: re-dispatching a same-thread terminal continuation for a frozen packet with no
+      // support-eligible evidence can only burn another attempt on a deterministic rejection.
+      throw new Error(`Terminal finalization 无法重派（冻结证据无可支持条目）: ${emptyEvidenceLedgerError()}`);
+    }
     return dispatchResearchTerminalFinalization(
       run.id,
       run.straylightThreadId!,
@@ -566,6 +580,18 @@ app.post('/api/news/research/terminal/finish', async (c) => {
     linkEvidenceId: body.linkEvidenceId,
   };
 
+  // Never fall back to the legacy full-artifact schema for terminal-tool adjudication: the
+  // finish_research_turn proposal shape is fixed in Straylight, so a frozen packet with no
+  // support-eligible evidence cannot yield a valid submission. Reject deterministically instead
+  // of burning a retry on misleading missing-field errors from the legacy schema gate.
+  if (!hasSupportEligibleEvidence(run.evidenceSnapshot)) {
+    const errors = [emptyEvidenceLedgerError()];
+    await markResearchRunTerminalReceipt(postgres, run.id, {
+      attempt, outcome: 'rejected', errors, candidate, receivedAt,
+    });
+    return rejected({ attempt, outcome: 'rejected', errors, candidate });
+  }
+
   // Shape gate: reuse the exact schema the structured path uses (rejects extra fields, wrong
   // cardinality, unknown evidence ids). Validate the full submission (minus the runId control
   // key) so a model-injected field is caught rather than silently dropped. Semantic publish
@@ -765,6 +791,21 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
         // Minimum coverage is already satisfied for optional marginal-gain extension.
         // Finalize from frozen evidence instead of failing or re-running Phase A.
       }
+    }
+
+    if (phaseBMode === 'terminal-tool'
+      && run.triage.policyVersion === RESEARCH_TRIAGE_POLICY_VERSION
+      && !hasSupportEligibleEvidence(inspection.evidencePacket)) {
+      // Fail fast on a frozen empty evidence ledger. The finish_research_turn proposal shape is
+      // fixed in Straylight, so the structuredFinalizationSchema legacy fallback would reject
+      // every submission and burn up to two terminal continuations on a deterministic dead end.
+      const invalid = await markResearchRunState(postgres, run.id, {
+        state: 'invalid',
+        runtimeReceipt: inspection.runtime,
+        evidenceSnapshot: inspection.evidencePacket,
+        validationErrors: [emptyEvidenceLedgerError()],
+      });
+      return c.json({ success: false, reconciled: true, data: publicRun(invalid) }, 422);
     }
 
     if (phaseBMode === 'terminal-tool') {
@@ -990,7 +1031,8 @@ app.post('/api/news/research/canary/jobs/:id/reconcile', async (c) => {
     });
   }
 
-  if (inspection.status === 'invalid' && inspection.retryable && phase === 'finalization' && run.attempts < maxFinalizationAttempts && run.evidenceSnapshot) {
+  if (inspection.status === 'invalid' && inspection.retryable && phase === 'finalization' && run.attempts < maxFinalizationAttempts && run.evidenceSnapshot
+    && (phaseBMode !== 'terminal-tool' || hasSupportEligibleEvidence(run.evidenceSnapshot))) {
     // Persist the first validator failure before dispatching the one allowed retry.
     // If the retry itself crashes/no-events, this evidence must survive the terminal update.
     await markResearchRunState(postgres, run.id, {
