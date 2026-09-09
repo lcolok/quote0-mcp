@@ -51,6 +51,7 @@ function seedPayload(seed: ResearchSeed, contentLimit?: number): string {
     ...(seed.source ? { source: seed.source } : {}),
     ...(seed.link ? { link: seed.link } : {}),
     ...(seed.category ? { category: seed.category } : {}),
+    ...(seed.publishTime ? { publishTime: seed.publishTime } : {}),
   }, null, 2);
 }
 
@@ -83,6 +84,7 @@ function finalJsonContract(runId: string, maxClaims: number): string {
 }
 
 Quote0 会自行注入 threadId/runId/generatedAt/真实工具计数和 token telemetry 状态；不要编造 usage/token 数值。
+时间所有权：如果 Seed.publishTime 存在，publishTime 必须逐字复制该值，禁止根据页面中的“Aug 21”等缺年份文本自行猜年份；Quote0 materialize 还会确定性覆盖该字段。canonical/primary source 的其他发布日期只用于证据与正文语义，不得改写产品时间身份。
 硬约束：title 最多约16个全角字的视觉量；message 最多约80个全角字；highlights 必须逐字出现在 message；sources 总数最多 3（seed + 最多2个最关键来源）；claims 最多 ${maxClaims}；source.note 默认省略，只有确实需要解释来源角色时才写且不超过80字符；不写“详情见原文”“引发关注”等空话。`;
 }
 

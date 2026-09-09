@@ -62,6 +62,13 @@ function cleanString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function cleanIsoTime(value: unknown): string {
+  const raw = cleanString(value);
+  if (!raw) return '';
+  const timestamp = Date.parse(raw);
+  return Number.isNaN(timestamp) ? '' : new Date(timestamp).toISOString();
+}
+
 function boundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(raw || '', 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -90,12 +97,14 @@ export function inventoryRowToResearchSeed(row: InventoryResearchRow): ResearchS
   const source = cleanString(raw.source) || cleanString(row.source);
   const link = cleanString(raw.link) || cleanString(row.link);
   const category = cleanString(raw.category) || cleanString(row.category) || 'news';
+  const publishTime = cleanIsoTime(raw.publishTime);
   return {
     title,
     ...(content ? { content } : {}),
     ...(source ? { source } : {}),
     ...(link ? { link } : {}),
     category,
+    ...(publishTime ? { publishTime } : {}),
   };
 }
 

@@ -48,6 +48,7 @@ describe('research auto-canary worker policy', () => {
         content: '点击查看原文>',
         source: 'InfoQ',
         link: 'https://example.com/raw',
+        publishTime: '2026-08-21T07:07:30Z',
       },
     })).toEqual({
       title: 'raw title',
@@ -55,6 +56,7 @@ describe('research auto-canary worker policy', () => {
       source: 'InfoQ',
       link: 'https://example.com/raw',
       category: 'technology',
+      publishTime: '2026-08-21T07:07:30.000Z',
     });
   });
 

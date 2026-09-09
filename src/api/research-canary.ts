@@ -101,6 +101,13 @@ function cleanString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function cleanIsoTime(value: unknown): string {
+  const raw = cleanString(value);
+  if (!raw) return '';
+  const timestamp = Date.parse(raw);
+  return Number.isNaN(timestamp) ? '' : new Date(timestamp).toISOString();
+}
+
 function normalizeBaseUrl(value: string): string {
   const parsed = new URL(value);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -454,11 +461,13 @@ function parseStrictJsonObject(value: unknown): Record<string, unknown> {
 
 function seedReceipt(seed: ResearchSeed): NonNullable<NeuromancerResearchReceipt['seed']> {
   const content = cleanString(seed.content).slice(0, 1_000);
+  const publishTime = cleanIsoTime(seed.publishTime);
   return {
     title: seed.title.trim(),
     ...(content ? { content } : {}),
     ...(cleanString(seed.source) ? { source: cleanString(seed.source) } : {}),
     ...(cleanString(seed.link) ? { link: cleanString(seed.link) } : {}),
+    ...(publishTime ? { publishTime } : {}),
   };
 }
 
@@ -469,7 +478,11 @@ function materializeArtifact(
   jobId: string,
   runtime: ResearchRuntimeReceipt,
 ): { artifact?: RenderableDataItem; errors: string[]; policyViolation: boolean } {
-  const metadata = isPlainObject(candidate.metadata) ? { ...candidate.metadata } : {};
+  const seedPublishTime = cleanIsoTime(seed.publishTime);
+  const productOwnedCandidate = seedPublishTime
+    ? { ...candidate, publishTime: seedPublishTime }
+    : candidate;
+  const metadata = isPlainObject(productOwnedCandidate.metadata) ? { ...productOwnedCandidate.metadata } : {};
   const rawReceipt = isPlainObject(metadata.researchReceipt) ? metadata.researchReceipt : {};
   const rawSources = Array.isArray(rawReceipt.sources) ? rawReceipt.sources : [];
   const rawClaims = Array.isArray(rawReceipt.claims) ? rawReceipt.claims : [];
@@ -495,7 +508,7 @@ function materializeArtifact(
     },
   };
   const validation = validateRenderableNews({
-    ...candidate,
+    ...productOwnedCandidate,
     metadata: { ...metadata, researchReceipt: receipt },
   });
   if (!validation.ok) {

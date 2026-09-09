@@ -24,6 +24,7 @@ const seed = {
   source: 'InfoQ',
   link: 'https://www.infoq.cn/example',
   category: 'technology',
+  publishTime: '2026-08-21T07:07:30.000Z',
 };
 
 const phaseARuntime: ResearchRuntimeReceipt = {
@@ -40,7 +41,8 @@ function validCandidate() {
     message: 'MCP新规范取消协议会话和初始化握手；请求加入Mcp-Method与Mcp-Name标头，网关可直接据此路由和限流。',
     signature: '神经漫游者',
     source: 'MCP官方·InfoQ',
-    publishTime: '2026-08-17T00:00:00.000Z',
+    // Regression shape: finalizer guesses the wrong year from an ambiguous "Aug 21" page label.
+    publishTime: '2024-08-21T00:00:00.000Z',
     category: 'news',
     link: 'https://modelcontextprotocol.io/example',
     highlights: ['Mcp-Method', 'Mcp-Name'],
@@ -197,6 +199,8 @@ describe('research canary adapter', () => {
     expect(result.artifact?.metadata?.researchReceipt?.usage?.toolCalls).toBe(2);
     expect(result.artifact?.metadata?.researchReceipt?.usage?.providerReportedTokens).toEqual({ status: 'unavailable' });
     expect(result.artifact?.metadata?.researchReceipt?.seed?.content).toBe('点击查看原文>');
+    expect(result.artifact?.metadata?.researchReceipt?.seed?.publishTime).toBe(seed.publishTime);
+    expect(result.artifact?.publishTime).toBe(seed.publishTime);
     expect(result.artifact?.message).toBe(candidate.message);
   });
 

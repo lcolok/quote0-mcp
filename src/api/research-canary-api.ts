@@ -26,6 +26,13 @@ function cleanString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function cleanIsoTime(value: unknown): string {
+  const raw = cleanString(value);
+  if (!raw) return '';
+  const timestamp = Date.parse(raw);
+  return Number.isNaN(timestamp) ? '' : new Date(timestamp).toISOString();
+}
+
 function normalizeSeed(value: unknown): ResearchSeed | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
@@ -37,6 +44,7 @@ function normalizeSeed(value: unknown): ResearchSeed | undefined {
     ...(cleanString(raw.source) ? { source: cleanString(raw.source) } : {}),
     ...(cleanString(raw.link) ? { link: cleanString(raw.link) } : {}),
     ...(cleanString(raw.category) ? { category: cleanString(raw.category) } : {}),
+    ...(cleanIsoTime(raw.publishTime) ? { publishTime: cleanIsoTime(raw.publishTime) } : {}),
   };
 }
 

@@ -6,6 +6,8 @@ export interface ResearchSeed {
   source?: string;
   link?: string;
   category?: string;
+  /** Immutable product-owned publication identity from the admitted seed. */
+  publishTime?: string;
 }
 
 export interface ResearchTriageInput {
