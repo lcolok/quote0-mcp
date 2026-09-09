@@ -4,6 +4,7 @@ import {
   type TrmnlAdaptiveContent,
 } from '../react-widgets/core/trmnl-adaptive-renderer.js';
 import { BUILTIN_TARGETS, type RenderTarget } from '../react-widgets/core/render-targets.js';
+import { ADAPTIVE_LAYOUT_VERSION } from '../react-widgets/core/adaptive-layout.js';
 
 const app = new Hono();
 
@@ -29,6 +30,8 @@ interface CanaryRequestBody {
     body?: unknown;
     eyebrow?: unknown;
     footer?: unknown;
+    keyword?: unknown;
+    meta?: unknown;
   };
 }
 
@@ -99,6 +102,8 @@ export function normalizeTrmnlCanaryRequest(body: CanaryRequestBody | null): Nor
   const bodyText = cleanString(body.content.body, 5_000);
   const eyebrow = cleanString(body.content.eyebrow, 500);
   const footer = cleanString(body.content.footer, 500);
+  const keyword = cleanString(body.content.keyword, 500);
+  const meta = cleanString(body.content.meta, 500);
 
   return {
     target,
@@ -107,6 +112,8 @@ export function normalizeTrmnlCanaryRequest(body: CanaryRequestBody | null): Nor
       ...(bodyText ? { body: bodyText } : {}),
       ...(eyebrow ? { eyebrow } : {}),
       ...(footer ? { footer } : {}),
+      ...(keyword ? { keyword } : {}),
+      ...(meta ? { meta } : {}),
     },
   };
 }
@@ -122,6 +129,7 @@ app.get('/api/renderers/trmnl/canary/status', (c) => {
     success: true,
     enabled: isCanaryEnabled(),
     renderer: 'trmnl-framework-browser-canary/v1',
+    layoutEngine: ADAPTIVE_LAYOUT_VERSION,
     concurrency: 1,
     inFlight: renderInFlight,
     autoSelected: false,
@@ -163,6 +171,7 @@ app.post('/api/renderers/trmnl/canary/render', async (c) => {
         physical: result.target.physical ?? null,
       },
       profile: result.profile,
+      layoutPlan: result.layoutPlan,
       metrics: result.metrics,
       image: {
         mimeType: 'image/png',

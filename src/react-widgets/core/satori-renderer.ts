@@ -21,9 +21,31 @@ import { join } from 'path';
 import { RenderOptions } from '../types.js';
 import { EINK_TARGET } from './render-targets.js';
 
+export type SatoriBaseFontSize = 8 | 10 | 12;
+
 export interface SatoriRenderOptions extends RenderOptions {
   width?: number;
   height?: number;
+  /** Optional font subset for renderer-aware callers. Omitted keeps legacy all-font behavior. */
+  fontBaseSizes?: SatoriBaseFontSize[];
+}
+
+export interface SatoriPipelineMetrics {
+  initializedWarm: boolean;
+  initMs: number;
+  satoriMs: number;
+  resvgInitMs: number;
+  resvgRenderMs: number;
+  resvgMs: number;
+  totalMs: number;
+  fontCount: number;
+  fontBytes: number;
+  svgChars: number;
+}
+
+export interface SatoriRenderResult {
+  pngBuffer: Buffer;
+  metrics: SatoriPipelineMetrics;
 }
 
 /**
@@ -156,38 +178,81 @@ export class SatoriRenderer {
     component: ReactElement,
     options: SatoriRenderOptions = {}
   ): Promise<Buffer> {
+    return (await this.renderToImageWithMetrics(component, options)).pngBuffer;
+  }
+
+  async renderToImageWithMetrics(
+    component: ReactElement,
+    options: SatoriRenderOptions = {},
+  ): Promise<SatoriRenderResult> {
+    const totalStartedAt = performance.now();
+    const initializedWarm = this.initialized;
+    const initStartedAt = performance.now();
     await this.initialize();
+    const initMs = performance.now() - initStartedAt;
 
     const {
       width = EINK_TARGET.widthPx,
       height = EINK_TARGET.heightPx,
-      format = 'png',
-      backgroundColor = '#FFFFFF'
+      backgroundColor = '#FFFFFF',
+      fontBaseSizes,
     } = options;
 
+    const requestedSizes = fontBaseSizes?.length
+      ? new Set(fontBaseSizes)
+      : undefined;
+    const fonts = requestedSizes
+      ? this.fonts.filter((font) => {
+        const match = font.name.match(/^FusionPixelFont-(8|10|12)px$/);
+        return match ? requestedSizes.has(Number(match[1]) as SatoriBaseFontSize) : false;
+      })
+      : this.fonts;
+    if (fonts.length === 0) throw new Error('Satori font subset resolved to zero fonts');
+
     try {
-      // 使用 satori 将 JSX 转换为 SVG
+      const satoriStartedAt = performance.now();
       const svg = await satori(component, {
         width,
         height,
-        fonts: this.fonts,
-        // 像素字体需要禁用字体平滑
-        embedFont: true
+        fonts,
+        embedFont: true,
       });
+      const satoriMs = performance.now() - satoriStartedAt;
 
-      // 使用 resvg-js 将 SVG 转换为 PNG
+      const resvgStartedAt = performance.now();
       const resvg = new Resvg(svg, {
         background: backgroundColor,
+        // Satori runs with embedFont=true, so glyph geometry is already carried by
+        // the SVG. Loading the host OS font database here only adds expensive,
+        // environment-dependent work and is unnecessary for the pixel-font path.
+        font: { loadSystemFonts: false },
         fitTo: {
           mode: 'width',
-          value: width
-        }
+          value: width,
+        },
       });
-
+      const resvgInitMs = performance.now() - resvgStartedAt;
+      const resvgRenderStartedAt = performance.now();
       const pngData = resvg.render();
-      const pngBuffer = pngData.asPng();
+      const pngBuffer = Buffer.from(pngData.asPng());
+      const resvgRenderMs = performance.now() - resvgRenderStartedAt;
+      const resvgMs = performance.now() - resvgStartedAt;
 
-      return Buffer.from(pngBuffer);
+      return {
+        pngBuffer,
+        metrics: {
+          initializedWarm,
+          initMs: Math.round(initMs * 100) / 100,
+          satoriMs: Math.round(satoriMs * 100) / 100,
+          resvgInitMs: Math.round(resvgInitMs * 100) / 100,
+          resvgRenderMs: Math.round(resvgRenderMs * 100) / 100,
+          resvgMs: Math.round(resvgMs * 100) / 100,
+          totalMs: Math.round((performance.now() - totalStartedAt) * 100) / 100,
+          fontCount: fonts.length,
+          fontBytes: fonts.reduce((sum, font) => sum + font.data.byteLength, 0),
+          svgChars: svg.length,
+        },
+      };
     } catch (error) {
       console.error('Satori 渲染失败:', error);
       throw error;

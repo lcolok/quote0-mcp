@@ -14,6 +14,21 @@ mock.module("./satori-renderer.js", () => ({
   satoriRenderer: {
     initialize: mock(async () => {}),
     renderToImage: mock(async () => Buffer.from("fake-png")),
+    renderToImageWithMetrics: mock(async () => ({
+      pngBuffer: Buffer.from("fake-png"),
+      metrics: {
+        initializedWarm: true,
+        initMs: 0,
+        satoriMs: 1,
+        resvgInitMs: 1,
+        resvgRenderMs: 1,
+        resvgMs: 2,
+        totalMs: 3,
+        fontCount: 1,
+        fontBytes: 100,
+        svgChars: 100,
+      },
+    })),
   },
 }));
 

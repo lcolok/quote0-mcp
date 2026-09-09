@@ -5,6 +5,7 @@ import {
   TRMNL_FRAMEWORK_VERSION,
   buildTrmnlAdaptiveHtml,
   deriveTrmnlTargetProfile,
+  trmnlContentToAdaptiveDocument,
 } from './trmnl-adaptive-renderer.js';
 import {
   EINK_296X128_TARGET,
@@ -66,7 +67,7 @@ describe('TRMNL adaptive HTML', () => {
     expect(TRMNL_FRAMEWORK_JS_URL).not.toContain('latest');
   });
 
-  test('keeps the exact same markup contract while geometry comes from RenderTarget', () => {
+  test('renders one semantic document with target-specific adaptive plans', () => {
     const content = {
       eyebrow: 'Quote0 Research',
       title: '同一份内容，自适应不同纸张与墨水屏',
@@ -79,26 +80,44 @@ describe('TRMNL adaptive HTML', () => {
     for (const html of [small, large]) {
       expect(html).toContain('screen--byod_custom');
       expect(html).toContain('data-content-limiter="true"');
-      expect(html).toContain('data-clamp="2"');
-      expect(html).toContain('data-clamp="4"');
+      expect(html).toContain('data-adaptive-version="adaptive-layout/v1"');
       expect(html).toContain('Quote0 Fusion Pixel');
       expect(html).toContain(content.title);
       expect(html).toContain(content.body);
     }
     expect(small).toContain('--screen-w:160px');
     expect(small).toContain('--screen-h:64px');
+    expect(small).toContain('data-adaptive-density="micro"');
+    expect(small).toContain('data-adaptive-role="title" data-clamp="1"');
+    expect(small).not.toContain('data-adaptive-role="eyebrow"');
+    expect(small).not.toContain('data-adaptive-role="footer"');
     expect(large).toContain('--screen-w:320px');
     expect(large).toContain('--screen-h:160px');
+    expect(large).toContain('data-adaptive-density="standard"');
+    expect(large).toContain('quote0-eyebrow');
+    expect(large).toContain('quote0-footer');
   });
 
-  test('escapes untrusted content before putting it into browser markup', () => {
+  test('converts the legacy canary content contract into renderer-neutral AdaptiveDocument', () => {
+    const document = trmnlContentToAdaptiveDocument({
+      id: 'research-card',
+      title: 'MCP 新规范取消会话',
+      body: '请求变成自描述，网关可直接路由。',
+      keyword: 'Mcp-Method',
+      meta: 'Neuromancer Research',
+    });
+    expect(document.id).toBe('research-card');
+    expect(document.nodes.map((node) => node.role)).toEqual(['title', 'body', 'keyword', 'meta']);
+  });
+
+  test('escapes untrusted content without leaking raw text into inline scripts', () => {
     const html = buildTrmnlAdaptiveHtml(
-      { title: '<script>alert("x")</script>', body: 'A & B' },
+      { title: '</script><script>alert("x")</script>', body: 'A & B' },
       EINK_TARGET,
       FONT_DATA_URI,
     );
-    expect(html).not.toContain('<script>alert("x")</script>');
-    expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
+    expect(html).not.toContain('</script><script>alert');
+    expect(html).toContain('&lt;/script&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
     expect(html).toContain('A &amp; B');
   });
 });

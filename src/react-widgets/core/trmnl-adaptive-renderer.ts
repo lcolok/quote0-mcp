@@ -2,6 +2,14 @@ import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import puppeteer, { type Browser } from 'puppeteer';
 import type { RenderTarget } from './render-targets.js';
+import {
+  createAdaptiveTextCardDocument,
+  planAdaptiveLayout,
+  type AdaptiveDocument,
+  type AdaptiveLayoutPlan,
+  type AdaptivePlannedNode,
+  type AdaptiveTextCardContent,
+} from './adaptive-layout.js';
 
 export const TRMNL_FRAMEWORK_VERSION = '3.2.0';
 export const TRMNL_FRAMEWORK_CSS_URL = `https://trmnl.com/css/${TRMNL_FRAMEWORK_VERSION}/plugins.min.css`;
@@ -13,11 +21,8 @@ const DEFAULT_CJK_FONT_PATH = path.join(
   'fusion-pixel-12px-monospaced-zh_hans.otf.woff2',
 );
 
-export interface TrmnlAdaptiveContent {
+export interface TrmnlAdaptiveContent extends AdaptiveTextCardContent {
   title: string;
-  body?: string;
-  eyebrow?: string;
-  footer?: string;
 }
 
 export interface TrmnlTargetProfile {
@@ -60,6 +65,7 @@ export interface TrmnlAdaptiveRenderResult {
   pngBuffer: Buffer;
   target: RenderTarget;
   profile: TrmnlTargetProfile;
+  layoutPlan: AdaptiveLayoutPlan;
   metrics: TrmnlRenderMetrics;
 }
 
@@ -122,10 +128,40 @@ function escapeHtml(value: string | undefined): string {
     .replaceAll("'", '&#039;');
 }
 
-export function buildTrmnlAdaptiveHtml(
-  content: TrmnlAdaptiveContent,
+export function trmnlContentToAdaptiveDocument(content: TrmnlAdaptiveContent): AdaptiveDocument {
+  return createAdaptiveTextCardDocument({
+    id: content.id || 'trmnl-adaptive-card',
+    title: content.title,
+    body: content.body,
+    eyebrow: content.eyebrow,
+    keyword: content.keyword,
+    meta: content.meta,
+    footer: content.footer,
+  });
+}
+
+function renderPlannedNode(node: AdaptivePlannedNode): string {
+  if (!node.visible || node.clampLines <= 0) return '';
+  const id = escapeHtml(node.id);
+  const text = escapeHtml(node.text);
+  const style = `font-size:${node.fontPx}px!important;line-height:${node.lineHeightPx}px!important`;
+  const common = `data-adaptive-node="${id}" data-adaptive-role="${node.role}" data-clamp="${node.clampLines}" style="${style}"`;
+
+  if (node.role === 'title') {
+    return `<span class="title quote0-title quote0-node" ${common}>${text}</span>`;
+  }
+  if (node.role === 'body') {
+    return `<div class="content quote0-body quote0-node" data-adaptive-node="${id}" data-adaptive-role="body" data-content-limiter="true" style="${style}"><p data-clamp="${node.clampLines}">${text}</p></div>`;
+  }
+
+  return `<span class="label quote0-${node.role} quote0-node" ${common}>${text}</span>`;
+}
+
+export function buildTrmnlAdaptiveDocumentHtml(
+  document: AdaptiveDocument,
   target: RenderTarget,
   cjkFontDataUri: string,
+  layoutPlan: AdaptiveLayoutPlan = planAdaptiveLayout(document, target),
 ): string {
   const profile = deriveTrmnlTargetProfile(target);
   const screenStyle = [
@@ -140,16 +176,10 @@ export function buildTrmnlAdaptiveHtml(
     `--color-depth:${profile.colorDepth}`,
     `--density-tier:${profile.densityTier}`,
   ].join(';');
-
-  const eyebrow = content.eyebrow
-    ? `<span class="label label--small quote0-eyebrow" data-clamp="1">${escapeHtml(content.eyebrow)}</span>`
-    : '';
-  const body = content.body
-    ? `<div class="content content--small quote0-body" data-content-limiter="true"><p data-clamp="4">${escapeHtml(content.body)}</p></div>`
-    : '';
-  const footer = content.footer
-    ? `<span class="label label--small quote0-footer" data-clamp="1">${escapeHtml(content.footer)}</span>`
-    : '';
+  const nodes = layoutPlan.nodes.map(renderPlannedNode).filter(Boolean).join('\n          ');
+  const justifyContent = layoutPlan.density === 'micro' || layoutPlan.density === 'compact'
+    ? 'flex-start'
+    : 'center';
 
   return `<!doctype html>
 <html>
@@ -179,37 +209,51 @@ export function buildTrmnlAdaptiveHtml(
       inset: 0;
       box-sizing: border-box;
     }
-    .quote0-adaptive-screen .layout { box-sizing: border-box; }
+    .quote0-adaptive-screen .view,
+    .quote0-adaptive-screen .layout {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      box-sizing: border-box;
+    }
+    .quote0-adaptive-screen .layout { padding: 0 !important; }
     .quote0-stack {
       width: 100%;
       height: 100%;
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      justify-content: ${justifyContent};
       align-items: stretch;
       min-width: 0;
       min-height: 0;
       overflow: hidden;
-      gap: var(--gap-xsmall);
+      box-sizing: border-box;
+      padding: ${layoutPlan.paddingYPx}px ${layoutPlan.paddingXPx}px;
+      gap: ${layoutPlan.gapPx}px;
     }
-    .quote0-title,
-    .quote0-eyebrow,
-    .quote0-footer,
-    .quote0-body,
-    .quote0-body p {
+    .quote0-node,
+    .quote0-node p {
       font-family: "TRMNL16", "Quote0 Fusion Pixel", monospace !important;
+      min-width: 0;
+      box-sizing: border-box;
     }
     .quote0-title {
       font-family: "TRMNL21", "Quote0 Fusion Pixel", monospace !important;
       text-align: left;
-      min-width: 0;
+      flex: 0 0 auto;
     }
     .quote0-body {
-      min-width: 0;
       min-height: 0;
       overflow: hidden;
+      flex: 0 1 auto;
     }
     .quote0-body p { margin: 0; }
+    .quote0-eyebrow,
+    .quote0-keyword,
+    .quote0-meta,
+    .quote0-footer { flex: 0 0 auto; }
+    .quote0-meta,
     .quote0-footer { opacity: 0.72; }
   </style>
   <script>
@@ -224,17 +268,23 @@ export function buildTrmnlAdaptiveHtml(
   <div class="${profile.screenClasses.join(' ')} quote0-adaptive-screen" style="${screenStyle}">
     <div class="view view--full">
       <div class="layout layout--col">
-        <div class="quote0-stack">
-          ${eyebrow}
-          <span class="title title--small quote0-title" data-clamp="2">${escapeHtml(content.title)}</span>
-          ${body}
-          ${footer}
+        <div class="quote0-stack" data-adaptive-density="${layoutPlan.density}" data-adaptive-version="${layoutPlan.version}">
+          ${nodes}
         </div>
       </div>
     </div>
   </div>
 </body>
 </html>`;
+}
+
+export function buildTrmnlAdaptiveHtml(
+  content: TrmnlAdaptiveContent,
+  target: RenderTarget,
+  cjkFontDataUri: string,
+): string {
+  const document = trmnlContentToAdaptiveDocument(content);
+  return buildTrmnlAdaptiveDocumentHtml(document, target, cjkFontDataUri);
 }
 
 async function firstExecutable(candidates: Array<string | undefined>): Promise<string | undefined> {
@@ -307,6 +357,16 @@ export class TrmnlAdaptiveRenderer {
     options: TrmnlAdaptiveRenderOptions = {},
   ): Promise<TrmnlAdaptiveRenderResult> {
     if (!content.title.trim()) throw new Error('TRMNL adaptive content title must not be empty');
+    return this.renderDocument(trmnlContentToAdaptiveDocument(content), target, options);
+  }
+
+  async renderDocument(
+    adaptiveDocument: AdaptiveDocument,
+    target: RenderTarget,
+    options: TrmnlAdaptiveRenderOptions = {},
+  ): Promise<TrmnlAdaptiveRenderResult> {
+    const titleNode = adaptiveDocument.nodes.find((node) => node.role === 'title' && node.text.trim());
+    if (!titleNode) throw new Error('TRMNL AdaptiveDocument must contain a non-empty title node');
     if (target.widthPx <= 0 || target.heightPx <= 0) {
       throw new Error(`Invalid TRMNL target dimensions: ${target.widthPx}x${target.heightPx}`);
     }
@@ -326,7 +386,8 @@ export class TrmnlAdaptiveRenderer {
       });
 
       const cjkFontDataUri = await loadCjkFontDataUri();
-      const html = buildTrmnlAdaptiveHtml(content, target, cjkFontDataUri);
+      const layoutPlan = planAdaptiveLayout(adaptiveDocument, target);
+      const html = buildTrmnlAdaptiveDocumentHtml(adaptiveDocument, target, cjkFontDataUri, layoutPlan);
       await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       // TRMNL ships external CSS/fonts plus its JS runtime. Waiting for networkidle0
       // is both slower and less truthful than waiting for the framework's own
@@ -403,6 +464,7 @@ export class TrmnlAdaptiveRenderer {
         pngBuffer: Buffer.from(png),
         target,
         profile: deriveTrmnlTargetProfile(target),
+        layoutPlan,
         metrics: {
           frameworkVersion: TRMNL_FRAMEWORK_VERSION,
           frameworkBuild: runtimeMetrics.frameworkBuild,

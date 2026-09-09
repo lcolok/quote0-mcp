@@ -390,7 +390,7 @@ export async function renderContentForTarget(delivery: DeliveryRow, device: Eink
   }
   const content = await loadContent(delivery.content_id);
   const target = createEinkTarget(device.width, device.height);
-  const rendered = await renderSingleEinkTarget(content, target);
+  const rendered = await renderSingleEinkTarget(content, target, { deviceIds: [device.id] });
   if (!rendered.localImagePath) {
     throw new Error(`渲染未产出本地 PNG: content=${delivery.content_id} target=${target.id}`);
   }
@@ -416,6 +416,10 @@ export async function loadContent(contentId: number): Promise<any> {
 export function buildRenderableFromInventory(item: any): any {
   const raw = item.raw_content || {};
   const processed = item.processed_content || {};
+  const processedMetadata = processed.metadata && typeof processed.metadata === 'object' && !Array.isArray(processed.metadata)
+    ? processed.metadata
+    : {};
+  const researchReceipt = processedMetadata.researchReceipt || raw.researchReceipt;
   return {
     id: String(item.id),
     title: processed.title || item.title || raw.title || '未知标题',
@@ -425,6 +429,11 @@ export function buildRenderableFromInventory(item: any): any {
     publishTime: processed.publishTime || raw.publishTime || new Date().toISOString(),
     category: processed.category || item.category || raw.category || '新闻',
     link: processed.link || item.link || raw.link,
+    ...(Array.isArray(processed.highlights) ? { highlights: processed.highlights } : {}),
+    metadata: {
+      ...processedMetadata,
+      ...(researchReceipt ? { researchReceipt } : {}),
+    },
   };
 }
 

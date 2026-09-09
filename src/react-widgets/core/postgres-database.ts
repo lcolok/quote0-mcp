@@ -139,6 +139,10 @@ export class PostgresDatabase {
       END $$`,
       `CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL`,
+      // Adaptive shadow schema is new in this line, but keep additive migrations so an
+      // intermediate canary database can advance without dropping its collected evidence.
+      `ALTER TABLE adaptive_render_shadow_runs ADD COLUMN IF NOT EXISTS primary_render_metrics JSONB`,
+      `ALTER TABLE adaptive_render_shadow_runs ADD COLUMN IF NOT EXISTS comparison_metrics JSONB`,
       // v1.21.20: component_labels 加 widget_id 并入主键(code,target_id,widget_id)。
       // 之前 code 命名空间在 component-code/component-value 两种 widget 间共享，
       // 理论上存在撞键后返回错误 widget 渲染结果的风险；加 widget_id 从结构上杜绝。
@@ -1088,6 +1092,39 @@ export class PostgresDatabase {
       CREATE INDEX IF NOT EXISTS idx_research_runs_thread ON research_runs(straylight_thread_id) WHERE straylight_thread_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_research_runs_trigger ON research_runs(trigger, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_research_runs_inventory ON research_runs(source_inventory_id) WHERE source_inventory_id IS NOT NULL;
+
+      -- Adaptive Layout shadow evidence：真实生产仍由旧 SatoriNewsWidget 负责物理输出，
+      -- 新 Adaptive Satori 只旁路渲染并记录可审计 LayoutPlan / 1-bit 指标。
+      -- shadow_key 是“内容制品 + target + layout/renderer 版本”的稳定键，避免 enqueue/worker
+      -- 两条真实渲染路径对同一制品重复采样而污染治理数据。
+      CREATE TABLE IF NOT EXISTS adaptive_render_shadow_runs (
+        id BIGSERIAL PRIMARY KEY,
+        shadow_key VARCHAR(128) NOT NULL UNIQUE,
+        artifact_id TEXT NOT NULL,
+        content_fingerprint VARCHAR(128) NOT NULL,
+        subject_key TEXT,
+        source TEXT,
+        target_id TEXT NOT NULL,
+        width_px INTEGER NOT NULL,
+        height_px INTEGER NOT NULL,
+        device_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        layout_engine VARCHAR(80) NOT NULL,
+        shadow_renderer VARCHAR(80) NOT NULL,
+        primary_renderer VARCHAR(80) NOT NULL,
+        state VARCHAR(16) NOT NULL CHECK (state IN ('completed','failed')),
+        layout_plan JSONB,
+        shadow_render_metrics JSONB,
+        primary_render_metrics JSONB,
+        shadow_bitmap_metrics JSONB,
+        primary_bitmap_metrics JSONB,
+        comparison_metrics JSONB,
+        primary_image_path TEXT,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_adaptive_shadow_created ON adaptive_render_shadow_runs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_shadow_content ON adaptive_render_shadow_runs(content_fingerprint, target_id);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_shadow_state ON adaptive_render_shadow_runs(state, created_at DESC);
 
       -- job_role 列：producer / consumer / mixed
       ALTER TABLE news_scheduler_jobs

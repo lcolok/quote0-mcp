@@ -618,7 +618,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
       };
 
       const borderColor = config.border === '1' ? '#000000' : '#ffffff';
-      const imageBuffer = await satoriRenderer.renderToImage(
+      const primaryRendered = await satoriRenderer.renderToImageWithMetrics(
         React.createElement(SatoriNewsWidget, {
           data: newsData,
           target,
@@ -631,6 +631,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
           backgroundColor: config.backgroundColor || '#ffffff'
         }
       );
+      const imageBuffer = primaryRendered.pngBuffer;
 
       // 2. 保存到本地临时文件 + 上传 MinIO
       const timestamp = Date.now();
@@ -655,6 +656,7 @@ export class LocalEinkRenderingModule extends BaseRenderingModule<any> {
       return {
         imageUrl,
         localImagePath,
+        primaryRenderMetrics: primaryRendered.metrics,
         title: data.title,
         message: data.message,
         summary: data.message,

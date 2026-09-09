@@ -195,7 +195,7 @@ export async function enqueueDeliveriesForContent(
       const refDevice = group[0];
       const target = createEinkTarget(refDevice.width, refDevice.height);
       try {
-        const rendered = await renderSingleEinkTarget(content, target);
+        const rendered = await renderSingleEinkTarget(content, target, { deviceIds: group.map((device) => device.id) });
         if (!rendered.localImagePath) continue;
         const pngBuffer = await readFile(rendered.localImagePath);
         for (const device of group) {

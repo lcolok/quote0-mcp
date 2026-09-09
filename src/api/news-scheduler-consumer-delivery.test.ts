@@ -21,6 +21,9 @@ const enqueueMock = mock(async (input: any) => {
 
 mock.module('./delivery-enqueue.js', () => ({
   enqueueDeliveriesForContent: enqueueMock,
+  enqueuePreRenderedImageDeliveries: mock(async () => {
+    throw new Error('本测试 consumer 不应调用 enqueuePreRenderedImageDeliveries');
+  }),
 }));
 
 // consumer 绝不该再碰它：本文件的核心断言之一。

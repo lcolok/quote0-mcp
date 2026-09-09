@@ -241,6 +241,10 @@ services:
       QUOTE0_RESEARCH_AUTO_SCAN_LIMIT: "25"
       # TRMNL 3.2 adaptive renderer canary: explicit-only, concurrency=1, never auto-selected.
       QUOTE0_TRMNL_CANARY_ENABLED: "true"
+      # Adaptive Layout production shadow: real RenderableNews -> Adaptive Satori only as
+      # non-authoritative evidence. In-memory queue never backpressures physical delivery.
+      QUOTE0_ADAPTIVE_SHADOW_ENABLED: "true"
+      QUOTE0_ADAPTIVE_SHADOW_QUEUE_LIMIT: "32"
       MINDRESET_BASE_URL: https://dot.mindreset.tech/api
       MINDRESET_DEVICE_ID: E4B063CC0F10
       MINDRESET_DEVICE_SECRET: dot_app_pVMhvUteeDqAnibZQtMofYnkJuyaMjEXzgcohArxPyJbEJgnYPTpUcRsalPnEDyr

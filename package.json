@@ -53,6 +53,9 @@
     "version:check:ref": "bun scripts/check-release-version.ts --require-release-ref",
     "version:check:remote": "bun scripts/check-release-version.ts --require-remote",
     "release:gate": "bun run check:base-images && bun run version:check && bun run test:gate",
+    "adaptive:smoke": "bun scripts/adaptive-layout-matrix-smoke.ts",
+    "adaptive:shadow:smoke": "bun scripts/adaptive-shadow-smoke.ts",
+    "satori:profile": "bun scripts/satori-runtime-profile.ts",
     "status": "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}' --filter name=quote0"
   },
   "keywords": [

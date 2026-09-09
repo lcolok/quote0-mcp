@@ -1,5 +1,8 @@
 import type { RenderableDataItem } from '../react-widgets/core/modular-architecture.js';
+import type { RenderTarget } from '../react-widgets/core/render-targets.js';
+import type { SatoriPipelineMetrics } from '../react-widgets/core/satori-renderer.js';
 import { renderingRegistry } from '../react-widgets/core/rendering-modules.js';
+import { enqueueAdaptiveRenderShadow } from '../react-widgets/core/adaptive-shadow-renderer.js';
 import { devicePusher } from './device-pusher.js';
 import {
   getEinkDevices,
@@ -54,6 +57,8 @@ export interface SingleTargetRenderResult {
   localImagePath?: string;
   /** 可直接交给 devicePusher / 下载转 bitmap 的输入（优先本地路径）。 */
   pusherInput: string;
+  /** 旧生产 SatoriNewsWidget 当次真实 render metrics，供 shadow A/B 直接比较。 */
+  primaryRenderMetrics?: SatoriPipelineMetrics;
 }
 
 /**
@@ -66,7 +71,8 @@ export interface SingleTargetRenderResult {
  */
 export async function renderSingleEinkTarget(
   data: RenderableDataItem,
-  target: { id: string; widthPx: number; heightPx: number; [k: string]: any },
+  target: RenderTarget,
+  shadowContext: { deviceIds?: string[] } = {},
 ): Promise<SingleTargetRenderResult> {
   const localEinkRenderer = renderingRegistry.get('local-eink');
   if (!localEinkRenderer) throw new Error('渲染器 local-eink 不存在');
@@ -78,14 +84,34 @@ export async function renderSingleEinkTarget(
     height: target.heightPx,
   });
 
-  return {
+  const rendered = {
     targetId: target.id,
     width: target.widthPx,
     height: target.heightPx,
     imageUrl: renderResult.imageUrl,
     localImagePath: renderResult.localImagePath,
     pusherInput: renderResult.localImagePath || renderResult.imageUrl,
+    primaryRenderMetrics: renderResult.primaryRenderMetrics,
   };
+
+  // Shadow is deliberately fire-and-forget. It consumes the exact production PNG that
+  // just succeeded, but cannot delay or fail the physical delivery path. Stable shadow_key
+  // deduplication prevents enqueue-frame + delivery-worker re-renders from biasing samples.
+  const shadowState = enqueueAdaptiveRenderShadow({
+    data,
+    target,
+    primary: {
+      localImagePath: rendered.localImagePath,
+      imageUrl: rendered.imageUrl,
+      renderMetrics: rendered.primaryRenderMetrics,
+    },
+    deviceIds: shadowContext.deviceIds,
+  });
+  if (shadowState === 'dropped') {
+    console.warn(`⚠️ Adaptive shadow queue full; dropped artifact=${data.id} target=${target.id}`);
+  }
+
+  return rendered;
 }
 
 /**
@@ -159,7 +185,7 @@ export async function renderAndPushLocalEinkByTarget(
   for (const group of groups.values()) {
     const groupDeviceIds = group.entries.map((entry) => entry.device.id);
     try {
-      const rendered = await renderSingleEinkTarget(data, group.target);
+      const rendered = await renderSingleEinkTarget(data, group.target, { deviceIds: groupDeviceIds });
       renderedImages.push({
         targetId: rendered.targetId,
         width: rendered.width,

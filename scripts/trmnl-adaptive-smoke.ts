@@ -25,10 +25,13 @@ const runtimeT50x30: RenderTarget = {
 };
 
 const content: TrmnlAdaptiveContent = {
-  eyebrow: 'QUOTE0 · ADAPTIVE CONTENT',
-  title: '同一份内容模型，自动适配墨水屏、窄热敏标签与宽热敏标签',
-  body: '这是一段故意超过最小画布容量的压力文本。TRMNL Runtime 应根据目标空间重新测量、限制正文并处理换行，而不是要求 Quote0 为每一种纸张尺寸复制模板。内容模型保持完全不变，设备只提供宽高、位深与缩放参数；当空间不足时应由 Framework 的 Clamp 或 Content Limiter 有损降级，但绝不能把画布撑出目标边界。',
-  footer: 'TRMNL 3.2 · Quote0 canary',
+  id: 'neuromancer-mcp-stateless',
+  eyebrow: 'NEUROMANCER · RESEARCH',
+  title: 'MCP 新规范取消会话',
+  body: 'MCP 2026-07-28 新规范移除协议层会话和 initialize 握手，请求加入 Mcp-Method、Mcp-Name 等自描述头，便于网关做路由、限流与计量。',
+  keyword: 'Mcp-Method · Mcp-Name',
+  meta: '3 sources · 4 claims',
+  footer: 'MCP 官方规范 · Quote0',
 };
 
 const targets: RenderTarget[] = [
@@ -82,6 +85,7 @@ async function main() {
         heightPx: target.heightPx,
         physical: target.physical ?? null,
         profile: result.profile,
+        layoutPlan: result.layoutPlan,
         png: { width: metadata.width, height: metadata.height, bytes: result.pngBuffer.length },
         foreground,
         metrics: result.metrics,
@@ -105,12 +109,18 @@ async function main() {
       const metrics = row.metrics as { overflow: { horizontal: boolean; vertical: boolean } };
       return !metrics.overflow.horizontal && !metrics.overflow.vertical;
     }),
+    allPlansFit: rows.every((row) => !(row.layoutPlan as { overflowRisk: boolean }).overflowRisk),
     rows,
   };
   await writeFile(path.join(outputDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-  console.log(JSON.stringify({ summary: { targetCount: report.targetCount, allExactDimensions: report.allExactDimensions, allNoOverflow: report.allNoOverflow } }));
+  console.log(JSON.stringify({ summary: {
+    targetCount: report.targetCount,
+    allExactDimensions: report.allExactDimensions,
+    allNoOverflow: report.allNoOverflow,
+    allPlansFit: report.allPlansFit,
+  } }));
 
-  if (!report.allExactDimensions || !report.allNoOverflow) process.exitCode = 1;
+  if (!report.allExactDimensions || !report.allNoOverflow || !report.allPlansFit) process.exitCode = 1;
 }
 
 main().catch((error) => {
