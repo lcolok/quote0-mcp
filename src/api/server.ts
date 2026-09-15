@@ -14,6 +14,7 @@ import { startDeviceDeliveryWorker } from './device-delivery-worker.js';
 import { startDeviceHealthAlertWorker } from './device-health-alerts.js';
 import { startRssSourceHealthAlertWorker } from './rss-source-health.js';
 import { startResearchCanaryWorker } from './research-canary-worker.js';
+import { startDisplayGovernorWorker } from './display-governor-worker.js';
 import { EINK_TARGET } from '../react-widgets/core/render-targets.js';
 import { trmnlAdaptiveRenderer } from '../react-widgets/core/trmnl-adaptive-renderer.js';
 
@@ -49,6 +50,9 @@ if (import.meta.main) {
   // 启动 label job worker（DB lease 模式，取代 setImmediate fire-and-forget）
   startLabelJobWorker();
   // 启动 device delivery worker（Phase 1：每台设备一条独立、幂等、可重试的投递）
+  // Explicitly enrolled screens use one persistent pull-v2 display authority. Other
+  // devices keep their existing delivery path; no production IDs are hard-coded.
+  startDisplayGovernorWorker();
   startDeviceDeliveryWorker();
   // 健康状态迁移通知独立 outbox worker；Bark 网络失败不阻塞 delivery hot path。
   startDeviceHealthAlertWorker();

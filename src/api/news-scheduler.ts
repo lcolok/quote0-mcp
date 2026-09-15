@@ -8,6 +8,8 @@ import { RESEARCH_REPLAY_COMPATIBLE_POLICY_VERSIONS } from './research-triage.js
 import { devicePusher } from './device-pusher.js';
 import { enqueueDeliveriesForContent, enqueuePreRenderedImageDeliveries } from './delivery-enqueue.js';
 import { resolveSchedulerExtraRenderers } from './scheduler-extra-renderers.js';
+import { savePeriodicCandidate, weatherCatalogEntry, memoCatalogEntry } from './display-governor-catalog.js';
+import { persistDeliveryPngPayload } from './delivery-payload-store.js';
 import type {
   FullNewsProcessingResult,
   NewsProcessRequest,
@@ -1231,6 +1233,18 @@ export class NewsScheduler {
       await satoriRenderer.initialize();
 
       const safeData = sanitizeWeatherData(weatherData);
+      let weatherCandidateStored = false;
+      if (job.config.renderer === 'local-eink') {
+        try {
+          await savePeriodicCandidate(this.postgres.getPool(), job.config.id,
+            weatherCatalogEntry(job.config.id, safeData, Date.now()));
+          weatherCandidateStored = true;
+        } catch (error) {
+          // A bad observation must not renew a governed weather TTL. Legacy output remains
+          // compatible; governed targets below require a successfully admitted candidate.
+          console.warn('Weather governor candidate rejected:', error instanceof Error ? error.message : error);
+        }
+      }
       const imageBuffer = await satoriRenderer.renderToImage(
         React.createElement(SatoriWeatherWidget, { data: safeData }),
         {
@@ -1274,10 +1288,13 @@ export class NewsScheduler {
           sourceKey: `weather:${job.config.id}`,
           pngBuffer: imageBuffer,
         });
-        if (einkDelivery.targeted === 0) {
+        if ((einkDelivery.governed ?? 0) > 0 && !weatherCandidateStored) {
+          throw new Error('Weather observation unavailable for governed devices; previous candidate TTL was not renewed');
+        }
+        if (einkDelivery.targeted === 0 && !einkDelivery.governed) {
           throw new Error('天气任务未配置 E-Ink 设备，无法创建持久投递');
         }
-        deviceResult = `E-Ink delivery queued: ${einkDelivery.created}/${einkDelivery.targeted} new`;
+        deviceResult = `E-Ink delivery queued: ${einkDelivery.created}/${einkDelivery.targeted} new; governor candidates: ${einkDelivery.governed ?? 0}`;
         console.log(
           `📮 天气任务 ${job.config.id} 已登记 E-Ink delivery: ` +
           `created=${einkDelivery.created}/${einkDelivery.targeted} ` +
@@ -1347,7 +1364,9 @@ export class NewsScheduler {
       if (runHistoryId) {
         await this.postgres.updateSchedulerRunHistory(runHistoryId, {
           pushStatus: 'success',
-          pushReason: job.config.renderer === 'local-eink' ? 'weather_delivery_queued' : 'weather_pushed',
+          pushReason: job.config.renderer === 'local-eink'
+            ? (einkDelivery?.targeted === 0 && einkDelivery.governed ? 'weather_candidate_stored' : 'weather_delivery_queued')
+            : 'weather_pushed',
           runFinishedAt: new Date(),
           metadata: {
             city,
@@ -1467,12 +1486,16 @@ export class NewsScheduler {
       let localEinkQueued = targetRenderer !== 'local-eink' && targetRenderer !== 'both';
       if (targetRenderer === 'local-eink' || targetRenderer === 'both') {
         try {
+          const snapshot = await persistDeliveryPngPayload(pngBuffer);
+          await savePeriodicCandidate(this.postgres.getPool(), job.config.id,
+            memoCatalogEntry(job.config.id, String(memo.id), snapshot.objectKey, snapshot.sha256, Date.now()));
           const enqueued = await enqueuePreRenderedImageDeliveries({
             sourceKey: `memo:${memo.id}`,
             pngBuffer,
           });
-          localEinkQueued = enqueued.targeted > 0;
+          localEinkQueued = enqueued.targeted > 0 || (enqueued.governed ?? 0) > 0;
           pushDetails.localEink = {
+            governorCandidates: enqueued.governed ?? 0,
             queued: localEinkQueued,
             created: enqueued.created,
             targeted: enqueued.targeted,
@@ -1518,7 +1541,8 @@ export class NewsScheduler {
         await this.postgres.updateSchedulerRunHistory(runHistoryId, {
           pushStatus: bothPartial ? 'partial_success' : 'success',
           pushReason: targetRenderer === 'local-eink'
-            ? 'memo_delivery_queued'
+            ? (pushDetails.localEink?.targeted === 0 && pushDetails.localEink?.governorCandidates
+              ? 'memo_candidate_stored' : 'memo_delivery_queued')
             : bothPartial
               ? 'memo_partial_output'
               : 'memo_pushed',
@@ -2476,6 +2500,16 @@ export class NewsScheduler {
           contentId: inventoryItem.id,
         });
 
+        if (enqueued.targeted === 0 && (enqueued.governed ?? 0) > 0) {
+          // Ownership is per-device. Do not increment global replay counts or mark an
+          // unseen article pushed merely because the old consumer woke up.
+          if (runHistoryId) await this.postgres.updateSchedulerRunHistory(runHistoryId, {
+            pushStatus: 'skipped', pushReason: 'display_governor_owned', runFinishedAt: new Date(),
+          });
+          job.state.consecutiveFailures = 0;
+          await this.persistSchedulerState(job, new Date(Date.now() + job.config.intervalMs));
+          return;
+        }
         if (enqueued.targeted === 0) {
           throw new Error('未配置 E-Ink 设备，无法创建投递任务');
         }

@@ -36,6 +36,8 @@ import {
 import { enqueueDeviceHealthTransition } from './device-health-alerts.js';
 import { readDeliveryPngPayload } from './delivery-payload-store.js';
 import { buildServerOwnedDisplayProvenance } from './news-display-provenance.js';
+import { configuredGovernorDevices } from './display-governor-config.js';
+import { isGovernedDevice } from './display-governor-ownership.js';
 
 const WORKER_ID = `${hostname()}:${process.pid}:${crypto.randomUUID().slice(0, 8)}`;
 const TICK_MS = 5000;
@@ -139,6 +141,8 @@ export async function claimDeliveries(limit = CLAIM_BATCH_SIZE): Promise<Deliver
                 ((d.state = 'queued' OR d.state = 'retry_wait') AND d.next_attempt_at <= now())
                 OR (d.state = 'leased' AND d.lease_expires_at < now())
               )
+          AND NOT (d.device_id = ANY($2::text[]))
+          AND NOT EXISTS (SELECT 1 FROM display_governor_states owned WHERE owned.device_id=d.device_id)
           AND (rs.circuit_open_until IS NULL OR rs.circuit_open_until <= now())
           AND NOT EXISTS (
                 SELECT 1 FROM device_deliveries busy
@@ -150,7 +154,7 @@ export async function claimDeliveries(limit = CLAIM_BATCH_SIZE): Promise<Deliver
         ORDER BY d.next_attempt_at ASC, d.id ASC
         LIMIT $1
         FOR UPDATE OF d SKIP LOCKED`,
-      [limit],
+      [limit, configuredGovernorDevices()],
     );
 
     // 同一批 SELECT 里仍可能有多行指向同一台设备（SQL 的 NOT EXISTS 只挡得住
@@ -218,6 +222,14 @@ async function executeDelivery(
   delivery: DeliveryRow,
   renderCache: Map<string, Promise<Buffer>>,
 ): Promise<void> {
+  if (await isGovernedDevice(delivery.device_id)) {
+    await getPostgresDatabase().getPool().query(
+      `UPDATE device_deliveries SET state='superseded',finished_at=now(),updated_at=now(),
+          lease_owner=NULL,lease_expires_at=NULL,last_error_code='superseded',
+          last_error='display governor owns device'
+        WHERE id=$1 AND lease_owner=$2`, [delivery.id, WORKER_ID]);
+    return;
+  }
   const traceId = deliveryAttemptTraceId(delivery.id, delivery.attempts);
   let resolvedDevice: EinkDevice | undefined;
   let status: EinkStatus | undefined;

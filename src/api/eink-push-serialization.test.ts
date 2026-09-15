@@ -1,4 +1,6 @@
-import { afterAll, beforeEach, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
+import { stubLegacyOwnershipDatabase } from './test-support/legacy-ownership-db.js';
 import type { EinkDevice, EinkStatus } from './eink-converter.js';
 
 const realFetch = globalThis.fetch;
@@ -37,6 +39,8 @@ let active = 0;
 let maxActive = 0;
 let callCount = 0;
 let failFirst = false;
+let restoreOwnershipDatabase: (() => void) | undefined;
+afterEach(() => { restoreOwnershipDatabase?.(); restoreOwnershipDatabase = undefined; });
 
 const stubFetch = (async (_input: any, init?: RequestInit) => {
   callCount += 1;
@@ -63,6 +67,7 @@ const stubFetch = (async (_input: any, init?: RequestInit) => {
 }) as typeof fetch;
 
 beforeEach(() => {
+  restoreOwnershipDatabase = stubLegacyOwnershipDatabase(getPostgresDatabase());
   globalThis.fetch = stubFetch;
   active = 0;
   maxActive = 0;

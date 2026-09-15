@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { EINK_DEVICE_WIDTH as EINK_WIDTH, EINK_DEVICE_HEIGHT as EINK_HEIGHT } from '../react-widgets/core/device-constants.js';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { createEinkTarget, type RenderTarget } from '../react-widgets/core/render-targets.js';
+import { withLegacyDisplayPermit } from './display-governor-ownership.js';
 
 const EINK_BITMAP_SIZE = (EINK_WIDTH * EINK_HEIGHT) / 8; // 5624
 const EPD_TRACE_HEADER = 'X-EPD-Trace-Id';
@@ -207,7 +208,11 @@ export async function pushToEinkDevice(
   bitmap: Buffer,
   options: PushToEinkOptions = {}
 ): Promise<EinkPushResult> {
-  return withEinkDevicePushLock(device, () => pushToEinkDeviceUnlocked(device, bitmap, options));
+  return withEinkDevicePushLock(device, async () => {
+    const permit = await withLegacyDisplayPermit(device.id, getPostgresDatabase().getPool(),
+      () => pushToEinkDeviceUnlocked(device, bitmap, options), device.baseUrl);
+    return permit.value ?? { ok: false, error: 'display_governor_owned: ordinary Push cannot interrupt a governed Pull frame' };
+  });
 }
 
 async function pushToEinkDeviceUnlocked(

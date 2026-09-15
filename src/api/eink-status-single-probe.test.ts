@@ -5,7 +5,9 @@
  * 改动前：resolveEinkDeviceSpec 一次 + pushToEinkDevice 内 verifyEinkStatus 一次 = 2 次。
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'bun:test';
+import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
+import { stubLegacyOwnershipDatabase } from './test-support/legacy-ownership-db.js';
 import type { EinkDevice } from './eink-converter.js';
 
 // 其他测试文件的 mock.module('./eink-converter.js') 在 bun 里是全局生效的，
@@ -39,6 +41,8 @@ let bitmapResponseStatus = 200;
 let bitmapErrorBody = '';
 
 let realFetch: typeof fetch;
+let restoreOwnershipDatabase: (() => void) | undefined;
+afterEach(() => { restoreOwnershipDatabase?.(); restoreOwnershipDatabase = undefined; });
 
 const stubFetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : String(input?.url ?? input);
@@ -92,6 +96,7 @@ afterAll(() => {
 
 describe('EPD1 /status 单快照', () => {
   beforeEach(() => {
+    restoreOwnershipDatabase = stubLegacyOwnershipDatabase(getPostgresDatabase());
     // 在每个用例里才接管 fetch，避免与其他测试文件的全局覆盖打架。
     if (globalThis.fetch !== stubFetch) realFetch = globalThis.fetch;
     globalThis.fetch = stubFetch;

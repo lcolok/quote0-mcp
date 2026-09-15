@@ -13,6 +13,9 @@ import { createHash } from 'crypto';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { crc32Hex } from './eink-converter.js';
 import { notifyDeviceFrameUpdated } from './device-frame-watch.js';
+import { withLegacyDisplayPermit } from './display-governor-ownership.js';
+import { configuredGovernorDevices } from './display-governor-config.js';
+import { authorizedFrame, type State } from './display-governor.js';
 
 export interface DeviceFrame {
   device_id: string;
@@ -56,14 +59,15 @@ export async function upsertDeviceFrame(params: {
   const frameCrc32 = crc32Hex(params.bitmap);
   const planeCount = 1; // 当前只支持单平面
 
-  await db.getPool().query(
+  const permit = await withLegacyDisplayPermit(params.deviceId, db.getPool(), client => client.query(
     `INSERT INTO device_frames (device_id, frame_data, frame_id, frame_crc32, width, height, plane_count, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (device_id)
      DO UPDATE SET frame_data = $2, frame_id = $3, frame_crc32 = $4, width = $5, height = $6,
                    plane_count = $7, updated_at = now()`,
     [params.deviceId, params.bitmap, frameId, frameCrc32, params.width, params.height, planeCount],
-  );
+  ));
+  if (!permit.permitted) return; // ordinary producers/workers cannot overwrite a governed frame
 
   // Long-poll wakeup is a delivery optimization, not part of frame durability.
   // The DB upsert is already committed; a transient LISTEN/NOTIFY failure must
@@ -81,11 +85,20 @@ export async function upsertDeviceFrame(params: {
  */
 export async function getDeviceFrame(deviceId: string): Promise<DeviceFrameRow | null> {
   const db = getPostgresDatabase();
-  const r = await db.getPool().query(
-    `SELECT device_id, frame_data, frame_id, frame_crc32, width, height, plane_count, updated_at
-     FROM device_frames WHERE device_id = $1`,
+  const r = await db.getPool().query<DeviceFrameRow & { governor_state: State | null; now_ms: string }>(
+    `SELECT f.device_id, f.frame_data, f.frame_id, f.frame_crc32, f.width, f.height, f.plane_count, f.updated_at,
+            g.state AS governor_state, floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms
+     FROM device_frames f LEFT JOIN display_governor_states g ON g.device_id=f.device_id
+     WHERE f.device_id = $1`,
     [deviceId],
   );
-  if (r.rows.length === 0) return null;
-  return r.rows[0];
+  const row = r.rows[0];
+  if (!row) return null;
+  if (row.governor_state) {
+    const approved = authorizedFrame(row.governor_state, Number(row.now_ms));
+    if (!approved || approved.frame.ref !== `pg-frame:${row.frame_id}`) return null;
+  } else if (configuredGovernorDevices().includes(deviceId)) {
+    return null; // enrollment/drain pending: never expose a stale legacy cache entry
+  }
+  return row;
 }

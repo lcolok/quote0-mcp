@@ -7,6 +7,7 @@ import { Pool, PoolClient } from 'pg';
 import { createHash } from 'crypto';
 import { NewsData } from '../components/NewsWidget.js';
 import { DECOMMISSIONED_RSS_SOURCES } from './rss-source-policy.js';
+import { DISPLAY_GOVERNOR_DDL } from './display-governor-schema.js';
 
 export interface CacheKey {
   source: string;
@@ -121,6 +122,7 @@ export class PostgresDatabase {
    */
   private getMigrationStatements(): string[] {
     return [
+      ...DISPLAY_GOVERNOR_DDL,
       // v1.21.62: Research R1 Phase A/B 分离。既有 v1.21.61 research_runs 需要保留所有
       // Straylight thread 引用和确定性 evidence packet，不能只记当前 thread。
       `ALTER TABLE research_runs ADD COLUMN IF NOT EXISTS straylight_thread_ids JSONB NOT NULL DEFAULT '[]'::jsonb`,

@@ -48,6 +48,8 @@ import {
 } from './renderable-news-intake.js';
 import type { DevicePushResult, PushBatchStatus } from './push-results.js';
 import { getDeviceFrame } from './device-frame-cache.js';
+import { configuredGovernorDevices, displayGovernorPolicy } from './display-governor-config.js';
+import type { State as DisplayGovernorState } from './display-governor.js';
 import { ensureDeviceFrameListener, waitForDeviceFrameUpdate } from './device-frame-watch.js';
 import { parseDisplayAckPayload, parseLongPollWaitMs } from './eink-pull-protocol.js';
 import { recordDisplayAck } from './device-frame-ack.js';
@@ -2283,6 +2285,29 @@ app.get('/api/devices/runtime', async (c) => {
 // ============================================================
 // E-Ink Cloud Pull v2 — immediate GET 兼容 + PostgreSQL event-driven long-poll
 // ============================================================
+// Read-only diagnostics. Keep this path outside the manifest's public E-Ink device paths.
+app.get('/api/display-governor/status', async (c) => {
+  const requested = configuredGovernorDevices();
+  const result = await getPostgresDatabase().getPool().query<{
+    device_id: string; state: DisplayGovernorState; last_decision: unknown; last_error: string | null; updated_at: Date;
+  }>('SELECT device_id,state,last_decision,last_error,updated_at FROM display_governor_states ORDER BY device_id LIMIT 100');
+  return c.json({ success: true, transport: 'pull-v2', accounting: 'confirmed-refresh',
+    configuredDevices: requested, policy: displayGovernorPolicy(),
+    devices: result.rows.map(row => ({
+      deviceId: row.device_id, paused: !requested.includes(row.device_id), generation: row.state.generation,
+      revision: row.state.revision, current: row.state.current ? {
+        key: row.state.current.candidate.key, kind: row.state.current.candidate.kind,
+        source: row.state.current.candidate.source, acknowledgedAtMs: row.state.current.acknowledgedAtMs,
+        protectedUntilMs: row.state.current.protectedUntilMs,
+      } : null,
+      pending: row.state.pending ? { key: row.state.pending.candidate.key, kind: row.state.pending.candidate.kind,
+        phase: row.state.pending.phase, deadlineMs: row.state.pending.deadlineMs } : null,
+      uncertainProtectedUntilMs: row.state.uncertainProtectedUntilMs,
+      lastDecision: row.last_decision, lastError: row.last_error, updatedAt: row.updated_at,
+    })),
+  });
+});
+
 app.get('/api/eink/frame', async (c) => {
   const deviceId = c.req.query('device_id');
   if (!deviceId) return c.json({ success: false, error: 'device_id 必填' }, 400);
@@ -2329,6 +2354,7 @@ app.get('/api/eink/frame', async (c) => {
     console.log(`📡 设备 ${deviceId} 遥测:`, JSON.stringify(telemetry));
   }
 
+  if (row.enabled === false) return c.body(null, 404);
   const requestFrameId = (c.req.header('X-Frame-Id') || '').trim().toLowerCase();
   const waitMs = parseLongPollWaitMs(c.req.query('wait'));
   let listenerReady = false;
@@ -2428,6 +2454,7 @@ app.post('/api/eink/ack', async (c) => {
     return c.json({ success: false, error: parsed.error || 'ACK payload 非法' }, 400);
   }
 
+  if (row.enabled === false) return c.body(null, 404);
   const recorded = await recordDisplayAck(deviceId, parsed.value);
   if (parsed.value.result === 'displayed' && recorded.currentMatch && recorded.crcVerified === false) {
     return c.json({
@@ -2447,6 +2474,9 @@ app.post('/api/eink/ack', async (c) => {
     current_match: recorded.currentMatch,
     crc_verified: recorded.crcVerified,
     acked_at: recorded.ackedAt.toISOString(),
+    ...(recorded.governorAccepted !== undefined ? {
+      governor_accepted: recorded.governorAccepted, governor_reason: recorded.governorReason,
+    } : {}),
   });
 });
 

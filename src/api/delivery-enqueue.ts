@@ -22,6 +22,7 @@ import { createEinkTarget } from '../react-widgets/core/render-targets.js';
 import { renderSingleEinkTarget } from './target-aware-eink.js';
 import { readFile } from 'node:fs/promises';
 import { persistDeliveryPngPayload } from './delivery-payload-store.js';
+import { governedDeviceIds } from './display-governor-ownership.js';
 
 export interface EnqueueDeliveriesInput {
   contentId: number;
@@ -36,6 +37,8 @@ export interface EnqueueDeliveriesResult {
   /** 本次覆盖到的目标设备总数（含因幂等未插入的）。 */
   targeted: number;
   deviceIds: string[];
+  /** Devices intentionally excluded because the unified governor owns their display. */
+  governed?: number;
 }
 
 export interface EnqueuePreRenderedImageInput {
@@ -129,15 +132,16 @@ export async function writeFramesFromPngBuffer(devices: EinkDevice[], pngBuffer:
 export async function enqueueDeliveriesForContent(
   input: EnqueueDeliveriesInput,
 ): Promise<EnqueueDeliveriesResult> {
-  const devices = await getEinkDevices(
+  const db = getPostgresDatabase();
+  const allDevices = await getEinkDevices(
     input.deviceIds?.length ? { deviceIds: input.deviceIds } : {},
   );
-
+  const owned = await governedDeviceIds(db.getPool());
+  const devices = allDevices.filter(device => !owned.has(device.id));
+  const governed = allDevices.length - devices.length;
   if (devices.length === 0) {
-    return { payloadVersion: 0, created: 0, targeted: 0, deviceIds: [] };
+    return { payloadVersion: 0, created: 0, targeted: 0, deviceIds: [], governed };
   }
-
-  const db = getPostgresDatabase();
   let created = 0;
   let maxPayloadVersion = 0;
   /** 本批实际新增 delivery 的设备（ON CONFLICT 命中的不算）。 */
@@ -226,6 +230,7 @@ export async function enqueueDeliveriesForContent(
     created,
     targeted: devices.length,
     deviceIds: devices.map((d) => d.id),
+    governed,
   };
 }
 
@@ -242,16 +247,19 @@ export async function enqueuePreRenderedImageDeliveries(
   input: EnqueuePreRenderedImageInput,
 ): Promise<EnqueuePreRenderedImageResult> {
   const sourceKey = normalizeSourceKey(input.sourceKey);
-  const devices = await getEinkDevices(
+  const db = getPostgresDatabase();
+  const allDevices = await getEinkDevices(
     input.deviceIds?.length ? { deviceIds: input.deviceIds } : {},
   );
+  const owned = await governedDeviceIds(db.getPool());
+  const devices = allDevices.filter(device => !owned.has(device.id));
+  const governed = allDevices.length - devices.length;
   if (devices.length === 0) {
-    return { payloadVersion: 0, created: 0, targeted: 0, deviceIds: [] };
+    return { payloadVersion: 0, created: 0, targeted: 0, deviceIds: [], governed };
   }
 
   // 先确保不可变 payload 已落 MinIO，再写 delivery；禁止制造“队列有任务但 payload 不存在”的必死行。
   const payload = await persistDeliveryPngPayload(input.pngBuffer);
-  const db = getPostgresDatabase();
   let created = 0;
   let maxPayloadVersion = 0;
   const supersededDevices = new Set<string>();
@@ -322,5 +330,6 @@ export async function enqueuePreRenderedImageDeliveries(
     deviceIds: devices.map((device) => device.id),
     payloadRef: payload.objectKey,
     payloadHash: payload.sha256,
+    governed,
   };
 }

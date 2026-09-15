@@ -3,6 +3,7 @@
 # Integration / live smoke 由 package.json 中的显式 profile 单独执行。
 root = "src"
 pathIgnorePatterns = [
+  "src/api/display-governor.pg.test.ts",
   "src/api/device-delivery-worker.pg.test.ts",
   "src/api/device-health-alerts.pg.test.ts",
   "src/api/device-frame-cache.test.ts",

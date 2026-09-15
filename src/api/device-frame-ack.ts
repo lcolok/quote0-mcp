@@ -11,6 +11,7 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { crc32Hex } from './eink-converter.js';
 import { getDeviceFrame } from './device-frame-cache.js';
 import type { DisplayAckPayload } from './eink-pull-protocol.js';
+import { DisplayGovernorStore } from './display-governor-store.js';
 
 export interface RecordedDisplayAck {
   deviceId: string;
@@ -19,6 +20,8 @@ export interface RecordedDisplayAck {
   currentMatch: boolean;
   crcVerified: boolean | null;
   ackedAt: Date;
+  governorAccepted?: boolean;
+  governorReason?: string;
 }
 
 export async function recordDisplayAck(deviceId: string, ack: DisplayAckPayload): Promise<RecordedDisplayAck> {
@@ -33,6 +36,9 @@ export async function recordDisplayAck(deviceId: string, ack: DisplayAckPayload)
   }
 
   const db = getPostgresDatabase();
+  // State + confirmed-exposure event commit atomically. This legacy ACK table is a
+  // diagnostic projection; duplicate ACKs cannot advance the governor a second time.
+  const governed = await new DisplayGovernorStore(db.getPool()).acknowledgeFrame(deviceId, ack);
   const r = await db.getPool().query<{ acked_at: Date }>(
     `INSERT INTO device_frame_acks
        (device_id, frame_id, frame_crc32, result, refresh_ms, firmware, rssi, free_heap,
@@ -70,6 +76,7 @@ export async function recordDisplayAck(deviceId: string, ack: DisplayAckPayload)
     currentMatch,
     crcVerified,
     ackedAt: r.rows[0]?.acked_at ?? new Date(),
+    ...(governed ? { governorAccepted: governed.accepted, governorReason: governed.reason } : {}),
   };
 }
 
