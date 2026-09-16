@@ -5,6 +5,7 @@ import type { ActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { llmLabelGenerator } from '../react-widgets/services/llm-label-generator.js';
 import { imageLabelGenerator, hasRefImages, TUZI_REF_IMAGE_ERROR } from '../react-widgets/services/image-label-generator.js';
 import { isTuziModel } from '../react-widgets/services/tuzi-client.js';
+import { visionHubClient } from '../react-widgets/services/vision-hub-client.js';
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
 import { listWidgets, SUPPORTED_FONTS, getWidget } from '../react-widgets/core/label-widget-registry.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
@@ -596,14 +597,10 @@ labelsApp.get('/fonts', async (c) => {
   return c.json({ success: true, fonts: [...SUPPORTED_FONTS] });
 });
 
-// POST /api/labels/ref-images — 用户上传 ref 图，转发到 BizyAir OSS 拿公网 URL
-// v1.11.0: 不再存 MinIO（BizyAir 服务端拿不到我们内网图）；走 BizyAir 一步上传
-//   (POST https://copilot.logic.heiyu.space/providers/bizyair/v1/upload)
-//   返回的 URL 形如 https://bizyair-prod.oss-cn-shanghai.aliyuncs.com/inputs/xxx.png
-//   BizyAir 各 model 的 images[] 字段能直接 fetch 该 URL 做 image-to-image
-const BIZYAIR_UPLOAD_URL =
-  process.env.BIZYAIR_UPLOAD_URL ?? 'https://copilot.logic.heiyu.space/providers/bizyair/v1/upload';
-
+// POST /api/labels/ref-images — 用户上传 ref 图，转存体系内 VisionHub 换公网 URL
+// BizyAir 服务已死（其 OSS 整体 404），不再转发 BizyAir 一步上传；改为把 buffer
+// 转存 VisionHub（懒猫共享图片 CDN），返回体系内公网 URL 供参考图流程长期引用。
+// 注：TuZi 模型不支持参考图（无 image-to-image），该产物仅供 BizyAir 系模型使用。
 labelsApp.post('/ref-images', async (c) => {
   try {
     const formData = await c.req.formData();
@@ -619,38 +616,25 @@ labelsApp.post('/ref-images', async (c) => {
       return c.json({ success: false, error: `不支持的 content-type: ${file.type}` }, 400);
     }
 
-    // 转发到 BizyAir 一步上传 endpoint
-    const forwardFd = new FormData();
-    forwardFd.append('file', file);
-    const upRes = await fetch(BIZYAIR_UPLOAD_URL, {
-      method: 'POST',
-      body: forwardFd,
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!upRes.ok) {
-      const text = await upRes.text();
-      console.error(`BizyAir upload HTTP ${upRes.status}: ${text.slice(0, 200)}`);
-      return c.json({
-        success: false,
-        error: `BizyAir 上传失败 HTTP ${upRes.status}`,
-      }, 502);
-    }
-    const data: any = await upRes.json();
-    if (!data.success || !data.url) {
-      console.error('BizyAir upload 异常响应:', JSON.stringify(data).slice(0, 300));
-      return c.json({ success: false, error: 'BizyAir 上传无 URL 返回' }, 502);
-    }
+    const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const { imageId, publicUrl } = await visionHubClient.uploadSourceImage(
+      buffer,
+      `quote0-ref-${Date.now()}.${ext}`
+    );
 
     return c.json({
       success: true,
-      url: data.url,                  // BizyAir 公网 OSS URL（BizyAir image-gen 能直接 fetch）
-      objectKey: data.object_key,
+      url: publicUrl,                 // 体系内 VisionHub 公网 URL
+      objectKey: imageId,             // VisionHub imageId，便于排查对应关系
       sizeBytes: file.size,
       contentType: file.type,
     }, 201);
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     console.error('POST /ref-images 失败:', e);
-    return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+    // VisionHub 上传失败按上游错误回 502，其余按内部错误回 500
+    return c.json({ success: false, error: msg }, msg.startsWith('[VISION_HUB]') ? 502 : 500);
   }
 });
 

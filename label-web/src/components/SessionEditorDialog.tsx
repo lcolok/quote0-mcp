@@ -728,6 +728,9 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
   const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
   const [focusedTurnId, setFocusedTurnId] = useState<string | null>(null);
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
+  // 历史标签的 source_image_url 可能指向已关闭的上游 OSS（如 bizyair）；记录失败的 URL，
+  // 切换聚焦版本（URL 变化）时自动复位
+  const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; no: number } | null>(null);
   // 已解决的澄清问答 + 用户主动补充想法的累积链,作为后续 /plan 的上下文
   const [clarifyTrail, setClarifyTrail] = useState<string[]>([]);
@@ -1068,12 +1071,19 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 {focused.label?.sourceImageUrl && (
                   <div className="mt-2">
                     <div className="mb-1 text-micro text-muted-foreground/70">AI 原图</div>
-                    <img
-                      src={focused.label.sourceImageUrl}
-                      alt="AI 原图"
-                      onClick={() => setZoomUrl(focused.label!.sourceImageUrl)}
-                      className="h-12 w-12 cursor-zoom-in rounded border object-cover"
-                    />
+                    {failedSourceUrl === focused.label.sourceImageUrl ? (
+                      <div className="flex h-12 w-12 items-center justify-center rounded border px-1 text-center text-[9px] leading-tight text-muted-foreground/70">
+                        原图已失效
+                      </div>
+                    ) : (
+                      <img
+                        src={focused.label.sourceImageUrl}
+                        alt="AI 原图"
+                        onClick={() => setZoomUrl(focused.label!.sourceImageUrl)}
+                        onError={() => setFailedSourceUrl(focused.label!.sourceImageUrl)}
+                        className="h-12 w-12 cursor-zoom-in rounded border object-cover"
+                      />
+                    )}
                   </div>
                 )}
                 {focused.refImageUrls.length > 0 && (

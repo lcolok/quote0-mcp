@@ -4,12 +4,22 @@ import { packFromPng, packMonoBuffer } from '../core/bitmap-packer.js';
 import { ditherGrayscaleToMono, type DitherAlgorithm } from '../core/dither-algorithms.js';
 import { bizyairClient, type BizyAirModel } from './bizyair-client.js';
 import { tuziClient, upstreamModelFromTuzi } from './tuzi-client.js';
+import { fidelityFetchUrl, visionHubClient } from './vision-hub-client.js';
 
 export interface ImageLabelGenResult {
   pngBuffer: Buffer;              // dither 后 1-bit PNG（存 MinIO 的）
   bitmapBuffer: Buffer;           // 直接给 niimbot 用的 1-bit pack
-  sourceImageUrl: string;         // 上游返回的原图链接（bizyair OSS / TuZi CDN）
+  sourceImageUrl: string;         // 体系内 VisionHub 公网 URL（出图后立即转存，不再指向上游 OSS）
   bizyairLatencyMs: number;       // 上游出图耗时（字段名沿用，bizyair/tuzi 共用）
+}
+
+/** 下载响应 content-type → 文件扩展名（VisionHub 的 imageId 带扩展名；缺省 png） */
+function extFromContentType(contentType: string | null): string {
+  const ct = (contentType ?? '').toLowerCase();
+  if (ct.includes('image/jpeg')) return 'jpg';
+  if (ct.includes('image/webp')) return 'webp';
+  if (ct.includes('image/gif')) return 'gif';
+  return 'png';
 }
 
 /** TuZi 无图像输入，选它时参考图必须为空 —— 报错文案供 API 层复用同一口径 */
@@ -65,16 +75,24 @@ export class ImageLabelGenerator {
       signal: AbortSignal.timeout(60_000),
     });
     if (!imgRes.ok) {
-      throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${generated.imageUrl}`);
+      throw new Error(`下载上游原图失败 HTTP ${imgRes.status} @ ${generated.imageUrl}`);
     }
     const originalBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+    // 3. 立即内化到 VisionHub —— 上游 OSS/CDN 都不是长期资产（bizyair 已整体 404，
+    //    TuZi CDN 实测约 40 分钟后 301 重定向），只有体系内 URL 才留得住原图。
+    //    上传失败直接抛错（不存即废，不留上游链接当兜底），让 job 走标准 attempts 重试。
+    const { publicUrl } = await visionHubClient.uploadSourceImage(
+      originalBuffer,
+      `quote0-label-${Date.now()}.${extFromContentType(imgRes.headers.get('content-type'))}`
+    );
 
     const { pngBuffer, bitmapBuffer } = await this.ditherToOutputs(originalBuffer, target, algo);
 
     return {
       pngBuffer,
       bitmapBuffer,
-      sourceImageUrl: generated.imageUrl,
+      sourceImageUrl: publicUrl,
       bizyairLatencyMs: generated.elapsedMs,
     };
   }
@@ -104,15 +122,17 @@ export class ImageLabelGenerator {
     });
   }
 
-  /** redither 用：从已存 MinIO 的 source_image_url 重新下载 + 重做 dither，不再调 BizyAir */
+  /** redither 用：从已存的 source_image_url 重新下载 + 重做 dither，不再调上游 */
   async redither(
     sourceImageUrl: string,
     target: RenderTarget,
     algo: DitherAlgorithm = 'threshold'
   ): Promise<{ pngBuffer: Buffer; bitmapBuffer: Buffer }> {
-    const imgRes = await fetch(sourceImageUrl, { signal: AbortSignal.timeout(60_000) });
+    // 体系内 VH URL 走 ?f=png 保真下载（裸 URL 会按协商转有损 webp）；历史死链原样请求
+    const fetchUrl = fidelityFetchUrl(sourceImageUrl);
+    const imgRes = await fetch(fetchUrl, { signal: AbortSignal.timeout(60_000) });
     if (!imgRes.ok) {
-      throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${sourceImageUrl}`);
+      throw new Error(`下载原图失败 HTTP ${imgRes.status} @ ${fetchUrl}`);
     }
     const originalBuffer = Buffer.from(await imgRes.arrayBuffer());
     return this.ditherToOutputs(originalBuffer, target, algo);

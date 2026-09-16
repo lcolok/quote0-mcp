@@ -44,6 +44,9 @@ export default function DetailPage() {
 
   const backLabel = from === 'design' ? '设计' : '历史';
   const [printOpen, setPrintOpen] = useState(false);
+  // 历史标签的 source_image_url 可能指向已关闭的上游 OSS（如 bizyair），加载失败时降级为占位。
+  // 记录失败的 URL 而非布尔：URL 变化（重新生成 / re-dither）时自动复位
+  const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
 
   const { data: label, isLoading, refetch } = useQuery({
     queryKey: ['label', id],
@@ -169,11 +172,18 @@ export default function DetailPage() {
             {label.sourceType === 'image' && label.sourceImageUrl && (
               <div>
                 <span className="text-xs text-muted-foreground mb-1 block">AI 原图</span>
-                <img
-                  src={label.sourceImageUrl}
-                  alt="AI 原图"
-                  className="w-full max-w-[480px] rounded-lg border border-border object-contain bg-muted"
-                />
+                {failedSourceUrl === label.sourceImageUrl ? (
+                  <div className="w-full max-w-[480px] rounded-lg border border-border bg-muted px-3 py-8 text-center text-xs text-muted-foreground">
+                    原图已失效（上游服务已关闭）
+                  </div>
+                ) : (
+                  <img
+                    src={label.sourceImageUrl}
+                    alt="AI 原图"
+                    onError={() => setFailedSourceUrl(label.sourceImageUrl!)}
+                    className="w-full max-w-[480px] rounded-lg border border-border object-contain bg-muted"
+                  />
+                )}
               </div>
             )}
             {label.sourceType === 'image' && label.sourceImageUrl && (

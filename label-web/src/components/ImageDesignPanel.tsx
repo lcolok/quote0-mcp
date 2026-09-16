@@ -48,6 +48,9 @@ export default function ImageDesignPanel() {
   const [trackingJobId, setTrackingJobId] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>(NONE_PRESET_ID);
   const [refImageUrls, setRefImageUrls] = useState<string[]>([]);
+  // 历史标签的 source_image_url 可能指向已关闭的上游 OSS（如 bizyair）；记录失败的 URL，
+  // 换标签（URL 变化）时自动复位
+  const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
 
   const { data: targetData } = useQuery({
     queryKey: ['niimbot-current-target'],
@@ -277,10 +280,17 @@ export default function ImageDesignPanel() {
             <div className="space-y-2">
               <h3 className="text-xs font-medium text-muted-foreground">AI 原图（参考）</h3>
               <Card className="aspect-square overflow-hidden rounded-md p-0">
-                {trackedLabel.sourceImageUrl ? (
-                  <img src={trackedLabel.sourceImageUrl} alt="AI 原图" className="h-full w-full object-contain" />
+                {trackedLabel.sourceImageUrl && failedSourceUrl !== trackedLabel.sourceImageUrl ? (
+                  <img
+                    src={trackedLabel.sourceImageUrl}
+                    alt="AI 原图"
+                    onError={() => setFailedSourceUrl(trackedLabel.sourceImageUrl!)}
+                    className="h-full w-full object-contain"
+                  />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">无原图</div>
+                  <div className="flex h-full items-center justify-center px-3 text-center text-xs text-muted-foreground">
+                    {trackedLabel.sourceImageUrl ? '原图已失效（上游服务已关闭）' : '无原图'}
+                  </div>
                 )}
               </Card>
             </div>

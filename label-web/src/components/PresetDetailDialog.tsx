@@ -27,6 +27,9 @@ export default function PresetDetailDialog({ preset, open, onOpenChange }: Props
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [suffix, setSuffix] = useState('');
+  // 预设的 source_image_url 可能指向已关闭的上游 OSS（如 bizyair）；记录失败的 URL，
+  // 切换预设（URL 变化）时自动复位
+  const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
 
   // 每次切换 preset / 打开，重置本地编辑态
   useEffect(() => {
@@ -85,7 +88,18 @@ export default function PresetDetailDialog({ preset, open, onOpenChange }: Props
           {refImage && (
             <div>
               <div className="text-xs text-muted-foreground mb-1">{preset.sourceImageUrl ? '参考图（AI 源图）' : '缩略图'}</div>
-              <img src={refImage} alt={preset.name} className="max-h-40 rounded-lg border border-border object-contain bg-muted" />
+              {failedSourceUrl === refImage ? (
+                <div className="rounded-lg border border-border bg-muted px-3 py-8 text-center text-xs text-muted-foreground">
+                  {preset.sourceImageUrl ? '原图已失效（上游服务已关闭）' : '图片已失效'}
+                </div>
+              ) : (
+                <img
+                  src={refImage}
+                  alt={preset.name}
+                  onError={() => setFailedSourceUrl(refImage)}
+                  className="max-h-40 rounded-lg border border-border object-contain bg-muted"
+                />
+              )}
             </div>
           )}
 
