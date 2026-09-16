@@ -1,8 +1,7 @@
 import { hostname } from 'node:os';
 import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js';
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
-import { imageLabelGenerator, hasRefImages, TUZI_REF_IMAGE_ERROR } from '../react-widgets/services/image-label-generator.js';
-import { isTuziModel } from '../react-widgets/services/tuzi-client.js';
+import { imageLabelGenerator } from '../react-widgets/services/image-label-generator.js';
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { getImageStorage } from '../react-widgets/core/image-storage.js';
 import { BUILTIN_TARGETS, LABEL_T40X20_TARGET } from '../react-widgets/core/render-targets.js';
@@ -297,19 +296,15 @@ async function executeImageJob(payload: any): Promise<string> {
   );
 
   // 6. 调出图后端生成（passing final prompt + 可选 images[] 直传走 image-to-image）
-  //    v1.11.0: orchestrator 在有 ref 图时把 BizyAir 公网 URL 数组放在 bizyairImages
-  //    bizyair-client buildPayload 用 ...options 透传，所以这里塞进 modelOptions.images 即可
+  //    v1.11.0: orchestrator 在有 ref 图时把公网 URL 数组放在 bizyairImages
+  //    bizyair-client buildPayload 用 ...options 透传，所以这里塞进 modelOptions.images 即可；
+  //    TuZi 侧由 image-label-generator 读同一字段，把 URL 下载成字节后走 /images/edits
   const mergedOptions: Record<string, any> = { ...(payload.modelOptions ?? {}) };
   if (orchestrated.bizyairImages && orchestrated.bizyairImages.length > 0) {
     // 用户传的 modelOptions.images 优先；orchestrator 给的作为 default
     if (!mergedOptions.images) {
       mergedOptions.images = orchestrated.bizyairImages;
     }
-  }
-  // 6.1 安全网：TuZi 无图像输入，带参考图的 job 直接失败（API 端点已 400，
-  //     这道兜住 batch / 老客户端等绕过端点校验的入队路径）
-  if (isTuziModel(payload.model) && hasRefImages(mergedOptions)) {
-    throw new Error(TUZI_REF_IMAGE_ERROR);
   }
   const result = await imageLabelGenerator.generate(
     orchestrated.finalPrompt,

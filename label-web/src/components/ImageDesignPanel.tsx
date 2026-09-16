@@ -37,8 +37,8 @@ const MODELS: Array<{ value: GenerateImageRequest['model']; label: string; hint:
   { value: 'nb2', label: 'NB2', hint: 'Google Gemini Flash · 平衡' },
   { value: 'nbp', label: 'NBP', hint: 'Google Gemini Pro · 最高质量' },
   { value: 'gpt2', label: 'GPT-Image-2', hint: 'OpenAI · 多比例支持' },
-  { value: 'tuzi:gpt-image-2.5', label: 'GPT-Image-2.5', hint: 'TuZi · 推荐' },
-  { value: 'tuzi:gpt-image-2', label: 'GPT-Image-2', hint: 'TuZi · OpenAI' },
+  { value: 'tuzi:gpt-image-2.5', label: 'GPT-Image-2.5', hint: 'TuZi · 推荐 · 支持参考图微调' },
+  { value: 'tuzi:gpt-image-2', label: 'GPT-Image-2', hint: 'TuZi · 支持参考图微调' },
 ];
 
 export default function ImageDesignPanel() {
@@ -151,8 +151,6 @@ export default function ImageDesignPanel() {
   };
 
   const currentModelInfo = MODELS.find((m) => m.value === model)!;
-  // TuZi 后端无图像输入（无 image-to-image），选它时参考图上传必须关掉
-  const isTuzi = model.startsWith('tuzi:');
   const isGenerating =
     trackedJob?.state === 'queued' || trackedJob?.state === 'running' || generateMutation.isPending;
   const isFailed = trackedJob?.state === 'failed';
@@ -203,28 +201,21 @@ export default function ImageDesignPanel() {
         />
       </div>
 
-      {/* 参考图（图生图 / 与 preset 叠加）—— TuZi 模型不支持，选它时禁用 */}
+      {/* 参考图（图生图 / 与 preset 叠加）—— 所有模型均支持（TuZi 走 /images/edits） */}
       <div className="space-y-2">
         <RefImageUploader
           urls={refImageUrls}
           onChange={setRefImageUrls}
           maxImages={8}
-          disabled={generateMutation.isPending || isTuzi}
+          disabled={generateMutation.isPending}
         />
-        {isTuzi && (
-          <p className="text-xs text-muted-foreground">TuZi 模型暂不支持参考图，如需图生图请改用其他模型</p>
-        )}
       </div>
 
       <div className="space-y-2">
         <label className="block text-sm font-medium text-foreground">AI 模型</label>
         <Select
           value={model}
-          onValueChange={(v) => {
-            setModel(v as GenerateImageRequest['model']);
-            // TuZi 无图像输入：切过去时清掉已选参考图，避免提交被后端 400 顶回
-            if (v.startsWith('tuzi:')) setRefImageUrls([]);
-          }}
+          onValueChange={(v) => setModel(v as GenerateImageRequest['model'])}
           disabled={generateMutation.isPending}
         >
           <SelectTrigger>

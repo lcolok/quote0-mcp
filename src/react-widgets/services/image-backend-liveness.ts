@@ -17,7 +17,7 @@ export const DEAD_BIZYAIR_MODELS: ReadonlySet<string> = new Set([
   'gpt2',
 ]);
 
-/** 死模型统一重映射到的存活默认模型(TuZi,OpenAI images API 兼容,仅文生图) */
+/** 死模型统一重映射到的存活默认模型(TuZi,OpenAI images API 兼容,支持文生图 + 图生图) */
 export const LIVE_DEFAULT_MODEL = 'tuzi:gpt-image-2.5';
 
 /**

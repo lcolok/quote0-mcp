@@ -2,8 +2,11 @@
  * TuZi 图像生成后端（OpenAI images API 兼容），经 copilot 网关转发。
  *
  * 与 bizyair-client 的关系：模型选择器并存，`tuzi:<model>` 前缀路由到本客户端。
- * 硬约束：TuZi 无图像输入（无 images[]/image-to-image），仅文生图，
- * 参考图互斥由调用方（labels-api / label-jobs-worker / image-label-generator）拦截。
+ * 两条路径：
+ *   · generate —— 文生图，JSON body，POST /images/generations
+ *   · edit     —— 图生图，multipart/form-data，POST /images/edits（多图靠重复 `image` 字段）
+ * 上游 edits 已实测可用（PNG 输入 200，usage.input_tokens_details.image_tokens 证图像真实参与）；
+ * webp 输入未实证，调用方负责只喂 PNG。
  */
 
 /** DB source_model / API model 字段里的 TuZi 前缀（剥离后透传给上游） */
@@ -23,6 +26,18 @@ export interface TuziRequest {
   options?: Record<string, any>;
   /** 打印目标像素尺寸 → 推导 size 档位 */
   aspect?: { widthPx: number; heightPx: number };
+}
+
+/** 单张参考图（内存字节 + multipart 元信息） */
+export interface TuziEditImage {
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string;
+}
+
+export interface TuziEditRequest extends TuziRequest {
+  /** ≥1 张参考图；上游按重复 `image` 字段解析（不是 `image[]`） */
+  images: TuziEditImage[];
 }
 
 export interface TuziResponse {
@@ -61,16 +76,49 @@ export class TuziClient {
     ?? 'https://copilot.logic.heiyu.space/providers/tuzi/v1';
 
   async generate(req: TuziRequest): Promise<TuziResponse> {
-    const endpoint = `${this.baseUrl}/images/generations`;
-    const payload = this.buildPayload(req);
+    return await this.postImagesRequest(`${this.baseUrl}/images/generations`, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(this.buildPayload(req)),
+    });
+  }
+
+  /**
+   * 图生图（上游 POST /images/edits，multipart/form-data）。
+   * 与 generate 的差异：不做 options 全量透传 —— multipart 字段集更严，只发上游契约里
+   * 实证过的字段，避免 images[]/background 这类 JSON 专有字段混入。
+   */
+  async edit(req: TuziEditRequest): Promise<TuziResponse> {
+    const options = req.options ?? {};
+    // 多图靠重复同名字段传递（上游契约：重复 `image`，不是 `image[]`）
+    const form = new FormData();
+    for (const img of req.images) {
+      // Uint8Array.from 产出 ArrayBuffer 背书的视图：Uint8Array<ArrayBufferLike> 不满足 DOM 的 BlobPart
+      const part = new Blob([Uint8Array.from(img.bytes)], { type: img.contentType });
+      form.append('image', part, img.filename);
+    }
+    form.append('model', upstreamModelFromTuzi(req.model) ?? req.model);
+    form.append('prompt', req.prompt);
+    form.append('n', '1');
+    form.append('response_format', 'url');
+    form.append('size', options.size ?? deriveTuziSize(req.aspect));
+    form.append('quality', options.quality ?? 'low');
+    // 不设 Content-Type：multipart boundary 由 fetch 自行生成
+    return await this.postImagesRequest(`${this.baseUrl}/images/edits`, { body: form });
+  }
+
+  /** generate / edit 共用的收发路径：超时标签、HTTP 错误、data[0].url 解析口径完全一致 */
+  private async postImagesRequest(
+    endpoint: string,
+    init: { headers?: Record<string, string>; body: BodyInit }
+  ): Promise<TuziResponse> {
     const startedAt = Date.now();
 
     let res: Response;
     try {
       res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        ...(init.headers ? { headers: init.headers } : {}),
+        body: init.body,
         signal: AbortSignal.timeout(TUZI_TIMEOUT_MS),
       });
     } catch (e: any) {

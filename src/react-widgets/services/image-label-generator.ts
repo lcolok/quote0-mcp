@@ -3,7 +3,7 @@ import type { RenderTarget } from '../core/render-targets.js';
 import { packFromPng, packMonoBuffer } from '../core/bitmap-packer.js';
 import { ditherGrayscaleToMono, type DitherAlgorithm } from '../core/dither-algorithms.js';
 import { bizyairClient, type BizyAirModel } from './bizyair-client.js';
-import { tuziClient, upstreamModelFromTuzi } from './tuzi-client.js';
+import { tuziClient, upstreamModelFromTuzi, type TuziEditImage } from './tuzi-client.js';
 import { fidelityFetchUrl, visionHubClient } from './vision-hub-client.js';
 
 export interface ImageLabelGenResult {
@@ -22,13 +22,40 @@ function extFromContentType(contentType: string | null): string {
   return 'png';
 }
 
-/** TuZi 无图像输入，选它时参考图必须为空 —— 报错文案供 API 层复用同一口径 */
-export const TUZI_REF_IMAGE_ERROR = 'TuZi 模型不支持参考图，请移除参考图或改用 BizyAir 模型';
-
 /** options 里是否带了参考图（images[] 非空） */
 export function hasRefImages(options?: Record<string, any>): boolean {
   const images = options?.images;
   return Array.isArray(images) && images.length > 0;
+}
+
+/** 参考图下载超时（体系内 VisionHub 出图 <1MB，15s 足够；超时/非图 → 抛错走 job 标准重试） */
+const REF_IMAGE_TIMEOUT_MS = 15_000;
+
+/**
+ * 逐张下载参考图 → multipart 可用的字节载荷。
+ * 体系内 VisionHub URL 走 `?f=png` 强制无损 PNG —— 上游 edits 只对 PNG 输入有实证，
+ * webp 走 URL 协商会变成有损图，不赌。失败一律抛带 URL 的错，交给 job 重试语义。
+ */
+async function downloadRefImage(url: string, index: number): Promise<TuziEditImage> {
+  const fetchUrl = fidelityFetchUrl(url);
+  let res: Response;
+  try {
+    res = await fetch(fetchUrl, { signal: AbortSignal.timeout(REF_IMAGE_TIMEOUT_MS) });
+  } catch (e: any) {
+    throw new Error(`下载参考图失败（网络/超时）HTTP 无响应 @ ${fetchUrl}: ${e?.message ?? String(e)}`);
+  }
+  if (!res.ok) {
+    throw new Error(`下载参考图失败 HTTP ${res.status} @ ${fetchUrl}`);
+  }
+  const contentType = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+  if (!contentType.startsWith('image/')) {
+    throw new Error(`参考图 content-type 非图像（${contentType || '缺失'}）@ ${fetchUrl}`);
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.length === 0) {
+    throw new Error(`参考图内容为空 @ ${fetchUrl}`);
+  }
+  return { bytes, contentType, filename: `ref-${index}.${extFromContentType(contentType)}` };
 }
 
 export class ImageLabelGenerator {
@@ -97,7 +124,10 @@ export class ImageLabelGenerator {
     };
   }
 
-  /** TuZi 路径：剥前缀透传上游模型，size 按 target 纵横推导（TuZi 无图像输入，参考图直接拒绝） */
+  /**
+   * TuZi 路径：剥前缀透传上游模型，size 按 target 纵横推导。
+   * 带参考图 → /images/edits（先逐张下载成 PNG 字节，再 multipart 上传）；无参考图 → 文生图。
+   */
   private async generateViaTuzi(
     prompt: string,
     model: string,
@@ -108,17 +138,27 @@ export class ImageLabelGenerator {
     if (!upstreamModel) {
       throw new Error(`非法 TuZi 模型名: ${model}`);
     }
-    if (hasRefImages(options)) {
-      throw new Error(TUZI_REF_IMAGE_ERROR);
-    }
-    // 空 images[] 也不透传：TuZi 无图像输入，多传字段会被上游 schema 拒绝
+    // images 只在这里用于取参考图 URL；透传给客户端前必须摘掉（multipart 不认 URL 数组）
     const sanitized = { ...(options ?? {}) };
     delete sanitized.images;
-    return await tuziClient.generate({
+    const aspect = { widthPx: target.widthPx, heightPx: target.heightPx };
+
+    if (!hasRefImages(options)) {
+      return await tuziClient.generate({ prompt, model: upstreamModel, options: sanitized, aspect });
+    }
+
+    const refUrls: unknown[] = options!.images;
+    const urls = refUrls.map((u) => (typeof u === 'string' ? u.trim() : ''));
+    if (urls.some((u) => !u)) {
+      throw new Error(`参考图 URL 非法（需为非空字符串）: ${JSON.stringify(refUrls).slice(0, 200)}`);
+    }
+    const images = await Promise.all(urls.map((u, i) => downloadRefImage(u, i)));
+    return await tuziClient.edit({
       prompt,
       model: upstreamModel,
+      images,
       options: sanitized,
-      aspect: { widthPx: target.widthPx, heightPx: target.heightPx },
+      aspect,
     });
   }
 

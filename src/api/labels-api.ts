@@ -3,7 +3,7 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import type { ActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { llmLabelGenerator } from '../react-widgets/services/llm-label-generator.js';
-import { imageLabelGenerator, hasRefImages, TUZI_REF_IMAGE_ERROR } from '../react-widgets/services/image-label-generator.js';
+import { imageLabelGenerator } from '../react-widgets/services/image-label-generator.js';
 import { isTuziModel } from '../react-widgets/services/tuzi-client.js';
 import { visionHubClient } from '../react-widgets/services/vision-hub-client.js';
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
@@ -193,11 +193,6 @@ labelsApp.post('/generate-image', async (c) => {
     if (!IMAGE_MODEL_WHITELIST.includes(body.model) && !isTuzi) {
       return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
     }
-    // TuZi 硬约束无图像输入：带参考图（含 modelOptions.images）直接拒绝，避免白跑一次出图
-    if (isTuzi && ((body.refImageUrls?.length ?? 0) > 0 || hasRefImages(body.modelOptions))) {
-      return c.json({ success: false, stage: 'validate', error: TUZI_REF_IMAGE_ERROR }, 400);
-    }
-
     const ditherAlgorithm: DitherAlgorithm = isDitherAlgorithm(body.ditherAlgorithm)
       ? body.ditherAlgorithm
       : DEFAULT_DITHER;
@@ -600,7 +595,7 @@ labelsApp.get('/fonts', async (c) => {
 // POST /api/labels/ref-images — 用户上传 ref 图，转存体系内 VisionHub 换公网 URL
 // BizyAir 服务已死（其 OSS 整体 404），不再转发 BizyAir 一步上传；改为把 buffer
 // 转存 VisionHub（懒猫共享图片 CDN），返回体系内公网 URL 供参考图流程长期引用。
-// 注：TuZi 模型不支持参考图（无 image-to-image），该产物仅供 BizyAir 系模型使用。
+// 注：该产物供所有出图模型的参考图流程使用（TuZi 走 /images/edits，BizyAir 系走 images[]）。
 labelsApp.post('/ref-images', async (c) => {
   try {
     const formData = await c.req.formData();

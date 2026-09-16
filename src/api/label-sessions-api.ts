@@ -15,7 +15,6 @@ import {
   imageUrlToBase64,
   type VisionContentPart,
 } from '../react-widgets/services/multimodal-llm-client.js';
-import { isTuziModel } from '../react-widgets/services/tuzi-client.js';
 import {
   LIVE_DEFAULT_MODEL,
   probeUrlsAlive,
@@ -307,8 +306,7 @@ labelSessionsApp.post('/:id/turns', async (c) => {
     // 参考图里可能混着已失效的历史原图(上游 OSS 已关)与用户上传图。先探测存活:
     //   · 父原图死 → 直接拒(BASE_IMAGE_DEAD),让前端走「改用文生图」确认门;
     //   · 用户上传死图 → 从 refs 剔除并落 params.droppedDeadRefs 留痕;
-    //   · 剔除后 img2img 无图可走 → 同样拒(有存活父原图则回落父原图);
-    //   · 解析出的模型是 TuZi(无图像输入)而 refs 非空 → 拒(MODEL_NO_I2I)。
+    //   · 剔除后 img2img 无图可走 → 同样拒(有存活父原图则回落父原图)。
     const parentSrc: string | null = parent?.source_image_url ?? null;
     const probeSet = new Set(refs);
     if (body.genMode === 'img2img' && parentSrc) probeSet.add(parentSrc);
@@ -344,17 +342,6 @@ labelSessionsApp.post('/:id/turns', async (c) => {
         );
       }
     }
-    if (isTuziModel(model) && refs.length > 0) {
-      return c.json(
-        {
-          success: false,
-          code: 'MODEL_NO_I2I',
-          error: '当前模型（TuZi）不支持图生图。可改用「重写」文生图，或待图生图后端恢复。',
-        },
-        400
-      );
-    }
-
     // planner 决策(确认回复 + 推理)落账到 params.planner —— 对话流显示 + 溯源,零 schema 改动
     if (body.agentReply || body.plannerReasoning || confirmed) {
       extraParams.planner = {
