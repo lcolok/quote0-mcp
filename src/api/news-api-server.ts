@@ -18,6 +18,7 @@ import type { NewsSchedulerJobConfig } from './news-types.js';
 import annotationApp from './annotation-api.js';
 import axTrainingApp from './ax-training-api.js';
 import { llmProvidersApp } from './llm-providers-api.js';
+import { imageGenConfigApp } from './image-gen-config-api.js';
 import { devicesApp } from './devices-api.js';
 import { reconcileDeviceBaseUrl } from './device-base-url-reconcile.js';
 import inventoryApp from './inventory-api.js';
@@ -322,6 +323,9 @@ app.route('/api/ax-training', axTrainingApp);
 
 // LLM Providers API
 app.route('/', llmProvidersApp);
+
+// 出图默认模型配置 API
+app.route('/', imageGenConfigApp);
 
 // Devices CRUD API
 app.route('/', devicesApp);

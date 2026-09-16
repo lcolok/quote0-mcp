@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -16,8 +16,11 @@ import {
 } from '@/components/ui/select';
 import { batchesApi } from '@/api/batches';
 import { labelsApi } from '@/api/labels';
+import { imageGenApi } from '@/api/image-gen';
 
-const MODELS = ['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2', 'tuzi:gpt-image-2.5', 'tuzi:gpt-image-2'];
+const BASE_MODELS = ['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2'];
+// 后端配置接口不可用时回退到既有硬编码两项（行为不变）
+const FALLBACK_TUZI_MODELS = ['tuzi:gpt-image-2.5', 'tuzi:gpt-image-2'];
 const NONE = '__none__';
 
 export default function BatchCreatePage() {
@@ -29,6 +32,29 @@ export default function BatchCreatePage() {
   const [itemsText, setItemsText] = useState('');
 
   const { data: presets } = useQuery({ queryKey: ['presets'], queryFn: () => labelsApi.listPresets() });
+
+  // 出图默认模型 + 上游实时可出图目录（后台可配置）。失败 → 回退硬编码列表，行为不变。
+  const { data: imageGenConfig } = useQuery({
+    queryKey: ['image-gen-config'],
+    queryFn: () => imageGenApi.getConfig(),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const models = useMemo(() => {
+    const available = imageGenConfig?.availableTuziModels ?? [];
+    return [...BASE_MODELS, ...(available.length ? available : FALLBACK_TUZI_MODELS)];
+  }, [imageGenConfig]);
+
+  // 配置加载成功后，默认选中后台配置的模型（只套用一次，不覆盖用户后续手选）
+  const appliedConfiguredDefault = useRef(false);
+  useEffect(() => {
+    if (appliedConfiguredDefault.current) return;
+    const configured = imageGenConfig?.defaultTuziModel;
+    if (!configured) return;
+    appliedConfiguredDefault.current = true;
+    setModel(configured);
+  }, [imageGenConfig]);
 
   const parsedItems = itemsText
     .split('\n')
@@ -77,7 +103,7 @@ export default function BatchCreatePage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {MODELS.map((m) => (
+                {models.map((m) => (
                   <SelectItem key={m} value={m}>
                     {m}
                   </SelectItem>

@@ -57,6 +57,24 @@ describe('resolveLiveModel', () => {
     expect(resolveLiveModel('   ')).toEqual({ model: LIVE_DEFAULT_MODEL, remappedFrom: null });
     expect(resolveLiveModel(' tuzi:gpt-image-2 ').model).toBe('tuzi:gpt-image-2');
   });
+
+  it('显式 target=后台配置的默认模型:死模型/空值都落到 target', () => {
+    expect(resolveLiveModel('nb2', 'tuzi:gpt-image-2')).toEqual({
+      model: 'tuzi:gpt-image-2',
+      remappedFrom: 'nb2',
+    });
+    expect(resolveLiveModel('', 'tuzi:gpt-image-2')).toEqual({
+      model: 'tuzi:gpt-image-2',
+      remappedFrom: null,
+    });
+  });
+
+  it('显式 target 不影响活模型(照旧原样返回)', () => {
+    expect(resolveLiveModel('tuzi:gpt-image-2.5-flare', 'tuzi:gpt-image-2')).toEqual({
+      model: 'tuzi:gpt-image-2.5-flare',
+      remappedFrom: null,
+    });
+  });
 });
 
 describe('probeUrlsAlive', () => {

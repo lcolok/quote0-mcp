@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ImageIcon, Printer, RefreshCw, Loader2, AlertCircle } from 'lucide-react';
@@ -26,17 +26,24 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { labelsApi } from '@/api/labels';
+import { imageGenApi } from '@/api/image-gen';
 import type { GenerateImageRequest, Label as LabelType, LabelJob } from '@/types/label';
 
 // 注：分辨率不暴露给用户 —— 标签实际只需 320×160px，后端 bizyair-client 默认 1K 已绰绰有余。
 // sd5 是 Doubao Seedream（中文友好），nb2/nbp 是 Google Gemini，gpt2 是 OpenAI GPT-Image-2。
 // tuzi:* 走 TuZi 后端（OpenAI images schema，size 由后端按标签纵横推导），前缀后是上游模型名。
-const MODELS: Array<{ value: GenerateImageRequest['model']; label: string; hint: string }> = [
+type ModelOption = { value: GenerateImageRequest['model']; label: string; hint: string };
+
+const BASE_MODELS: ModelOption[] = [
   { value: 'sd5', label: 'SD5', hint: '中文友好 · 经济快速' },
   { value: 'sd5-3k', label: 'SD5 高清', hint: '更精细细节 · 略慢' },
   { value: 'nb2', label: 'NB2', hint: 'Google Gemini Flash · 平衡' },
   { value: 'nbp', label: 'NBP', hint: 'Google Gemini Pro · 最高质量' },
   { value: 'gpt2', label: 'GPT-Image-2', hint: 'OpenAI · 多比例支持' },
+];
+
+// 后端配置接口不可用时回退到既有硬编码两项（行为不变）
+const FALLBACK_TUZI_MODELS: ModelOption[] = [
   { value: 'tuzi:gpt-image-2.5', label: 'GPT-Image-2.5', hint: 'TuZi · 推荐 · 支持参考图微调' },
   { value: 'tuzi:gpt-image-2', label: 'GPT-Image-2', hint: 'TuZi · 支持参考图微调' },
 ];
@@ -61,6 +68,36 @@ export default function ImageDesignPanel() {
 
   const currentTarget = targetData?.success ? targetData.target : null;
   const fallbackTarget = targetData?.fallback;
+
+  // 出图默认模型 + 上游实时可出图目录（后台可配置）。失败 → 回退硬编码列表，行为不变。
+  const { data: imageGenConfig } = useQuery({
+    queryKey: ['image-gen-config'],
+    queryFn: () => imageGenApi.getConfig(),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const models = useMemo<ModelOption[]>(() => {
+    const available = imageGenConfig?.availableTuziModels ?? [];
+    const tuzi: ModelOption[] = available.length
+      ? available.map((m) => ({
+          value: m as GenerateImageRequest['model'],
+          label: m.replace(/^tuzi:/, ''),
+          hint: 'TuZi · 上游实时目录',
+        }))
+      : FALLBACK_TUZI_MODELS;
+    return [...BASE_MODELS, ...tuzi];
+  }, [imageGenConfig]);
+
+  // 配置加载成功后，默认选中后台配置的模型（只套用一次，不覆盖用户后续手选）
+  const appliedConfiguredDefault = useRef(false);
+  useEffect(() => {
+    if (appliedConfiguredDefault.current) return;
+    const configured = imageGenConfig?.defaultTuziModel;
+    if (!configured) return;
+    appliedConfiguredDefault.current = true;
+    setModel(configured as GenerateImageRequest['model']);
+  }, [imageGenConfig]);
 
   const generateMutation = useMutation({
     mutationFn: (req: GenerateImageRequest) => labelsApi.generateImage(req),
@@ -150,7 +187,7 @@ export default function ImageDesignPanel() {
     });
   };
 
-  const currentModelInfo = MODELS.find((m) => m.value === model)!;
+  const currentModelInfo = models.find((m) => m.value === model) ?? models[0];
   const isGenerating =
     trackedJob?.state === 'queued' || trackedJob?.state === 'running' || generateMutation.isPending;
   const isFailed = trackedJob?.state === 'failed';
@@ -222,7 +259,7 @@ export default function ImageDesignPanel() {
             <SelectValue placeholder="选择模型" />
           </SelectTrigger>
           <SelectContent>
-            {MODELS.map((m) => (
+            {models.map((m) => (
               <SelectItem key={m.value} value={m.value}>
                 {m.label} — {m.hint}
               </SelectItem>

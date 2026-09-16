@@ -16,10 +16,10 @@ import {
   type VisionContentPart,
 } from '../react-widgets/services/multimodal-llm-client.js';
 import {
-  LIVE_DEFAULT_MODEL,
   probeUrlsAlive,
   resolveLiveModel,
 } from '../react-widgets/services/image-backend-liveness.js';
+import { getDefaultTuziModel } from '../react-widgets/services/image-gen-config.js';
 
 const labelSessionsApp = new Hono();
 
@@ -238,8 +238,8 @@ labelSessionsApp.post('/:id/turns', async (c) => {
       targetId = targetId ?? def.targetId;
     }
     // 死模型重映射:父版 params / 批次默认继承来的 bizyair 系模型上游已关停(503),
-    // 统一换成存活默认模型,原值落 params.modelRemappedFrom 供溯源(零 schema 改动)
-    const live = resolveLiveModel(model);
+    // 统一换成当前后台配置的默认模型,原值落 params.modelRemappedFrom 供溯源(零 schema 改动)
+    const live = resolveLiveModel(model, await getDefaultTuziModel(getPostgresDatabase()));
     model = live.model;
     if (live.remappedFrom) extraParams.modelRemappedFrom = live.remappedFrom;
     targetId = targetId ?? 'label-T40x20-320';
@@ -521,7 +521,8 @@ async function batchTagsOf(sessionId: string): Promise<string[]> {
 async function sessionGenDefaults(
   sessionId: string
 ): Promise<{ model: string; presetId: string | null; targetId: string }> {
-  const pool = getPostgresDatabase().getPool();
+  const db = getPostgresDatabase();
+  const pool = db.getPool();
   const b = await pool.query(
     `SELECT b.model, b.preset_id, b.target_id
        FROM label_sessions s
@@ -532,7 +533,7 @@ async function sessionGenDefaults(
   );
   if (b.rows[0]) {
     return {
-      model: b.rows[0].model ?? LIVE_DEFAULT_MODEL,
+      model: b.rows[0].model ?? (await getDefaultTuziModel(db)),
       presetId: b.rows[0].preset_id ?? null,
       targetId: b.rows[0].target_id ?? 'label-T40x20-320',
     };
@@ -543,7 +544,7 @@ async function sessionGenDefaults(
   );
   const p = t.rows[0]?.params ?? {};
   return {
-    model: p.model ?? LIVE_DEFAULT_MODEL,
+    model: p.model ?? (await getDefaultTuziModel(db)),
     presetId: p.presetId ?? null,
     targetId: p.targetId ?? 'label-T40x20-320',
   };

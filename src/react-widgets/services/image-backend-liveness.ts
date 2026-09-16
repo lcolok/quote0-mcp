@@ -22,19 +22,25 @@ export const LIVE_DEFAULT_MODEL = 'tuzi:gpt-image-2.5';
 
 /**
  * 把模型串归一到「当前可执行」的模型:
- *  - 死模型(bizyair 系) → LIVE_DEFAULT_MODEL,并回带原值供溯源;
+ *  - 死模型(bizyair 系) → target,并回带原值供溯源;
  *  - 活模型(如 tuzi:gpt-image-2.5) → 原样返回,remappedFrom=null;
- *  - 空值(未指定) → 直接给存活默认模型,remappedFrom=null(没有「原选择」可溯源)。
+ *  - 空值(未指定) → 直接给 target,remappedFrom=null(没有「原选择」可溯源)。
+ *
+ * target 默认 LIVE_DEFAULT_MODEL;调用方(如 label-sessions-api)可传后台可配置的默认模型
+ * (image_gen_settings),让重映射落到当前配置而非硬编码常量。
  */
-export function resolveLiveModel(model: string | null | undefined): {
+export function resolveLiveModel(
+  model: string | null | undefined,
+  target: string = LIVE_DEFAULT_MODEL
+): {
   model: string;
   remappedFrom: string | null;
 } {
   if (typeof model !== 'string' || !model.trim()) {
-    return { model: LIVE_DEFAULT_MODEL, remappedFrom: null };
+    return { model: target, remappedFrom: null };
   }
   const m = model.trim();
-  if (DEAD_BIZYAIR_MODELS.has(m)) return { model: LIVE_DEFAULT_MODEL, remappedFrom: m };
+  if (DEAD_BIZYAIR_MODELS.has(m)) return { model: target, remappedFrom: m };
   return { model: m, remappedFrom: null };
 }
 

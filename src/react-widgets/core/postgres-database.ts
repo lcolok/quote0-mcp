@@ -621,6 +621,19 @@ export class PostgresDatabase {
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_rss_source_health_alerts_one_pending_target
          ON rss_source_health_alerts(source_id, to_health)
          WHERE state IN ('pending','leased','retry_wait')`,
+
+      // 出图默认模型后台可配置:单行设置表 + 种子行。
+      // 种子必须 ON CONFLICT DO NOTHING —— 绝不 DO UPDATE:运维经 /api/image-gen/config 改的值
+      // 必须跨重启存活,每次开机都重置回硬编码默认会把运维配置抹掉
+      // (v1.21.100 LocalQwen 迁移用 DO UPDATE 抹配置的教训)。
+      `CREATE TABLE IF NOT EXISTS image_gen_settings (
+        id INTEGER PRIMARY KEY,
+        default_tuzi_model TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      `INSERT INTO image_gen_settings (id, default_tuzi_model)
+       VALUES (1, 'tuzi:gpt-image-2.5')
+       ON CONFLICT (id) DO NOTHING`,
     ];
   }
 
