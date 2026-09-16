@@ -7,8 +7,8 @@ import { NEWS_API_RELEASE_VERSION, loadReleaseVersion, parseReleaseVersion } fro
 describe('news-api release identity', () => {
   test('current checkout reports the manifest release instead of the legacy 1.0.0', () => {
     // Keep this inline in sync with the top-level `version:` of lazycat/lzc-manifest.yml
-    // (last bumped 1.21.134 → 1.21.135).
-    expect(NEWS_API_RELEASE_VERSION).toBe('1.21.135');
+    // (last bumped 1.21.135 → 1.21.136).
+    expect(NEWS_API_RELEASE_VERSION).toBe('1.21.136');
     expect(NEWS_API_RELEASE_VERSION).not.toBe('1.0.0');
   });
 
