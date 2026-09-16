@@ -15,6 +15,12 @@ import {
   imageUrlToBase64,
   type VisionContentPart,
 } from '../react-widgets/services/multimodal-llm-client.js';
+import { isTuziModel } from '../react-widgets/services/tuzi-client.js';
+import {
+  LIVE_DEFAULT_MODEL,
+  probeUrlsAlive,
+  resolveLiveModel,
+} from '../react-widgets/services/image-backend-liveness.js';
 
 const labelSessionsApp = new Hono();
 
@@ -232,7 +238,11 @@ labelSessionsApp.post('/:id/turns', async (c) => {
       presetId = presetId ?? def.presetId;
       targetId = targetId ?? def.targetId;
     }
-    model = model ?? 'sd5';
+    // 死模型重映射:父版 params / 批次默认继承来的 bizyair 系模型上游已关停(503),
+    // 统一换成存活默认模型,原值落 params.modelRemappedFrom 供溯源(零 schema 改动)
+    const live = resolveLiveModel(model);
+    model = live.model;
+    if (live.remappedFrom) extraParams.modelRemappedFrom = live.remappedFrom;
     targetId = targetId ?? 'label-T40x20-320';
 
     let effectivePrompt: string;
@@ -291,6 +301,58 @@ labelSessionsApp.post('/:id/turns', async (c) => {
           extraParams.rewriteDegraded = true;
         }
       }
+    }
+
+    // ── 死图 / 后端能力闸门(入队前拦截:绝不入队一个必败的 job) ──
+    // 参考图里可能混着已失效的历史原图(上游 OSS 已关)与用户上传图。先探测存活:
+    //   · 父原图死 → 直接拒(BASE_IMAGE_DEAD),让前端走「改用文生图」确认门;
+    //   · 用户上传死图 → 从 refs 剔除并落 params.droppedDeadRefs 留痕;
+    //   · 剔除后 img2img 无图可走 → 同样拒(有存活父原图则回落父原图);
+    //   · 解析出的模型是 TuZi(无图像输入)而 refs 非空 → 拒(MODEL_NO_I2I)。
+    const parentSrc: string | null = parent?.source_image_url ?? null;
+    const probeSet = new Set(refs);
+    if (body.genMode === 'img2img' && parentSrc) probeSet.add(parentSrc);
+    const probedRefs = await probeUrlsAlive([...probeSet]);
+    if (parentSrc && refs.includes(parentSrc) && probedRefs.get(parentSrc) === false) {
+      return c.json(
+        {
+          success: false,
+          code: 'BASE_IMAGE_DEAD',
+          error:
+            '父版本原图已失效（上游服务已关闭），无法图生图微调。可改用「重写」文生图（将从描述重绘，构图可能与原版有差异）。',
+        },
+        400
+      );
+    }
+    const droppedDeadRefs = (body.refImageUrls ?? []).filter((u) => probedRefs.get(u) === false);
+    if (droppedDeadRefs.length) {
+      extraParams.droppedDeadRefs = droppedDeadRefs;
+      refs = refs.filter((u) => probedRefs.get(u) !== false);
+    }
+    if (body.genMode === 'img2img' && refs.length === 0) {
+      if (parentSrc && probedRefs.get(parentSrc) !== false) {
+        refs = [parentSrc];
+      } else {
+        return c.json(
+          {
+            success: false,
+            code: 'BASE_IMAGE_DEAD',
+            error:
+              '参考图已全部失效（上游服务已关闭），无可用底图，无法图生图微调。可改用「重写」文生图（将从描述重绘，构图可能与原版有差异）。',
+          },
+          400
+        );
+      }
+    }
+    if (isTuziModel(model) && refs.length > 0) {
+      return c.json(
+        {
+          success: false,
+          code: 'MODEL_NO_I2I',
+          error: '当前模型（TuZi）不支持图生图。可改用「重写」文生图，或待图生图后端恢复。',
+        },
+        400
+      );
     }
 
     // planner 决策(确认回复 + 推理)落账到 params.planner —— 对话流显示 + 溯源,零 schema 改动
@@ -483,7 +545,7 @@ async function sessionGenDefaults(
   );
   if (b.rows[0]) {
     return {
-      model: b.rows[0].model ?? 'sd5',
+      model: b.rows[0].model ?? LIVE_DEFAULT_MODEL,
       presetId: b.rows[0].preset_id ?? null,
       targetId: b.rows[0].target_id ?? 'label-T40x20-320',
     };
@@ -494,7 +556,7 @@ async function sessionGenDefaults(
   );
   const p = t.rows[0]?.params ?? {};
   return {
-    model: p.model ?? 'sd5',
+    model: p.model ?? LIVE_DEFAULT_MODEL,
     presetId: p.presetId ?? null,
     targetId: p.targetId ?? 'label-T40x20-320',
   };
@@ -564,11 +626,20 @@ async function planPaths(opts: {
     versions.find((v) => v.turnId === focusedTurnId) ?? versions[versions.length - 1];
   const byVersionNo = new Map(versions.map((v) => [v.versionNo, v]));
 
+  // ---- 原图存活探测:历史 source_image_url 可能指向已关停的上游 OSS(404) ----
+  // 只探版本自身原图(通常 ≤5 个);planner 的 VLM 看图走 MinIO 1-bit PNG,不受死链影响。
+  const srcUrls = [...new Set(versions.map((v) => v.srcUrl).filter((u): u is string => !!u))];
+  const srcAlive = srcUrls.length ? await probeUrlsAlive(srcUrls) : new Map<string, boolean>();
+  /** 该版是否有「可当底图」的存活原图(从未有原图 或 原图已死,都算不可用) */
+  const isLiveSrc = (v: SessionVersion): boolean => !!v.srcUrl && srcAlive.get(v.srcUrl) !== false;
+  /** 已确认失效的原图 URL:候选池一律排除,免得 planner 选中死图开出做不到的处方 */
+  const deadSrc = new Set(srcUrls.filter((u) => srcAlive.get(u) === false));
+
   // ---- 候选上下文池:全 session 去重产物原图 + 用户上传(语义标签) ----
   const seen = new Set<string>();
   const candidates: { url: string; label: string; source: 'history' | 'upload' | 'input' }[] = [];
   versions.forEach((v) => {
-    if (v.srcUrl && !seen.has(v.srcUrl)) {
+    if (v.srcUrl && !deadSrc.has(v.srcUrl) && !seen.has(v.srcUrl)) {
       seen.add(v.srcUrl);
       const tag = v.feedback ? `·${v.feedback.slice(0, 14)}` : v.kind === 'root' ? '·初始' : '';
       candidates.push({ url: v.srcUrl, label: `v${v.versionNo} 产物原图${tag}`, source: 'history' });
@@ -577,7 +648,7 @@ async function planPaths(opts: {
   // 用户输入/历史上传的参考图(各轮 ref_image_urls,如最初喂进去的输入照片)—— 以前漏扫,现纳入候选
   versions.forEach((v) => {
     v.refImageUrls.forEach((u) => {
-      if (u && !seen.has(u)) {
+      if (u && !deadSrc.has(u) && !seen.has(u)) {
         seen.add(u);
         candidates.push({ url: u, label: `🖼 输入参考图(v${v.versionNo})`, source: 'input' });
       }
@@ -599,7 +670,7 @@ async function planPaths(opts: {
 
   // ---- 启发式降级:全新起点(有上传图/fresh 时)+ 当前叠加 + 干净重开 ----
   const fallback = (): PlanResult => {
-    const cleanV = versions.find((v) => v.srcUrl) ?? versions[0];
+    const cleanV = versions.find((v) => isLiveSrc(v)) ?? versions[0];
     const paths: PlanPath[] = [];
     // 全新起点(不继承现有版本)
     if (fresh || userUploads.length) {
@@ -621,9 +692,9 @@ async function planPaths(opts: {
     // 当前叠加
     if (focusedV) {
       const base = focusedV;
-      const mode: 'img2img' | 'rewrite' = base.srcUrl ? 'img2img' : 'rewrite';
+      const mode: 'img2img' | 'rewrite' = isLiveSrc(base) ? 'img2img' : 'rewrite';
       const sel = new Set<string>(userUploads);
-      if (mode === 'img2img' && base.srcUrl) sel.add(base.srcUrl);
+      if (mode === 'img2img' && isLiveSrc(base)) sel.add(base.srcUrl!);
       paths.push({
         id: 'incremental',
         label: `当前叠加 · 基于 v${base.versionNo}`,
@@ -641,7 +712,7 @@ async function planPaths(opts: {
     // 干净重开(若有比 focused 更早的干净版)
     if (cleanV && focusedV && cleanV.versionNo < focusedV.versionNo) {
       const sel = new Set<string>(userUploads);
-      if (cleanV.srcUrl) sel.add(cleanV.srcUrl);
+      if (isLiveSrc(cleanV)) sel.add(cleanV.srcUrl!);
       paths.push({
         id: 'clean-restart',
         label: `干净重开 · 基于 v${cleanV.versionNo}`,
@@ -649,7 +720,7 @@ async function planPaths(opts: {
         strategy: 'clean-restart',
         baseTurnId: cleanV.turnId,
         baseVersionNo: cleanV.versionNo,
-        mode: cleanV.srcUrl ? 'img2img' : 'rewrite',
+        mode: isLiveSrc(cleanV) ? 'img2img' : 'rewrite',
         prompt: feedback,
         promptZh: feedback,
         rationale: '从更早、未叠加多层修改的干净版本重做,避免 GIGO。',
@@ -677,7 +748,7 @@ async function planPaths(opts: {
     .map(
       (v) =>
         `v${v.versionNo} [${v.kind}/${v.mode ?? '-'}] state=${v.state} hasBase=${
-          v.srcUrl ? 'yes' : 'no'
+          v.srcUrl ? (isLiveSrc(v) ? 'yes' : 'dead') : 'no'
         }${v.versionNo === focusedV?.versionNo ? ' <= 当前聚焦' : ''} feedback: ${
           v.feedback ? JSON.stringify(v.feedback) : '(none)'
         }`
@@ -708,7 +779,12 @@ Output ONLY a JSON object, no markdown fence:
   "choices": [ { "label": "简体中文选项", "description": "一句简体中文说明" } ],
   "paths": [ { "label": "简体中文标签", "recommended": true, "strategy": "incremental|clean-restart|fresh", "baseVersion": 0, "mode": "img2img|rewrite", "useRefIndices": [0], "prompt": "...", "promptZh": "...", "rationale": "一句简体中文取舍" } ]
 }
-(kind=clarify 时只填 question+choices(2-5 个);kind=paths 时只填 paths(1-N 个,按需))`;
+(kind=clarify 时只填 question+choices(2-5 个);kind=paths 时只填 paths(1-N 个,按需))
+
+原图存活约束(必读):
+- versionTable 里 hasBase 有三态:yes=该版原图可正常访问;no=该版从未产出原图;dead=该版原图已随上游服务(OSS)关闭而永久失效(HTTP 404)。
+- 对 hasBase=dead 的版本,一律不得提出 img2img 路径(其底图不可用,图生图必然失败);如确需基于该版重做,只能给 rewrite 路径。
+- 只要本次规划涉及 hasBase=dead 的版本,必须在 reply 里用简体中文明确告知用户:原图已失效,只能按描述重绘,构图/细节可能与原版有差异。`;
 
   const content: VisionContentPart[] = [
     { type: 'text', text: `Version history (oldest first):\n${versionTable}` },
@@ -862,9 +938,10 @@ Output ONLY a JSON object, no markdown fence:
     } else {
       // 用户本轮 staged 的图(参考图池勾选/上传)强制纳入,选了就一定用
       stagedSet.forEach((u) => sel.add(u));
-      if (mode === 'img2img' && !bv!.srcUrl) mode = 'rewrite'; // 无底图不能图生图
-      // img2img 至少要有一张底图:planner 没选就补上基准版自己的原图
-      if (mode === 'img2img' && bv!.srcUrl && ![...sel].length) sel.add(bv!.srcUrl);
+      // 无底图 / 底图已失效(上游 OSS 关闭)→ 不能图生图,强制走 rewrite
+      if (mode === 'img2img' && !isLiveSrc(bv!)) mode = 'rewrite';
+      // img2img 至少要有一张底图:planner 没选就补上基准版自己的原图(仅当它存活)
+      if (mode === 'img2img' && isLiveSrc(bv!) && ![...sel].length) sel.add(bv!.srcUrl!);
     }
 
     const prompt = typeof p.prompt === 'string' && p.prompt.trim() ? p.prompt.trim() : feedback;

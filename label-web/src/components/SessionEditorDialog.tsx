@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ImgHTMLAttributes } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -69,12 +69,52 @@ function pickRecommended(paths: PlanPath[]): PlanPath {
   return paths.find((p) => p.recommended) ?? paths[0];
 }
 
+/**
+ * 历史原图/参考图可能指向已关停的上游 OSS —— onError 时就地降级为「已失效」灰块,
+ * 避免浏览器破图。onDead 供上层记录该 URL 已死(据此置灰「微调(图生图)」入口)。
+ */
+function DeadAwareImg({
+  src,
+  alt,
+  className,
+  onDead,
+  ...rest
+}: ImgHTMLAttributes<HTMLImageElement> & { src: string; onDead?: (url: string) => void }) {
+  const [dead, setDead] = useState(false);
+  useEffect(() => {
+    setDead(false);
+  }, [src]);
+  if (dead)
+    return (
+      <div
+        className={cn(
+          'flex items-center justify-center rounded border bg-muted text-center text-[9px] leading-tight text-muted-foreground/70',
+          className
+        )}
+      >
+        已失效
+      </div>
+    );
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => {
+        setDead(true);
+        onDead?.(src);
+      }}
+      {...rest}
+    />
+  );
+}
+
 function TurnThumb({ turn }: { turn: SessionTurn }) {
   if (turn.state === 'pending' || turn.state === 'running')
     return <Loader2 className="h-4 w-4 animate-spin text-purple-500" />;
   if (turn.state === 'failed') return <AlertCircle className="h-4 w-4 text-destructive" />;
   if (turn.label?.pngUrl)
-    return <img src={turn.label.pngUrl} alt="" className="h-full w-full object-contain" />;
+    return <DeadAwareImg src={turn.label.pngUrl} alt="" className="h-full w-full object-contain" />;
   return <span className="text-micro text-muted-foreground">无图</span>;
 }
 
@@ -236,6 +276,7 @@ function PathChooser({
   versionNo,
   busy,
   sessionId,
+  focusedSourceDead,
   onConfirm,
   onCancel,
   onZoom,
@@ -245,12 +286,15 @@ function PathChooser({
   versionNo: (turnId: string) => number;
   busy: boolean;
   sessionId: string | null;
+  /** 聚焦版本的原图已被前端侦知失效(上游 OSS 已关)→ 图生图入口置灰 */
+  focusedSourceDead: boolean;
   onConfirm: (c: ConfirmedPlan) => void;
   onCancel: () => void;
   onZoom: (url: string) => void;
   onSupplement: (text: string) => void;
 }) {
   const paths = plan.paths ?? [];
+  const allRewrite = paths.length > 0 && paths.every((p) => p.mode === 'rewrite');
   const [pathId, setPathId] = useState<string>(() => pickRecommended(paths).id);
   const [suppOpen, setSuppOpen] = useState(false);
   const [supp, setSupp] = useState('');
@@ -339,6 +383,12 @@ function PathChooser({
 
   return (
     <div className="space-y-2.5 rounded-lg border border-purple-300 bg-purple-50/60 p-2.5 dark:border-purple-800 dark:bg-purple-950/30">
+      {/* 死图兜底提示:焦点原图已失效且本次方案全为 rewrite → 顶部淡色说明 */}
+      {focusedSourceDead && allRewrite && (
+        <div className="text-micro text-muted-foreground">
+          历史原图已失效，本次仅可文生图重写
+        </div>
+      )}
       {/* agent 总览 */}
       <div className="flex items-start gap-1.5 text-xs">
         <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-purple-500" />
@@ -396,20 +446,28 @@ function PathChooser({
       {/* 选中路径的微调:模式 / 参考图 / prompt */}
       <div className="space-y-2 rounded-md border bg-background/60 p-2">
         <div className="flex gap-1.5">
-          {(['img2img', 'rewrite'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={`flex-1 rounded-md border px-2 py-1 text-xs transition ${
-                mode === m
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'hover:border-primary/50'
-              }`}
-            >
-              {m === 'img2img' ? '微调(图生图)' : '重写(文生图)'}
-            </button>
-          ))}
+          {(['img2img', 'rewrite'] as const).map((m) => {
+            const disabled = m === 'img2img' && focusedSourceDead;
+            return (
+              <button
+                key={m}
+                onClick={() => !disabled && setMode(m)}
+                disabled={disabled}
+                title={disabled ? '原图已失效，仅可文生图重写' : undefined}
+                className={`flex-1 rounded-md border px-2 py-1 text-xs transition ${
+                  mode === m
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'hover:border-primary/50'
+                } ${disabled ? 'cursor-not-allowed opacity-40 hover:border-border' : ''}`}
+              >
+                {m === 'img2img' ? '微调(图生图)' : '重写(文生图)'}
+              </button>
+            );
+          })}
         </div>
+        {focusedSourceDead && (
+          <div className="text-micro text-amber-600">原图已失效，仅可文生图重写</div>
+        )}
 
         {path.candidateRefs.length > 0 && (
           <div>
@@ -430,7 +488,7 @@ function PathChooser({
                       }`}
                     >
                       <div className="flex h-10 items-center justify-center overflow-hidden rounded bg-muted">
-                        <img src={c.url} alt={c.label} className="h-full w-full object-cover" />
+                        <DeadAwareImg src={c.url} alt={c.label} className="h-full w-full object-cover" />
                       </div>
                       <div className="mt-0.5 truncate text-micro text-muted-foreground">{c.label}</div>
                     </div>
@@ -728,14 +786,25 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
   const [pendingPlan, setPendingPlan] = useState<PlanResponse | null>(null);
   const [focusedTurnId, setFocusedTurnId] = useState<string | null>(null);
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
-  // 历史标签的 source_image_url 可能指向已关闭的上游 OSS（如 bizyair）；记录失败的 URL，
-  // 切换聚焦版本（URL 变化）时自动复位
-  const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
+  // 历史标签的原图/参考图可能指向已关闭的上游 OSS（如 bizyair）：记录前端已侦知失效的 URL，
+  // 用于死图徽标 + 置灰「微调(图生图)」入口；切 item 时复位
+  const [deadImageUrls, setDeadImageUrls] = useState<Set<string>>(new Set());
+  const markImageDead = (url: string) =>
+    setDeadImageUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
   const [pendingDelete, setPendingDelete] = useState<{ id: string; no: number } | null>(null);
   // 已解决的澄清问答 + 用户主动补充想法的累积链,作为后续 /plan 的上下文
   const [clarifyTrail, setClarifyTrail] = useState<string[]>([]);
+  // 后端执行闸门拒了这次 img2img(死图 / TuZi 无图生图)时的待确认回退:
+  // 必须用户显式确认后才改走文生图,不得静默切换
+  const [deadBaseFallback, setDeadBaseFallback] = useState<{ cp: ConfirmedPlan; error: string } | null>(
+    null
+  );
 
   const focused = turns.find((t) => t.id === focusedTurnId) ?? adopted;
+  // 焦点版本的原图已被前端侦知失效 → 图生图入口置灰(仍可通过提交触发后端闸门走确认门)
+  const focusedSourceDead = !!(
+    focused?.label?.sourceImageUrl && deadImageUrls.has(focused.label.sourceImageUrl)
+  );
 
   // 切换聚焦 item 时清空输入与待确认提案,聚焦交还给采用指针
   useEffect(() => {
@@ -744,6 +813,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
     setPendingPlan(null);
     setFocusedTurnId(null);
     setClarifyTrail([]);
+    setDeadImageUrls(new Set());
   }, [itemId]);
 
   // 采用指针变化(生成新版自动成为当前 / 手动采用)→ 聚焦跟到它,这样能看到刚出的结果
@@ -805,8 +875,25 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
       toast.success('已开始生成新版本');
       invalidate();
     },
-    onError: (e: any) => toast.error(e?.response?.data?.error ?? '生成失败'),
+    // 后端执行闸门(死图/无图生图后端)不静默改写,弹确认门由用户显式决定是否改用文生图
+    onError: (e: any, cp: ConfirmedPlan) => {
+      const code = e?.response?.data?.code;
+      const msg = e?.response?.data?.error;
+      if ((code === 'BASE_IMAGE_DEAD' || code === 'MODEL_NO_I2I') && msg) {
+        setDeadBaseFallback({ cp, error: msg });
+        return;
+      }
+      toast.error(msg ?? '生成失败');
+    },
   });
+
+  // 用户确认「改用文生图重写」:清空参考图(TuZi 无图像输入,带图会被后端再次拒),
+  // 以同一轮的 prompt 改成 rewrite 重新提交(父版/反馈/prompt 全部沿用,只换模式)
+  const acceptRewriteFallback = () => {
+    if (!deadBaseFallback) return;
+    refineMut.mutate({ ...deadBaseFallback.cp, genMode: 'rewrite', refImageUrls: [] });
+    setDeadBaseFallback(null);
+  };
 
   // 规划:调 /plan 拿多条路径,弹面板让用户选(总是经过规划这步 —— 多方案天然含选择性,
   // 且后端保证必有「全新起点」兜底路径)。staged 上下文 = 用户本轮上传的新图。
@@ -1071,19 +1158,13 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                 {focused.label?.sourceImageUrl && (
                   <div className="mt-2">
                     <div className="mb-1 text-micro text-muted-foreground/70">AI 原图</div>
-                    {failedSourceUrl === focused.label.sourceImageUrl ? (
-                      <div className="flex h-12 w-12 items-center justify-center rounded border px-1 text-center text-[9px] leading-tight text-muted-foreground/70">
-                        原图已失效
-                      </div>
-                    ) : (
-                      <img
-                        src={focused.label.sourceImageUrl}
-                        alt="AI 原图"
-                        onClick={() => setZoomUrl(focused.label!.sourceImageUrl)}
-                        onError={() => setFailedSourceUrl(focused.label!.sourceImageUrl)}
-                        className="h-12 w-12 cursor-zoom-in rounded border object-cover"
-                      />
-                    )}
+                    <DeadAwareImg
+                      src={focused.label.sourceImageUrl}
+                      alt="AI 原图"
+                      onDead={markImageDead}
+                      onClick={() => setZoomUrl(focused.label!.sourceImageUrl)}
+                      className="h-12 w-12 cursor-zoom-in rounded border object-cover"
+                    />
                   </div>
                 )}
                 {focused.refImageUrls.length > 0 && (
@@ -1093,10 +1174,11 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {focused.refImageUrls.map((u) => (
-                        <img
+                        <DeadAwareImg
                           key={u}
                           src={u}
                           alt=""
+                          onDead={markImageDead}
                           onClick={() => setZoomUrl(u)}
                           className="h-12 w-12 cursor-zoom-in rounded border object-cover"
                         />
@@ -1146,7 +1228,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                   {t.refImageUrls.length > 0 && (
                     <div className="ml-6 flex gap-1">
                       {t.refImageUrls.map((u) => (
-                        <img
+                        <DeadAwareImg
                           key={u}
                           src={u}
                           alt=""
@@ -1252,6 +1334,7 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
                     versionNo={versionNo}
                     busy={busy}
                     sessionId={sessionId}
+                    focusedSourceDead={focusedSourceDead}
                     onConfirm={(cp) => refineMut.mutate(cp)}
                     onCancel={cancelPlan}
                     onZoom={setZoomUrl}
@@ -1446,6 +1529,21 @@ export default function SessionEditorDialog({ items, itemId, targetId, onClose, 
           >
             回收
           </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    {/* 死图兜底确认门:后端拒了 img2img(BASE_IMAGE_DEAD / MODEL_NO_I2I)→ 用户显式决定是否改用文生图 */}
+    <AlertDialog open={!!deadBaseFallback} onOpenChange={(o) => !o && setDeadBaseFallback(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>改用文生图重写？</AlertDialogTitle>
+          <AlertDialogDescription>
+            {deadBaseFallback?.error}。是否改用文生图重写？
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction onClick={acceptRewriteFallback}>接受并重写</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
