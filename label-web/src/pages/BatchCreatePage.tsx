@@ -17,7 +17,7 @@ import {
 import { batchesApi } from '@/api/batches';
 import { labelsApi } from '@/api/labels';
 
-const MODELS = ['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2'];
+const MODELS = ['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2', 'tuzi:gpt-image-2.5', 'tuzi:gpt-image-2'];
 const NONE = '__none__';
 
 export default function BatchCreatePage() {

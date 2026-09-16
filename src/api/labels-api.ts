@@ -3,7 +3,8 @@ import { getPostgresDatabase } from '../react-widgets/core/postgres-database.js'
 import { getActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import type { ActiveLLMConfig } from '../react-widgets/core/llm-config.js';
 import { llmLabelGenerator } from '../react-widgets/services/llm-label-generator.js';
-import { imageLabelGenerator } from '../react-widgets/services/image-label-generator.js';
+import { imageLabelGenerator, hasRefImages, TUZI_REF_IMAGE_ERROR } from '../react-widgets/services/image-label-generator.js';
+import { isTuziModel } from '../react-widgets/services/tuzi-client.js';
 import { textLabelGenerator } from '../react-widgets/services/text-label-generator.js';
 import { listWidgets, SUPPORTED_FONTS, getWidget } from '../react-widgets/core/label-widget-registry.js';
 import { packFromPng } from '../react-widgets/core/bitmap-packer.js';
@@ -18,6 +19,9 @@ import { createTurn, createStandaloneSession } from '../react-widgets/core/label
 const labelsApp = new Hono();
 const imageStorage = getImageStorage();
 const MINIO_BUCKET = process.env.MINIO_BUCKET || 'quote0-images';
+
+// BizyAir 出图模型白名单（TuZi 走 `tuzi:<model>` 前缀另行放行，见 isTuziModel）
+const IMAGE_MODEL_WHITELIST = ['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2'];
 
 // ── preview-dither-batch 结果缓存 ──
 // 同一 (原图 URL, 预览尺寸, 算法) 的抖动结果是确定的，缓存 base64 避免每次重算
@@ -172,7 +176,7 @@ labelsApp.post('/generate-image', async (c) => {
   try {
     const body = await c.req.json<{
       prompt: string;
-      model: 'sd5' | 'sd5-3k' | 'nb2' | 'nbp' | 'gpt2';
+      model: string;              // 白名单模型 or 'tuzi:<model>'
       targetId?: string;
       tags?: string[];
       modelOptions?: Record<string, any>;
@@ -184,8 +188,13 @@ labelsApp.post('/generate-image', async (c) => {
     if (!body.prompt || body.prompt.trim() === '') {
       return c.json({ success: false, stage: 'validate', error: 'prompt 必填' }, 400);
     }
-    if (!['sd5', 'sd5-3k', 'nb2', 'nbp', 'gpt2'].includes(body.model)) {
+    const isTuzi = isTuziModel(body.model);
+    if (!IMAGE_MODEL_WHITELIST.includes(body.model) && !isTuzi) {
       return c.json({ success: false, stage: 'validate', error: `不支持的 model: ${body.model}` }, 400);
+    }
+    // TuZi 硬约束无图像输入：带参考图（含 modelOptions.images）直接拒绝，避免白跑一次出图
+    if (isTuzi && ((body.refImageUrls?.length ?? 0) > 0 || hasRefImages(body.modelOptions))) {
+      return c.json({ success: false, stage: 'validate', error: TUZI_REF_IMAGE_ERROR }, 400);
     }
 
     const ditherAlgorithm: DitherAlgorithm = isDitherAlgorithm(body.ditherAlgorithm)

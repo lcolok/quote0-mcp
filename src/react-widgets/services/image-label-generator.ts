@@ -3,12 +3,22 @@ import type { RenderTarget } from '../core/render-targets.js';
 import { packFromPng, packMonoBuffer } from '../core/bitmap-packer.js';
 import { ditherGrayscaleToMono, type DitherAlgorithm } from '../core/dither-algorithms.js';
 import { bizyairClient, type BizyAirModel } from './bizyair-client.js';
+import { tuziClient, upstreamModelFromTuzi } from './tuzi-client.js';
 
 export interface ImageLabelGenResult {
   pngBuffer: Buffer;              // dither 后 1-bit PNG（存 MinIO 的）
   bitmapBuffer: Buffer;           // 直接给 niimbot 用的 1-bit pack
-  sourceImageUrl: string;         // BizyAir 返回的原图 OSS 永久链接
-  bizyairLatencyMs: number;
+  sourceImageUrl: string;         // 上游返回的原图链接（bizyair OSS / TuZi CDN）
+  bizyairLatencyMs: number;       // 上游出图耗时（字段名沿用，bizyair/tuzi 共用）
+}
+
+/** TuZi 无图像输入，选它时参考图必须为空 —— 报错文案供 API 层复用同一口径 */
+export const TUZI_REF_IMAGE_ERROR = 'TuZi 模型不支持参考图，请移除参考图或改用 BizyAir 模型';
+
+/** options 里是否带了参考图（images[] 非空） */
+export function hasRefImages(options?: Record<string, any>): boolean {
+  const images = options?.images;
+  return Array.isArray(images) && images.length > 0;
 }
 
 export class ImageLabelGenerator {
@@ -40,20 +50,22 @@ export class ImageLabelGenerator {
 
   async generate(
     prompt: string,
-    model: BizyAirModel,
+    model: string,
     target: RenderTarget,
     options?: Record<string, any>,
     algo: DitherAlgorithm = 'threshold'
   ): Promise<ImageLabelGenResult> {
-    // 1. 调 BizyAir 生成图
-    const bizyairResult = await bizyairClient.generate({ prompt, model, options });
+    // 1. 出图 —— 'tuzi:<model>' 前缀分发到 TuZi，其余维持 BizyAir 原路径
+    const generated = model.startsWith('tuzi:')
+      ? await this.generateViaTuzi(prompt, model, target, options)
+      : await bizyairClient.generate({ prompt, model: model as BizyAirModel, options });
 
-    // 2. 下载原图（OSS）
-    const imgRes = await fetch(bizyairResult.imageUrl, {
+    // 2. 下载原图
+    const imgRes = await fetch(generated.imageUrl, {
       signal: AbortSignal.timeout(60_000),
     });
     if (!imgRes.ok) {
-      throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${bizyairResult.imageUrl}`);
+      throw new Error(`下载 OSS 原图失败 HTTP ${imgRes.status} @ ${generated.imageUrl}`);
     }
     const originalBuffer = Buffer.from(await imgRes.arrayBuffer());
 
@@ -62,9 +74,34 @@ export class ImageLabelGenerator {
     return {
       pngBuffer,
       bitmapBuffer,
-      sourceImageUrl: bizyairResult.imageUrl,
-      bizyairLatencyMs: bizyairResult.elapsedMs,
+      sourceImageUrl: generated.imageUrl,
+      bizyairLatencyMs: generated.elapsedMs,
     };
+  }
+
+  /** TuZi 路径：剥前缀透传上游模型，size 按 target 纵横推导（TuZi 无图像输入，参考图直接拒绝） */
+  private async generateViaTuzi(
+    prompt: string,
+    model: string,
+    target: RenderTarget,
+    options?: Record<string, any>
+  ): Promise<{ imageUrl: string; elapsedMs: number }> {
+    const upstreamModel = upstreamModelFromTuzi(model);
+    if (!upstreamModel) {
+      throw new Error(`非法 TuZi 模型名: ${model}`);
+    }
+    if (hasRefImages(options)) {
+      throw new Error(TUZI_REF_IMAGE_ERROR);
+    }
+    // 空 images[] 也不透传：TuZi 无图像输入，多传字段会被上游 schema 拒绝
+    const sanitized = { ...(options ?? {}) };
+    delete sanitized.images;
+    return await tuziClient.generate({
+      prompt,
+      model: upstreamModel,
+      options: sanitized,
+      aspect: { widthPx: target.widthPx, heightPx: target.heightPx },
+    });
   }
 
   /** redither 用：从已存 MinIO 的 source_image_url 重新下载 + 重做 dither，不再调 BizyAir */

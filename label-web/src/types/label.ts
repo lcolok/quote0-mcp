@@ -61,7 +61,8 @@ export interface GenerateRequest {
 
 export interface GenerateImageRequest {
   prompt: string;
-  model: 'sd5' | 'sd5-3k' | 'nb2' | 'nbp' | 'gpt2';
+  /** 白名单模型（BizyAir）或 `tuzi:<model>`（TuZi，前缀后透传上游模型名） */
+  model: 'sd5' | 'sd5-3k' | 'nb2' | 'nbp' | 'gpt2' | `tuzi:${string}`;
   targetId?: string;
   tags?: string[];
   modelOptions?: Record<string, any>;

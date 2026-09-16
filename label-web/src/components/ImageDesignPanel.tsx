@@ -30,12 +30,15 @@ import type { GenerateImageRequest, Label as LabelType, LabelJob } from '@/types
 
 // 注：分辨率不暴露给用户 —— 标签实际只需 320×160px，后端 bizyair-client 默认 1K 已绰绰有余。
 // sd5 是 Doubao Seedream（中文友好），nb2/nbp 是 Google Gemini，gpt2 是 OpenAI GPT-Image-2。
+// tuzi:* 走 TuZi 后端（OpenAI images schema，size 由后端按标签纵横推导），前缀后是上游模型名。
 const MODELS: Array<{ value: GenerateImageRequest['model']; label: string; hint: string }> = [
   { value: 'sd5', label: 'SD5', hint: '中文友好 · 经济快速' },
   { value: 'sd5-3k', label: 'SD5 高清', hint: '更精细细节 · 略慢' },
   { value: 'nb2', label: 'NB2', hint: 'Google Gemini Flash · 平衡' },
   { value: 'nbp', label: 'NBP', hint: 'Google Gemini Pro · 最高质量' },
   { value: 'gpt2', label: 'GPT-Image-2', hint: 'OpenAI · 多比例支持' },
+  { value: 'tuzi:gpt-image-2.5', label: 'GPT-Image-2.5', hint: 'TuZi · 推荐' },
+  { value: 'tuzi:gpt-image-2', label: 'GPT-Image-2', hint: 'TuZi · OpenAI' },
 ];
 
 export default function ImageDesignPanel() {
@@ -145,6 +148,8 @@ export default function ImageDesignPanel() {
   };
 
   const currentModelInfo = MODELS.find((m) => m.value === model)!;
+  // TuZi 后端无图像输入（无 image-to-image），选它时参考图上传必须关掉
+  const isTuzi = model.startsWith('tuzi:');
   const isGenerating =
     trackedJob?.state === 'queued' || trackedJob?.state === 'running' || generateMutation.isPending;
   const isFailed = trackedJob?.state === 'failed';
@@ -195,19 +200,28 @@ export default function ImageDesignPanel() {
         />
       </div>
 
-      {/* 参考图（图生图 / 与 preset 叠加） */}
-      <RefImageUploader
-        urls={refImageUrls}
-        onChange={setRefImageUrls}
-        maxImages={8}
-        disabled={generateMutation.isPending}
-      />
+      {/* 参考图（图生图 / 与 preset 叠加）—— TuZi 模型不支持，选它时禁用 */}
+      <div className="space-y-2">
+        <RefImageUploader
+          urls={refImageUrls}
+          onChange={setRefImageUrls}
+          maxImages={8}
+          disabled={generateMutation.isPending || isTuzi}
+        />
+        {isTuzi && (
+          <p className="text-xs text-muted-foreground">TuZi 模型暂不支持参考图，如需图生图请改用其他模型</p>
+        )}
+      </div>
 
       <div className="space-y-2">
         <label className="block text-sm font-medium text-foreground">AI 模型</label>
         <Select
           value={model}
-          onValueChange={(v) => setModel(v as GenerateImageRequest['model'])}
+          onValueChange={(v) => {
+            setModel(v as GenerateImageRequest['model']);
+            // TuZi 无图像输入：切过去时清掉已选参考图，避免提交被后端 400 顶回
+            if (v.startsWith('tuzi:')) setRefImageUrls([]);
+          }}
           disabled={generateMutation.isPending}
         >
           <SelectTrigger>
